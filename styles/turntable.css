@@ -1,0 +1,37 @@
+/**
+ * 转盘动画样式
+ */
+
+/* 转盘旋转动画 */
+@keyframes turntableSpin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* 转盘旋转动画类 - 使用 cubic-bezier 缓动 */
+.turntable-spinning {
+  animation: turntableSpin 4s cubic-bezier(0.25, 0.1, 0.25, 1);
+  animation-fill-mode: forwards;
+}
+
+/* 转盘悬停效果 */
+.turntable-segment:hover {
+  filter: brightness(1.1);
+  transition: filter 0.2s ease-in-out;
+}
+
+/* 选中扇形高亮 */
+.turntable-segment-selected {
+  filter: brightness(1.15) drop-shadow(0 4px 6px rgba(0, 0, 0, 0.2));
+  transform-origin: center;
+}
+
+/* GPU 加速 */
+.turntable-container {
+  will-change: transform;
+  transform: translateZ(0);
+}
