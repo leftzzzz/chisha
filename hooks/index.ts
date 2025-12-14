@@ -32,6 +32,10 @@ export type { UseRestaurantSearchReturn } from './useRestaurantSearch';
 export { useTurntable, calculateItemPosition } from './useTurntable';
 export type { UseTurntableReturn } from './useTurntable';
 
+// 错误弹窗
+export { useErrorAlert } from './useErrorAlert';
+export type { UseErrorAlertReturn } from './useErrorAlert';
+
 // 响应式设计
 export {
   useMediaQuery,

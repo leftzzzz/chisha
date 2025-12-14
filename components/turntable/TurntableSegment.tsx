@@ -13,6 +13,7 @@ export interface TurntableSegmentProps {
   color: string;
   isSelected: boolean;
   totalSegments: number;
+  onClick?: (index: number) => void;
 }
 
 export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
@@ -22,6 +23,7 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
   color,
   isSelected,
   totalSegments,
+  onClick,
 }) => {
   // 计算每个扇形的角度
   const segmentAngle = 360 / totalSegments;
@@ -61,46 +63,69 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
   const textX = centerX + textRadius * Math.cos(textRad - Math.PI / 2);
   const textY = centerY + textRadius * Math.sin(textRad - Math.PI / 2);
 
-  // 文本旋转角度
-  const textRotation = textAngle;
+  // 处理点击
+  const handleClick = () => {
+    if (onClick) {
+      onClick(index);
+    }
+  };
 
   return (
     <g
-      className={`transition-opacity duration-300 ${isSelected ? 'opacity-100' : 'opacity-90'}`}
+      className={`
+        transition-opacity duration-300
+        ${isSelected ? 'opacity-100' : 'opacity-95'}
+        ${onClick ? 'cursor-pointer' : ''}
+      `}
+      style={{ outline: 'none' }}
+      onClick={handleClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (onClick && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          handleClick();
+        }
+      }}
     >
       {/* 扇形路径 */}
       <path
         d={pathData}
         fill={color}
         stroke="white"
-        strokeWidth="3"
+        strokeWidth="2"
         className={`transition-all duration-300 ${
-          isSelected ? 'brightness-110 drop-shadow-lg' : 'hover:brightness-105'
+          isSelected ? 'brightness-105' : ''
         }`}
       />
 
-      {/* 文本 */}
+      {/* 餐厅名和类型 */}
       <text
         x={textX}
         y={textY}
         textAnchor="middle"
         dominantBaseline="middle"
-        transform={`rotate(${textRotation} ${textX} ${textY})`}
+        transform={`rotate(${textAngle} ${textX} ${textY})`}
         className="pointer-events-none select-none"
       >
         <tspan
           x={textX}
-          dy="-0.4em"
-          className="text-sm font-bold fill-white"
-          style={{ fontSize: '14px' }}
+          dy="-0.5em"
+          style={{
+            fontSize: '13px',
+            fontWeight: 600,
+            fill: 'rgba(0,0,0,0.75)',
+          }}
         >
-          {name.length > 8 ? `${name.slice(0, 7)}...` : name}
+          {name.length > 6 ? `${name.slice(0, 5)}...` : name}
         </tspan>
         <tspan
           x={textX}
-          dy="1.4em"
-          className="text-xs fill-white opacity-90"
-          style={{ fontSize: '11px' }}
+          dy="1.3em"
+          style={{
+            fontSize: '10px',
+            fill: 'rgba(0,0,0,0.5)',
+          }}
         >
           {cuisineType}
         </tspan>

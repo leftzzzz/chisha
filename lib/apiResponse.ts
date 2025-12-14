@@ -27,13 +27,21 @@ export const ErrorCode = {
   // 搜索相关错误
   SEARCH_NO_RESULTS: 'SEARCH_NO_RESULTS',
   SEARCH_API_ERROR: 'SEARCH_API_ERROR',
+  SEARCH_TIMEOUT: 'SEARCH_TIMEOUT',
+  LOCATION_NOT_SUPPORTED: 'LOCATION_NOT_SUPPORTED',
+  NETWORK_ERROR: 'NETWORK_ERROR',
+  SERVICE_BUSY: 'SERVICE_BUSY',
 
   // 地理编码错误
   GEOCODE_ERROR: 'GEOCODE_ERROR',
   GEOCODE_NO_RESULTS: 'GEOCODE_NO_RESULTS',
+  INVALID_LOCATION: 'INVALID_LOCATION',
 
   // 配置错误
   MISSING_API_KEY: 'MISSING_API_KEY',
+
+  // 限流错误
+  RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',
 } as const;
 
 /**
@@ -74,7 +82,10 @@ export function errorFromException(
   if (err instanceof Error) {
     // 检查是否是自定义错误
     if ('code' in err && typeof err.code === 'string') {
-      return error(err.code, err.message, err);
+      return error(err.code, err.message, {
+        name: err.name,
+        message: err.message,
+      });
     }
 
     // 超时错误
@@ -82,8 +93,13 @@ export function errorFromException(
       return error(ErrorCode.TIMEOUT, err.message);
     }
 
-    return error(defaultCode, err.message, err);
+    return error(defaultCode, err.message, {
+      name: err.name,
+      message: err.message,
+    });
   }
 
-  return error(defaultCode, 'Unknown error occurred', err);
+  return error(defaultCode, 'Unknown error occurred', {
+    error: String(err),
+  });
 }

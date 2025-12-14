@@ -9,7 +9,13 @@ import { z } from 'zod';
 export const LocationSchema = z.object({
   lat: z.number().min(-90).max(90).describe('纬度'),
   lng: z.number().min(-180).max(180).describe('经度'),
-  address: z.string().optional().describe('地址描述'),
+  address: z.union([z.string(), z.array(z.string())]).optional().transform((val) => {
+    // 如果 address 是数组，取第一个元素
+    if (Array.isArray(val)) {
+      return val.length > 0 ? val[0] : undefined;
+    }
+    return val;
+  }).describe('地址描述'),
 });
 
 // ParsedRequirement Schema
@@ -21,6 +27,7 @@ export const ParsedRequirementSchema = z.object({
     max: z.number().optional(),
   }).optional(),
   searchRadius: z.number().min(100).max(50000).default(2000).describe('搜索半径（米）'),
+  poiType: z.string().optional().describe('高德 POI 类型代码'),
 });
 
 // UnderstandRequest Schema
@@ -40,6 +47,7 @@ export const SearchRequestSchema = z.object({
     max: z.number().optional(),
   }).optional(),
   count: z.number().min(1).max(50).optional().default(8).describe('返回数量'),
+  poiType: z.string().optional().describe('高德 POI 类型代码'),
 });
 
 // GeocodeRequest Schema

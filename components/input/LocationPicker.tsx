@@ -4,7 +4,7 @@
  * 位置选择器，支持自动定位和手动输入
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Location } from '@/types';
 import { Button } from '@/components/ui';
 
@@ -14,6 +14,7 @@ export interface LocationPickerProps {
   isLoading?: boolean;
   error?: string;
   onAutoLocate: () => void;
+  onManualAddressSubmit?: (address: string) => void;
 }
 
 export const LocationPicker: React.FC<LocationPickerProps> = ({
@@ -22,20 +23,30 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
   isLoading = false,
   error,
   onAutoLocate,
+  onManualAddressSubmit,
 }) => {
   const [manualAddress, setManualAddress] = useState(location?.address || '');
   const [isManual, setIsManual] = useState(false);
+  // 保存切换到手动模式前的位置，用于切回时恢复
+  const [savedLocation, setSavedLocation] = useState<Location | null>(null);
+
+  // 当 location 变化时，同步更新 manualAddress
+  useEffect(() => {
+    if (location?.address) {
+      setManualAddress(location.address);
+    } else if (location === null) {
+      setManualAddress('');
+    }
+  }, [location]);
 
   // 处理手动地址输入
   const handleManualSubmit = () => {
     if (manualAddress.trim()) {
-      // 这里可以调用地理编码 API 将地址转换为坐标
-      // 暂时设置一个占位符
-      onLocationChange({
-        lat: 0,
-        lng: 0,
-        address: manualAddress.trim(),
-      });
+      // 提交手动地址后，清除保存的位置（因为用户确认了新地址）
+      setSavedLocation(null);
+      // 调用父组件提供的地址编码方法
+      onManualAddressSubmit?.(manualAddress.trim());
+      setIsManual(false);
     }
   };
 
@@ -81,7 +92,27 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         <Button
           variant="secondary"
           size="md"
-          onClick={() => setIsManual(!isManual)}
+          onClick={() => {
+            const newIsManual = !isManual;
+            setIsManual(newIsManual);
+            if (newIsManual) {
+              // 切换到手动模式：保存当前位置，清空输入框
+              if (location) {
+                setSavedLocation(location);
+              }
+              setManualAddress('');
+            } else {
+              // 切换回自动模式：恢复之前的位置或触发自动定位
+              if (savedLocation) {
+                // 恢复之前保存的位置
+                onLocationChange(savedLocation);
+                setSavedLocation(null);
+              } else if (!location) {
+                // 没有保存的位置也没有当前位置，触发自动定位
+                onAutoLocate();
+              }
+            }
+          }}
           disabled={isLoading}
           ariaLabel={isManual ? '使用自动定位' : '手动输入地址'}
         >

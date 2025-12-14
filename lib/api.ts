@@ -91,7 +91,7 @@ async function fetchWithTimeout<T>(
     clearTimeout(timeoutId);
 
     // 网络错误或超时
-    if (error instanceof TypeError || error.name === 'AbortError') {
+    if (error instanceof TypeError || (error instanceof Error && error.name === 'AbortError')) {
       // 可以重试的错误
       if (retryCount > 0) {
         await new Promise((resolve) => setTimeout(resolve, API_CONFIG.retryDelay));
@@ -99,7 +99,7 @@ async function fetchWithTimeout<T>(
       }
 
       const message =
-        error.name === 'AbortError'
+        error instanceof Error && error.name === 'AbortError'
           ? '请求超时,请检查网络连接后重试'
           : '网络连接失败,请检查网络后重试';
       throw new APIError(message, 'NETWORK_ERROR');

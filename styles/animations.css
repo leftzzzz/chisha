@@ -147,3 +147,35 @@
 .page-enter {
   animation: pageEnter 0.4s ease-out;
 }
+
+/* 底部弹出动画 - Apple 风格 */
+@keyframes slideInFromBottom {
+  0% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-slideInFromBottom {
+  animation: slideInFromBottom 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* 底部收起动画 */
+@keyframes slideOutToBottom {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+.animate-slideOutToBottom {
+  animation: slideOutToBottom 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}

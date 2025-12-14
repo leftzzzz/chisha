@@ -22,6 +22,7 @@ export interface SearchPanelProps {
   locationError?: string;
   onAutoLocate: () => void;
   isLocating?: boolean;
+  onManualAddressSubmit?: (address: string) => void;
 }
 
 export const SearchPanel: React.FC<SearchPanelProps> = ({
@@ -35,6 +36,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
   locationError,
   onAutoLocate,
   isLocating = false,
+  onManualAddressSubmit,
 }) => {
   // 验证是否可以搜索
   const canSearch = query.trim().length > 0 && query.trim().length <= 500 && location !== null && !isLoading;
@@ -62,25 +64,6 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
           onSubmit={onSearch}
           disabled={isLoading}
           error={error}
-        />
-      </div>
-
-      {/* 位置选择 */}
-      <div>
-        <LocationPicker
-          location={location}
-          onLocationChange={onLocationChange}
-          isLoading={isLocating}
-          error={locationError}
-          onAutoLocate={onAutoLocate}
-        />
-      </div>
-
-      {/* 灵感建议 */}
-      <div>
-        <InspirationChips
-          onSelect={handleSuggestionSelect}
-          disabled={isLoading}
         />
       </div>
 
@@ -120,6 +103,26 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
           </div>
         </div>
       )}
+
+      {/* 位置选择 */}
+      <div>
+        <LocationPicker
+          location={location}
+          onLocationChange={onLocationChange}
+          isLoading={isLocating}
+          error={locationError}
+          onAutoLocate={onAutoLocate}
+          onManualAddressSubmit={onManualAddressSubmit}
+        />
+      </div>
+
+      {/* 灵感建议 */}
+      <div>
+        <InspirationChips
+          onSelect={handleSuggestionSelect}
+          disabled={isLoading}
+        />
+      </div>
     </div>
   );
 };

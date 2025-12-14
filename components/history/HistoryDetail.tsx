@@ -7,18 +7,16 @@
 'use client';
 
 import React from 'react';
-import { TurntableRecord } from '@/types';
+import { TurntableRecord, isCustomOption, Restaurant } from '@/types';
 import { Card, Button } from '../ui';
 
 interface HistoryDetailProps {
   record: TurntableRecord;
-  onClose: () => void;
   onReuse?: (record: TurntableRecord) => void;
 }
 
 export const HistoryDetail: React.FC<HistoryDetailProps> = ({
   record,
-  onClose,
   onReuse,
 }) => {
   const formatDistance = (distance?: number) => {
@@ -32,6 +30,11 @@ export const HistoryDetail: React.FC<HistoryDetailProps> = ({
       onReuse(record);
     }
   };
+
+  const selectedIsCustom = isCustomOption(record.selected);
+  // 类型安全：当不是自定义选项时，转换为 Restaurant 类型
+  const selectedRestaurant = selectedIsCustom ? null : (record.selected as Restaurant);
+  const totalOptions = record.restaurants.length + (record.customOptions?.length || 0);
 
   return (
     <div className="space-y-6">
@@ -75,7 +78,7 @@ export const HistoryDetail: React.FC<HistoryDetailProps> = ({
         </div>
       </Card>
 
-      {/* 选中的餐厅 */}
+      {/* 选中的结果 */}
       <div>
         <h3 className="text-sm font-medium text-gray-700 mb-3">最终选择</h3>
         <Card className="bg-green-50 border-green-200">
@@ -86,21 +89,21 @@ export const HistoryDetail: React.FC<HistoryDetailProps> = ({
               </h4>
               <div className="flex flex-wrap gap-2 mb-2">
                 <span className="px-2 py-1 bg-white rounded text-xs text-gray-700 border border-green-200">
-                  {record.selected.cuisineType}
+                  {selectedIsCustom ? '自定义选项' : selectedRestaurant?.cuisineType}
                 </span>
-                {record.selected.distance && (
+                {selectedRestaurant?.distance && (
                   <span className="px-2 py-1 bg-white rounded text-xs text-gray-700 border border-green-200">
-                    {formatDistance(record.selected.distance)}
+                    {formatDistance(selectedRestaurant.distance)}
                   </span>
                 )}
-                {record.selected.rating && (
+                {selectedRestaurant?.rating && (
                   <span className="px-2 py-1 bg-white rounded text-xs text-gray-700 border border-green-200">
-                    ⭐ {record.selected.rating}
+                    ⭐ {selectedRestaurant.rating}
                   </span>
                 )}
-                {record.selected.averagePrice && (
+                {selectedRestaurant?.averagePrice && (
                   <span className="px-2 py-1 bg-white rounded text-xs text-gray-700 border border-green-200">
-                    人均 ¥{record.selected.averagePrice}
+                    人均 ¥{selectedRestaurant.averagePrice}
                   </span>
                 )}
               </div>
@@ -109,40 +112,43 @@ export const HistoryDetail: React.FC<HistoryDetailProps> = ({
               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
             </svg>
           </div>
-          <div className="space-y-1 text-sm text-gray-700 border-t border-green-200 pt-3">
-            <p className="flex items-start gap-2">
-              <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              {record.selected.address}
-            </p>
-            {record.selected.phone && (
-              <p className="flex items-center gap-2">
-                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+          {selectedRestaurant && (
+            <div className="space-y-1 text-sm text-gray-700 border-t border-green-200 pt-3">
+              <p className="flex items-start gap-2">
+                <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                {record.selected.phone}
+                {selectedRestaurant.address}
               </p>
-            )}
-            {record.selected.openingHours && (
-              <p className="flex items-center gap-2">
-                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                {record.selected.openingHours}
-              </p>
-            )}
-          </div>
+              {selectedRestaurant.phone && (
+                <p className="flex items-center gap-2">
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                  </svg>
+                  {selectedRestaurant.phone}
+                </p>
+              )}
+              {selectedRestaurant.openingHours && (
+                <p className="flex items-center gap-2">
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {selectedRestaurant.openingHours}
+                </p>
+              )}
+            </div>
+          )}
         </Card>
       </div>
 
-      {/* 所有参与的餐厅 */}
+      {/* 所有参与的选项 */}
       <div>
         <h3 className="text-sm font-medium text-gray-700 mb-3">
-          参与转盘的餐厅 ({record.restaurants.length})
+          参与转盘的选项 ({totalOptions})
         </h3>
         <div className="space-y-2 max-h-80 overflow-y-auto">
+          {/* 餐厅列表 */}
           {record.restaurants.map((restaurant) => (
             <Card
               key={restaurant.id}
@@ -174,6 +180,31 @@ export const HistoryDetail: React.FC<HistoryDetailProps> = ({
                   </div>
                 </div>
                 {restaurant.id === record.selected.id && (
+                  <svg className="w-5 h-5 text-green-500 flex-shrink-0 ml-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                )}
+              </div>
+            </Card>
+          ))}
+          {/* 自定义选项列表 */}
+          {record.customOptions?.map((option) => (
+            <Card
+              key={option.id}
+              className={`${
+                option.id === record.selected.id
+                  ? 'bg-green-50 border-green-200'
+                  : 'bg-gray-50 border-gray-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <p className="font-medium text-sm text-gray-900">
+                    {option.name}
+                  </p>
+                  <span className="text-xs text-gray-500">自定义选项</span>
+                </div>
+                {option.id === record.selected.id && (
                   <svg className="w-5 h-5 text-green-500 flex-shrink-0 ml-2" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                   </svg>

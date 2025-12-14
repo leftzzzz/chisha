@@ -14,7 +14,7 @@
  * - 支持 SSR (检查 window 存在)
  */
 
-import { TurntableRecord, Location, Restaurant } from '@/types';
+import { TurntableRecord, Location, Restaurant, isCustomOption } from '@/types';
 
 /**
  * 存储配置
@@ -219,6 +219,54 @@ export function saveRecord(
 }
 
 /**
+ * 保存记录并替换同会话的旧记录
+ *
+ * 同会话定义：相同的 query 和相近的 location，且时间差在 30 分钟内
+ * 用于"再来一次"场景，确保同一次搜索会话只保留最后一条记录
+ */
+export function saveRecordAndReplaceSameSession(
+  record: Omit<TurntableRecord, 'id' | 'timestamp'>
+): void {
+  try {
+    const history = getRecords();
+    const now = Date.now();
+    const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 分钟
+
+    // 查找并移除同会话的旧记录
+    const filteredHistory = history.filter((existingRecord) => {
+      // 检查是否是同一会话：相同 query、相近 location、时间差在 30 分钟内
+      const isSameQuery = existingRecord.query === record.query;
+      const isSameLocation = existingRecord.location.lat === record.location.lat &&
+                             existingRecord.location.lng === record.location.lng;
+      const isRecent = (now - existingRecord.timestamp) < SESSION_TIMEOUT;
+
+      // 如果是同会话的记录，过滤掉（不保留）
+      return !(isSameQuery && isSameLocation && isRecent);
+    });
+
+    // 创建新记录
+    const fullRecord: TurntableRecord = {
+      id: generateId(),
+      timestamp: now,
+      ...record,
+    };
+
+    // 添加到列表开头
+    filteredHistory.unshift(fullRecord);
+
+    // 限制最大记录数
+    const limitedHistory = filteredHistory.slice(0, STORAGE_CONFIG.maxRecords);
+
+    // 保存到 localStorage
+    const data = JSON.stringify(limitedHistory);
+    storage.setItem(STORAGE_CONFIG.key, data);
+  } catch (error) {
+    console.error('Failed to save record:', error);
+    throw new Error('保存记录失败');
+  }
+}
+
+/**
  * 保存记录（异步版本，保持向后兼容）
  */
 export async function saveRecordAsync(
@@ -334,20 +382,29 @@ export function searchHistory(keyword: string): TurntableRecord[] {
       return true;
     }
 
-    // 搜索选中的餐厅
+    // 搜索选中的选项
     if (record.selected.name.toLowerCase().includes(lowerKeyword)) {
       return true;
     }
-    if (record.selected.cuisineType.toLowerCase().includes(lowerKeyword)) {
+    if (!isCustomOption(record.selected) && record.selected.cuisineType.toLowerCase().includes(lowerKeyword)) {
       return true;
     }
 
     // 搜索所有餐厅
-    return record.restaurants.some(
+    const matchRestaurant = record.restaurants.some(
       (r) =>
         r.name.toLowerCase().includes(lowerKeyword) ||
         r.cuisineType.toLowerCase().includes(lowerKeyword)
     );
+    if (matchRestaurant) return true;
+
+    // 搜索自定义选项
+    const matchCustom = record.customOptions?.some(
+      (o) => o.name.toLowerCase().includes(lowerKeyword)
+    );
+    if (matchCustom) return true;
+
+    return false;
   });
 }
 
@@ -391,17 +448,17 @@ export function getStats(): HistoryStats {
   records.forEach((record) => {
     const selectedId = record.selected.id;
     const selectedName = record.selected.name;
-    const selectedCuisine = record.selected.cuisineType;
+    const selectedCuisine = isCustomOption(record.selected) ? '自定义' : record.selected.cuisineType;
 
-    // 统计餐厅
+    // 统计选项
     restaurantVisits.set(selectedId, (restaurantVisits.get(selectedId) || 0) + 1);
     restaurantNames.set(selectedId, selectedName);
 
     // 统计菜系
     cuisineVisits.set(selectedCuisine, (cuisineVisits.get(selectedCuisine) || 0) + 1);
 
-    // 统计所有参与的餐厅数
-    totalRestaurantsCount += record.restaurants.length;
+    // 统计所有参与的选项数
+    totalRestaurantsCount += record.restaurants.length + (record.customOptions?.length || 0);
   });
 
   // 排序并获取前 10
@@ -552,6 +609,54 @@ export function getRecordsByDate(): GroupedRecords[] {
       records,
     }))
     .sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/**
+ * 重新使用记录的临时存储 key
+ */
+const REUSE_RECORD_KEY = 'chisha_reuse_record';
+
+/**
+ * 保存要重新使用的记录
+ *
+ * 用于从历史记录页面跳转到首页时传递数据
+ *
+ * @param record - 要重新使用的历史记录
+ */
+export function setReuseRecord(record: TurntableRecord): void {
+  try {
+    const data = JSON.stringify(record);
+    storage.setItem(REUSE_RECORD_KEY, data);
+  } catch (error) {
+    console.error('Failed to save reuse record:', error);
+  }
+}
+
+/**
+ * 获取并清除重新使用的记录
+ *
+ * 获取后会自动清除，确保只使用一次
+ *
+ * @returns 重新使用的记录，如果没有则返回 null
+ */
+export function getReuseRecord(): TurntableRecord | null {
+  try {
+    const data = storage.getItem(REUSE_RECORD_KEY);
+    if (!data) {
+      return null;
+    }
+
+    // 获取后立即清除
+    storage.removeItem(REUSE_RECORD_KEY);
+
+    const record = JSON.parse(data) as TurntableRecord;
+    return record;
+  } catch (error) {
+    console.error('Failed to get reuse record:', error);
+    // 出错时也清除，避免脏数据
+    storage.removeItem(REUSE_RECORD_KEY);
+    return null;
+  }
 }
 
 /**

@@ -51,8 +51,8 @@ export interface UseLocationReturn {
   location: Location | null;
   isLocating: boolean;
   error: string | null;
-  getAutoLocation: () => Promise<void>;
-  geocodeAddress: (address: string, city?: string) => Promise<void>;
+  getAutoLocation: () => Promise<Location | null>;
+  geocodeAddress: (address: string, city?: string) => Promise<Location | null>;
   clearLocation: () => void;
 }
 
@@ -145,12 +145,13 @@ export function useLocation(): UseLocationReturn {
    * 自动定位
    *
    * 使用浏览器 Geolocation API 获取当前位置
+   * @returns 定位成功返回位置信息，失败返回 null
    */
-  const getAutoLocation = useCallback(async () => {
+  const getAutoLocation = useCallback(async (): Promise<Location | null> => {
     // 检查浏览器支持
     if (typeof window === 'undefined' || !navigator.geolocation) {
       setError('您的浏览器不支持定位功能');
-      return;
+      return null;
     }
 
     setIsLocating(true);
@@ -161,7 +162,7 @@ export function useLocation(): UseLocationReturn {
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
           enableHighAccuracy: true,
-          timeout: 10000,
+          timeout: 15000, // 15秒超时
           maximumAge: 300000, // 5分钟缓存
         });
       });
@@ -171,17 +172,25 @@ export function useLocation(): UseLocationReturn {
         lng: position.coords.longitude,
       };
 
-      // 逆地理编码获取地址
+      // 逆地理编码获取地址（带超时保护）
       try {
-        const address = await reverseGeocode(coords);
+        const reverseGeocodePromise = reverseGeocode(coords);
+        // 设置逆地理编码的5秒超时
+        const timeoutPromise = new Promise<string>((_, reject) => {
+          setTimeout(() => reject(new Error('Reverse geocode timeout')), 30000);
+        });
+
+        const address = await Promise.race([reverseGeocodePromise, timeoutPromise]);
         coords.address = address;
       } catch (e) {
         console.warn('Reverse geocode failed:', e);
-        coords.address = '当前位置';
+        // 使用坐标作为备选地址
+        coords.address = `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
       }
 
       setLocation(coords);
       cacheLocation(coords);
+      return coords;
     } catch (error) {
       if (error instanceof GeolocationPositionError) {
         switch (error.code) {
@@ -201,6 +210,7 @@ export function useLocation(): UseLocationReturn {
         setError('定位失败,请重试或手动输入地址');
       }
       console.error('Geolocation error:', error);
+      return null;
     } finally {
       setIsLocating(false);
     }
@@ -213,12 +223,13 @@ export function useLocation(): UseLocationReturn {
    *
    * @param address - 地址描述
    * @param city - 城市名称(可选)
+   * @returns 编码成功返回位置信息，失败返回 null
    */
   const geocodeAddress = useCallback(
-    async (address: string, city?: string) => {
+    async (address: string, city?: string): Promise<Location | null> => {
       if (!address.trim()) {
         setError('请输入地址');
-        return;
+        return null;
       }
 
       setIsLocating(true);
@@ -226,10 +237,14 @@ export function useLocation(): UseLocationReturn {
 
       try {
         const loc = await geocode(address, city);
-        loc.address = address; // 保存原始地址
+        // 使用 API 返回的格式化地址，如果没有则使用用户输入的原始地址
+        if (!loc.address) {
+          loc.address = address;
+        }
 
         setLocation(loc);
         cacheLocation(loc);
+        return loc;
       } catch (error) {
         if (error instanceof APIError) {
           setError(error.message);
@@ -237,6 +252,7 @@ export function useLocation(): UseLocationReturn {
           setError('地址解析失败,请重新输入');
         }
         console.error('Geocode error:', error);
+        return null;
       } finally {
         setIsLocating(false);
       }

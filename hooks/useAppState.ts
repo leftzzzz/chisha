@@ -27,7 +27,7 @@
 
 import { useCallback } from 'react';
 import { useAppContext } from '@/context/AppContext';
-import { AppStep, Location, ParsedRequirement, Restaurant } from '@/types';
+import { AppStep, Location, ParsedRequirement, Restaurant, CustomOption } from '@/types';
 
 /**
  * useAppState Hook 返回值
@@ -42,9 +42,16 @@ export interface UseAppStateReturn {
   setStep: (step: AppStep) => void;
   setParsedRequirement: (parsed: ParsedRequirement) => void;
   setRestaurants: (restaurants: Restaurant[]) => void;
+  setRestaurantsWithCandidates: (turntable: Restaurant[], candidates: Restaurant[]) => void;
   setSelectedIndex: (index: number) => void;
   setError: (error: string | null) => void;
   deleteRestaurant: (index: number) => void;
+  restoreRestaurant: (index: number) => void;
+  addFromCandidates: (index: number) => void;
+  removeToCandidates: (index: number) => void;
+  addRestaurant: (restaurant: Restaurant) => void;
+  addCustomOption: (option: CustomOption) => void;
+  removeCustomOption: (id: string) => void;
   reset: () => void;
 
   // 原始 dispatch (用于高级用例)
@@ -133,6 +140,16 @@ export function useAppState(): UseAppStateReturn {
   );
 
   /**
+   * 设置餐厅列表（带候补池）
+   */
+  const setRestaurantsWithCandidates = useCallback(
+    (turntable: Restaurant[], candidates: Restaurant[]) => {
+      dispatch({ type: 'SET_RESTAURANTS_WITH_CANDIDATES', payload: { turntable, candidates } });
+    },
+    [dispatch]
+  );
+
+  /**
    * 设置选中的餐厅索引
    */
   const setSelectedIndex = useCallback(
@@ -168,6 +185,66 @@ export function useAppState(): UseAppStateReturn {
   );
 
   /**
+   * 从已移除恢复餐厅到转盘
+   */
+  const restoreRestaurant = useCallback(
+    (index: number) => {
+      dispatch({ type: 'RESTORE_RESTAURANT', payload: index });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 从候补池添加餐厅到转盘
+   */
+  const addFromCandidates = useCallback(
+    (index: number) => {
+      dispatch({ type: 'ADD_FROM_CANDIDATES', payload: index });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 从转盘移到候补池
+   */
+  const removeToCandidates = useCallback(
+    (index: number) => {
+      dispatch({ type: 'REMOVE_TO_CANDIDATES', payload: index });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 直接添加餐厅到转盘
+   */
+  const addRestaurant = useCallback(
+    (restaurant: Restaurant) => {
+      dispatch({ type: 'ADD_RESTAURANT', payload: restaurant });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 添加自定义选项
+   */
+  const addCustomOption = useCallback(
+    (option: CustomOption) => {
+      dispatch({ type: 'ADD_CUSTOM_OPTION', payload: option });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 删除自定义选项
+   */
+  const removeCustomOption = useCallback(
+    (id: string) => {
+      dispatch({ type: 'REMOVE_CUSTOM_OPTION', payload: id });
+    },
+    [dispatch]
+  );
+
+  /**
    * 重置所有状态
    */
   const reset = useCallback(() => {
@@ -181,9 +258,16 @@ export function useAppState(): UseAppStateReturn {
     setStep,
     setParsedRequirement,
     setRestaurants,
+    setRestaurantsWithCandidates,
     setSelectedIndex,
     setError,
     deleteRestaurant,
+    restoreRestaurant,
+    addFromCandidates,
+    removeToCandidates,
+    addRestaurant,
+    addCustomOption,
+    removeCustomOption,
     reset,
     dispatch,
   };

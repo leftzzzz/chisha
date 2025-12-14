@@ -16,6 +16,12 @@
     box-sizing: border-box;
   }
 
+  /* 移除 SVG 元素的焦点边框 */
+  svg *:focus,
+  svg *:focus-visible {
+    outline: none !important;
+  }
+
   html,
   body {
     height: 100%;
@@ -156,6 +162,32 @@
 
   .gradient-accent {
     background: linear-gradient(135deg, #ffe66d 0%, #ffd93d 100%);
+  }
+}
+
+/* 用户位置脉冲动画 */
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 0.3;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+}
+
+/* 标记弹跳动画 */
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
   }
 }
 

@@ -16,7 +16,6 @@ export interface ResultPanelProps {
   onNavigate?: () => void;
   onRemove?: () => void;
   onRetry?: () => void;
-  onSave?: () => void;
   onClose?: () => void;
 }
 
@@ -27,7 +26,6 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({
   onNavigate,
   onRemove,
   onRetry,
-  onSave,
   onClose,
 }) => {
   // 加载状态
@@ -89,7 +87,6 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({
         restaurant={restaurant}
         onNavigate={onNavigate}
         onRemove={onRemove}
-        onSave={onSave}
         onClose={onClose}
       />
     </div>

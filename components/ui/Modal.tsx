@@ -4,6 +4,8 @@
  * 模态框组件，支持自定义内容和动画
  */
 
+'use client';
+
 import React, { useEffect, useRef } from 'react';
 
 export interface ModalProps {

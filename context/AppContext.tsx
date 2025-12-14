@@ -18,6 +18,7 @@
 import React, { createContext, useContext, useReducer, ReactNode } from 'react';
 import { AppState, AppAction } from '@/types';
 import { appReducer, initialState } from './AppReducer';
+import { ToastProvider } from '@/components/ui';
 
 /**
  * Context 类型定义
@@ -79,7 +80,13 @@ export function AppProvider({ children, initialState: customInitialState }: AppP
     dispatch,
   };
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={value}>
+      <ToastProvider>
+        {children}
+      </ToastProvider>
+    </AppContext.Provider>
+  );
 }
 
 /**

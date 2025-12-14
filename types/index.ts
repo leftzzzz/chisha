@@ -33,6 +33,7 @@ export interface ParsedRequirement {
     max?: number; // 最高价格
   };
   searchRadius: number; // 搜索半径（米），默认 2000
+  poiType?: string; // 高德 POI 类型代码（可选，由 LLM 决定是否使用）
 }
 
 // ============ API 请求/响应类型 ============
@@ -58,6 +59,7 @@ export interface SearchRequest {
     max?: number;
   };
   count?: number; // 返回数量，默认 8
+  poiType?: string; // 高德 POI 类型代码
 }
 
 export interface SearchResponse {
@@ -100,13 +102,31 @@ export type AppStep =
   | 'RESULT'       // 显示结果
   | 'ERROR';       // 错误状态
 
+// 自定义选项（纯文字，非餐厅）
+export interface CustomOption {
+  id: string;
+  name: string;
+  isCustom: true; // 标记为自定义选项
+}
+
+// 转盘选项（可以是餐厅或自定义选项）
+export type TurntableOption = Restaurant | CustomOption;
+
+// 判断是否为自定义选项
+export function isCustomOption(option: TurntableOption): option is CustomOption {
+  return 'isCustom' in option && option.isCustom === true;
+}
+
 // 应用状态
 export interface AppState {
   step: AppStep;
   userQuery: string; // 用户输入的需求
   userLocation: Location | null; // 用户位置
   parsedRequirement: ParsedRequirement | null; // 解析后的需求
-  restaurants: Restaurant[]; // 搜索到的餐厅
+  restaurants: Restaurant[]; // 转盘上的餐厅
+  candidateRestaurants: Restaurant[]; // 候补池餐厅
+  removedRestaurants: Restaurant[]; // 已移除的餐厅（可恢复）
+  customOptions: CustomOption[]; // 转盘上的自定义选项
   selectedIndex: number; // 选中的餐厅索引 (-1 表示未选中)
   error: string | null; // 错误信息
 }
@@ -118,9 +138,17 @@ export type AppAction =
   | { type: 'SET_STEP'; payload: AppStep }
   | { type: 'SET_PARSED_REQUIREMENT'; payload: ParsedRequirement }
   | { type: 'SET_RESTAURANTS'; payload: Restaurant[] }
+  | { type: 'SET_RESTAURANTS_WITH_CANDIDATES'; payload: { turntable: Restaurant[]; candidates: Restaurant[] } }
   | { type: 'SET_SELECTED_INDEX'; payload: number }
   | { type: 'SET_ERROR'; payload: string | null }
   | { type: 'DELETE_RESTAURANT'; payload: number }
+  | { type: 'RESTORE_RESTAURANT'; payload: number } // 从已移除恢复到转盘
+  | { type: 'ADD_FROM_CANDIDATES'; payload: number } // 从候补池添加到转盘
+  | { type: 'REMOVE_TO_CANDIDATES'; payload: number } // 从转盘移到候补池
+  | { type: 'ADD_RESTAURANT'; payload: Restaurant } // 直接添加餐厅到转盘
+  | { type: 'ADD_CUSTOM_OPTION'; payload: CustomOption } // 添加自定义选项
+  | { type: 'REMOVE_CUSTOM_OPTION'; payload: string } // 删除自定义选项
+  | { type: 'RESTORE_FROM_HISTORY'; payload: { query: string; location: Location; restaurants: Restaurant[]; customOptions?: CustomOption[] } } // 从历史记录恢复
   | { type: 'RESET_STATE' };
 
 // 转盘记录（用于后续功能）
@@ -130,7 +158,8 @@ export interface TurntableRecord {
   query: string; // 用户需求
   location: Location; // 位置
   restaurants: Restaurant[]; // 参与的餐厅
-  selected: Restaurant; // 选中的餐厅
+  customOptions?: CustomOption[]; // 参与的自定义选项
+  selected: Restaurant | CustomOption; // 选中的餐厅或自定义选项
   userFeedback?: 'like' | 'dislike'; // 用户反馈
 }
 
@@ -152,4 +181,16 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+// 错误信息配置
+export type ErrorSeverity = 'error' | 'warning' | 'info';
+
+export interface ErrorInfo {
+  message: string; // 用户友好的错误信息
+  severity: ErrorSeverity; // 错误级别：error 致命错误，warning 可重试，info 信息
+  code: string; // 错误代码
+  description?: string; // 详细描述
+  retryable: boolean; // 是否可以重试
+  actionLabel?: string; // 操作按钮文本（"返回"/"重试"）
 }

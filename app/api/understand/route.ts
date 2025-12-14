@@ -9,8 +9,28 @@ import { UnderstandRequestSchema } from '@/lib/validation';
 import { success, error, errorFromException, ErrorCode } from '@/lib/apiResponse';
 import { logger } from '@/lib/logger';
 import { callOpenAI } from '@/lib/llm';
+import { rateLimit, getClientIP } from '@/lib/rateLimit';
 
 export async function POST(request: NextRequest) {
+  // 限流检查：每分钟3次
+  const ip = getClientIP(request);
+  const rateLimitResult = rateLimit(ip, 3, 60 * 1000);
+
+  if (!rateLimitResult.success) {
+    logger.warn('Rate limit exceeded', { ip });
+    return NextResponse.json(
+      error(ErrorCode.RATE_LIMIT_EXCEEDED, '请求过于频繁，请稍后再试'),
+      {
+        status: 429,
+        headers: {
+          'X-RateLimit-Remaining': '0',
+          'X-RateLimit-Reset': String(rateLimitResult.resetTime),
+          'Retry-After': String(Math.ceil((rateLimitResult.resetTime - Date.now()) / 1000)),
+        },
+      }
+    );
+  }
+
   try {
     // 解析请求体
     const body: unknown = await request.json();

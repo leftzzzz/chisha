@@ -12,24 +12,24 @@ export interface RestaurantCardProps {
   restaurant: Restaurant;
   onNavigate?: () => void;
   onRemove?: () => void;
-  onSave?: () => void;
   onClose?: () => void;
+  onShare?: () => void;
 }
 
 export const RestaurantCard: React.FC<RestaurantCardProps> = ({
   restaurant,
   onNavigate,
   onRemove,
-  onSave,
   onClose,
+  onShare,
 }) => {
   // 生成导航链接（高德地图或百度地图）
   const handleNavigate = () => {
     if (onNavigate) {
       onNavigate();
     } else {
-      // 默认使用高德地图
-      const url = `https://uri.amap.com/marker?position=${restaurant.location.lng},${restaurant.location.lat}&name=${encodeURIComponent(restaurant.name)}`;
+      // 默认使用高德地图，callnative=1 尝试跳转到APP
+      const url = `https://uri.amap.com/marker?position=${restaurant.location.lng},${restaurant.location.lat}&name=${encodeURIComponent(restaurant.name)}&callnative=1`;
       window.open(url, '_blank');
     }
   };
@@ -117,38 +117,57 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
       </div>
 
       {/* 操作按钮 */}
-      <div className="grid grid-cols-2 gap-3">
-        <Button
-          variant="primary"
-          size="md"
-          onClick={handleNavigate}
-          ariaLabel="导航到餐厅"
-        >
-          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-          </svg>
-          导航
-        </Button>
-
-        {onSave && (
+      <div className="space-y-3">
+        {/* 主要操作 */}
+        <div className="grid grid-cols-2 gap-3">
           <Button
-            variant="success"
+            variant="primary"
             size="md"
-            onClick={onSave}
-            ariaLabel="保存到历史"
+            onClick={handleNavigate}
+            ariaLabel="导航到餐厅"
           >
             <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
             </svg>
-            保存
+            导航
           </Button>
-        )}
 
-        {onRemove && (
+          {onShare && (
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={onShare}
+              ariaLabel="分享"
+            >
+              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+              分享
+            </Button>
+          )}
+
+          {onRemove && !onShare && (
+            <Button
+              variant="danger"
+              size="md"
+              onClick={onRemove}
+              ariaLabel="不想去"
+            >
+              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              不想去
+            </Button>
+          )}
+        </div>
+
+        {/* 次要操作 */}
+        {onRemove && onShare && (
           <Button
             variant="danger"
             size="md"
             onClick={onRemove}
+            className="w-full"
             ariaLabel="不想去"
           >
             <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -163,7 +182,7 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
             variant="secondary"
             size="md"
             onClick={onClose}
-            className="col-span-2"
+            className="w-full"
             ariaLabel="关闭"
           >
             关闭

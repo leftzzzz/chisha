@@ -25,7 +25,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Location, Restaurant, ParsedRequirement } from '@/types';
+import { Location, ParsedRequirement } from '@/types';
 import { understand, searchRestaurants, APIError } from '@/lib/api';
 import { useAppState } from './useAppState';
 
@@ -34,7 +34,7 @@ import { useAppState } from './useAppState';
  */
 export interface UseRestaurantSearchReturn {
   isSearching: boolean;
-  search: (query: string, location: Location) => Promise<void>;
+  search: (query: string, location: Location, onError?: (errorCode: string) => void) => Promise<void>;
 }
 
 /**
@@ -71,7 +71,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
   const {
     setStep,
     setParsedRequirement,
-    setRestaurants,
+    setRestaurantsWithCandidates,
     setError,
   } = useAppState();
 
@@ -82,9 +82,10 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
    *
    * @param query - 用户查询
    * @param location - 用户位置
+   * @param onError - 错误回调，用于触发弹窗显示
    */
   const search = useCallback(
-    async (query: string, location: Location) => {
+    async (query: string, location: Location, onError?: (errorCode: string) => void) => {
       // 验证输入
       if (!query.trim()) {
         setError('请输入您想吃什么');
@@ -111,16 +112,14 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
           // 验证解析结果
           if (!parsed.keywords || parsed.keywords.length === 0) {
             throw new APIError(
-              '无法理解您的需求,请换个说法试试',
-              'PARSE_FAILED'
+              'PARSE_FAILED',
+              '无法理解您的需求,请换个说法试试'
             );
           }
         } catch (error) {
-          if (error instanceof APIError) {
-            setError(error.message);
-          } else {
-            setError('需求理解失败,请重试');
-          }
+          const errorCode = error instanceof APIError ? (error.code || 'UNKNOWN_ERROR') : 'UNKNOWN_ERROR';
+          setError(error instanceof Error ? error.message : '需求理解失败,请重试');
+          onError?.(errorCode);
           setStep('INPUT');
           return;
         }
@@ -135,33 +134,45 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
             distance: parsed.searchRadius,
             cuisineTypes: parsed.cuisineTypes,
             priceRange: parsed.priceRange,
-            count: 8, // 默认返回 8 个餐厅
+            count: 16, // 请求 16 个餐厅，8个转盘 + 8个候补
+            poiType: parsed.poiType, // 传递 LLM 返回的 POI 类型
           });
 
           // 验证结果数量
           if (restaurants.length < 3) {
             throw new APIError(
-              '找到的餐厅太少了,试试调整搜索条件?',
-              'INSUFFICIENT_RESULTS'
+              'INSUFFICIENT_RESULTS',
+              '找到的餐厅太少了,试试调整搜索条件?'
             );
           }
 
-          setRestaurants(restaurants);
+          // 分配到转盘和候补池
+          const turntableRestaurants = restaurants.slice(0, 8);
+          const candidateRestaurants = restaurants.slice(8);
+
+          setRestaurantsWithCandidates(turntableRestaurants, candidateRestaurants);
           setStep('READY'); // 转移到转盘就绪状态
         } catch (error) {
-          if (error instanceof APIError) {
-            setError(error.message);
+          const errorCode = error instanceof APIError ? (error.code || 'UNKNOWN_ERROR') : 'UNKNOWN_ERROR';
 
+          if (error instanceof APIError) {
             // 如果是没有结果,给出建议
             if (error.code === 'NO_RESULTS' || error.code === 'INSUFFICIENT_RESULTS') {
               const suggestions = generateSearchSuggestions(parsed);
               if (suggestions) {
                 setError(`${error.message}\n\n建议:\n${suggestions}`);
+              } else {
+                setError(error.message);
               }
+            } else {
+              setError(error.message);
             }
           } else {
             setError('餐厅搜索失败,请重试');
           }
+
+          // 触发错误弹窗
+          onError?.(errorCode);
           setStep('INPUT');
           return;
         }
@@ -169,12 +180,13 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         // 未预期的错误
         console.error('Search error:', error);
         setError('搜索过程中出现错误,请重试');
+        onError?.('UNKNOWN_ERROR');
         setStep('INPUT');
       } finally {
         setIsSearching(false);
       }
     },
-    [setStep, setParsedRequirement, setRestaurants, setError]
+    [setStep, setParsedRequirement, setRestaurantsWithCandidates, setError]
   );
 
   return {

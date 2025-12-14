@@ -4,15 +4,35 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import type { SearchRequest, SearchResponse } from '@/types';
+import type { SearchRequest, SearchResponse, Restaurant } from '@/types';
 import { SearchRequestSchema } from '@/lib/validation';
-import { success, error, errorFromException, ErrorCode } from '@/lib/apiResponse';
+import { success, error, ErrorCode } from '@/lib/apiResponse';
 import { logger } from '@/lib/logger';
 import { amapPoiSearch } from '@/lib/amap';
 import { osmSearch } from '@/lib/osm';
 import { combineAndFilterRestaurants, filterRestaurants } from '@/lib/dataTransform';
+import { rateLimit, getClientIP } from '@/lib/rateLimit';
 
 export async function POST(request: NextRequest) {
+  // 限流检查：每分钟3次
+  const ip = getClientIP(request);
+  const rateLimitResult = rateLimit(ip, 3, 60 * 1000);
+
+  if (!rateLimitResult.success) {
+    logger.warn('Rate limit exceeded', { ip });
+    return NextResponse.json(
+      error(ErrorCode.RATE_LIMIT_EXCEEDED, '请求过于频繁，请稍后再试'),
+      {
+        status: 429,
+        headers: {
+          'X-RateLimit-Remaining': '0',
+          'X-RateLimit-Reset': String(rateLimitResult.resetTime),
+          'Retry-After': String(Math.ceil((rateLimitResult.resetTime - Date.now()) / 1000)),
+        },
+      }
+    );
+  }
+
   try {
     // 解析请求体
     const body: unknown = await request.json();
@@ -34,22 +54,23 @@ export async function POST(request: NextRequest) {
     }
 
     const searchRequest: SearchRequest = validationResult.data;
-    const { keywords, location, distance = 2000, cuisineTypes, priceRange, count = 8 } = searchRequest;
+    const { keywords, location, distance = 2000, priceRange, count = 8, poiType } = searchRequest;
 
     logger.info('Processing search request', {
       keywords,
       location,
       distance,
       count,
+      poiType,
     });
 
-    let restaurants = [];
+    let restaurants: unknown[] = [];
     let source: 'amap' | 'osm' | 'mixed' = 'amap';
 
     try {
       // 优先使用高德地图搜索
       logger.info('Trying Amap search');
-      restaurants = await amapPoiSearch(keywords, location, distance);
+      restaurants = await amapPoiSearch(keywords, location, distance, poiType);
 
       if (restaurants.length > 0) {
         logger.info('Amap search successful', { count: restaurants.length });
@@ -78,18 +99,18 @@ export async function POST(request: NextRequest) {
     if (restaurants.length === 0) {
       logger.warn('No restaurants found');
       return NextResponse.json(
-        success<SearchResponse>({
-          restaurants: [],
-          source: 'amap',
-        })
+        error(
+          ErrorCode.SEARCH_NO_RESULTS,
+          'No restaurants found in this area'
+        ),
+        { status: 200 }
       );
     }
 
-    // 应用过滤条件
-    let filtered = restaurants;
-    if (cuisineTypes || priceRange) {
-      filtered = filterRestaurants(restaurants, {
-        cuisineTypes,
+    // 应用价格过滤
+    let filtered = restaurants as Restaurant[];
+    if (priceRange) {
+      filtered = filterRestaurants(restaurants as Restaurant[], {
         priceRange,
       });
     }
@@ -112,23 +133,33 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     logger.error('Search request failed', { error: err });
 
-    // 根据错误类型返回不同的状态码
+    // 根据错误类型返回不同的错误码和状态码
+    let errorCode: string = ErrorCode.SEARCH_API_ERROR;
     let statusCode = 500;
+    let message = 'Search failed, please try again later';
+
     if (err instanceof Error) {
-      if ('code' in err) {
-        const code = (err as { code: string }).code;
-        if (code === ErrorCode.VALIDATION_ERROR) {
+      // 检查是否是自定义错误
+      if ('code' in err && typeof err.code === 'string') {
+        const customCode = (err as { code: string }).code;
+        errorCode = customCode;
+        if (customCode === ErrorCode.VALIDATION_ERROR) {
           statusCode = 400;
-        } else if (code === ErrorCode.MISSING_API_KEY) {
+        } else if (customCode === ErrorCode.MISSING_API_KEY) {
           statusCode = 503;
-        } else if (code === ErrorCode.TIMEOUT) {
+          message = 'Service configuration error';
+        } else if (customCode === ErrorCode.TIMEOUT || customCode === ErrorCode.SEARCH_TIMEOUT) {
           statusCode = 504;
+          message = 'Search timeout, please try again';
+        } else if (customCode === ErrorCode.LOCATION_NOT_SUPPORTED) {
+          statusCode = 400;
+          message = 'Location not supported';
         }
       }
     }
 
     return NextResponse.json(
-      errorFromException(err, ErrorCode.SEARCH_API_ERROR),
+      error(errorCode, message),
       { status: statusCode }
     );
   }

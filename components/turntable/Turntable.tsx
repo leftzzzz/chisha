@@ -5,49 +5,53 @@
  */
 
 import React from 'react';
-import { Restaurant } from '@/types';
+import { Restaurant, CustomOption, isCustomOption } from '@/types';
 import { TurntableSegment } from './TurntableSegment';
 import { TurntablePointer } from './TurntablePointer';
 
 export interface TurntableProps {
   restaurants: Restaurant[];
+  customOptions?: CustomOption[];
   selectedIndex: number;
   isSpinning: boolean;
   rotation: number;
+  onSegmentClick?: (index: number) => void;
 }
 
-// 预定义的颜色数组（交替使用）
-const COLORS = [
-  '#FF6B6B', // 红色
-  '#4ECDC4', // 青色
-  '#FFE66D', // 黄色
-  '#95E1D3', // 薄荷绿
-  '#F38181', // 粉红色
-  '#AA96DA', // 紫色
-  '#FCBAD3', // 浅粉色
-  '#A8E6CF', // 浅绿色
+// Apple 风格柔和配色
+export const COLORS = [
+  '#FF9F9F', // 柔和红
+  '#A8D8EA', // 天空蓝
+  '#FFD3B6', // 杏色
+  '#C9E4DE', // 薄荷
+  '#DCEDC1', // 淡绿
+  '#D4A5A5', // 玫瑰灰
+  '#E8D5B7', // 米色
+  '#B5C7D3', // 灰蓝
 ];
 
 export const Turntable: React.FC<TurntableProps> = ({
   restaurants,
+  customOptions = [],
   selectedIndex,
   isSpinning,
   rotation,
+  onSegmentClick,
 }) => {
-  // 限制最多 8 个扇形
-  const displayRestaurants = restaurants.slice(0, 8);
-  const totalSegments = displayRestaurants.length;
+  // 合并餐厅和自定义选项，限制最多 8 个扇形
+  const allOptions: (Restaurant | CustomOption)[] = [...restaurants, ...customOptions].slice(0, 8);
+  const totalSegments = allOptions.length;
 
   if (totalSegments === 0) {
     return (
       <div className="flex items-center justify-center p-8">
-        <p className="text-gray-500">暂无餐厅数据</p>
+        <p className="text-gray-500">暂无选项</p>
       </div>
     );
   }
 
   return (
-    <div className="relative flex items-center justify-center p-8">
+    <div className="relative flex items-center justify-center">
       {/* 指针 */}
       <TurntablePointer />
 
@@ -55,7 +59,7 @@ export const Turntable: React.FC<TurntableProps> = ({
       <div
         className={`
           relative
-          w-full max-w-[400px] md:max-w-[500px] lg:max-w-[600px]
+          w-[98vw] sm:max-w-[500px] md:max-w-[600px] lg:max-w-[750px]
           aspect-square
           ${isSpinning ? '' : 'transition-transform duration-300'}
         `}
@@ -70,37 +74,36 @@ export const Turntable: React.FC<TurntableProps> = ({
           role="img"
           aria-label="餐厅转盘"
         >
-          {/* 外圆边框 */}
+          {/* 外圆 - 极简无边框 */}
           <circle
             cx="200"
             cy="200"
             r="190"
-            fill="none"
-            stroke="white"
-            strokeWidth="6"
+            fill="#f5f5f7"
+            stroke="none"
           />
 
           {/* 扇形 */}
-          {displayRestaurants.map((restaurant, index) => (
+          {allOptions.map((option, index) => (
             <TurntableSegment
-              key={restaurant.id}
+              key={isCustomOption(option) ? option.id : option.id}
               index={index}
-              name={restaurant.name}
-              cuisineType={restaurant.cuisineType}
+              name={option.name}
+              cuisineType={isCustomOption(option) ? '自定义' : option.cuisineType}
               color={COLORS[index % COLORS.length]}
               isSelected={selectedIndex === index}
               totalSegments={totalSegments}
+              onClick={!isSpinning ? onSegmentClick : undefined}
             />
           ))}
 
-          {/* 中心圆 */}
+          {/* 中心圆 - 简洁白色 */}
           <circle
             cx="200"
             cy="200"
-            r="30"
+            r="35"
             fill="white"
-            stroke="#FF6B6B"
-            strokeWidth="4"
+            className="drop-shadow-md"
           />
 
           {/* 中心文字 */}
@@ -109,22 +112,13 @@ export const Turntable: React.FC<TurntableProps> = ({
             y="205"
             textAnchor="middle"
             dominantBaseline="middle"
-            className="text-sm font-bold fill-primary"
-            style={{ fontSize: '16px' }}
+            className="font-semibold"
+            style={{ fontSize: '18px', fill: '#1d1d1f' }}
           >
             GO
           </text>
         </svg>
       </div>
-
-      {/* 选中指示 */}
-      {selectedIndex >= 0 && !isSpinning && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-white rounded-full shadow-lg border-2 border-primary animate-slideUp">
-          <p className="text-sm font-medium text-gray-900">
-            {displayRestaurants[selectedIndex]?.name}
-          </p>
-        </div>
-      )}
     </div>
   );
 };

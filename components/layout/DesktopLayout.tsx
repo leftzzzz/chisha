@@ -1,7 +1,8 @@
 /**
  * DesktopLayout 组件
  *
- * 桌面端布局（左侧面板 + 右侧地图）
+ * 桌面端布局 - 苹果风格设计
+ * 地图作为全屏背景，左侧毛玻璃面板
  */
 
 import React from 'react';
@@ -16,17 +17,19 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   rightPanel,
 }) => {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 h-full">
-      {/* 左侧面板 - 输入和转盘 */}
-      <div className="overflow-y-auto bg-gray-50">
-        <div className="container mx-auto p-6 max-w-2xl">
-          {leftPanel}
-        </div>
+    <div className="relative w-full h-full bg-gradient-to-br from-blue-50 to-indigo-100">
+      {/* 地图全屏背景 */}
+      <div className="absolute inset-0">
+        {rightPanel}
       </div>
 
-      {/* 右侧面板 - 地图和结果卡片 */}
-      <div className="hidden lg:block relative h-full">
-        {rightPanel}
+      {/* 左侧毛玻璃面板 */}
+      <div className="absolute left-0 top-0 bottom-0 w-[480px] max-w-[45%] z-10">
+        <div className="h-full overflow-y-auto backdrop-blur-xl bg-white/80 border-r border-white/20 shadow-2xl">
+          <div className="p-6">
+            {leftPanel}
+          </div>
+        </div>
       </div>
     </div>
   );

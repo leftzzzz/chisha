@@ -8,7 +8,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { TurntableRecord } from '@/types';
+import { TurntableRecord, isCustomOption } from '@/types';
 import {
   getRecordsByDate,
   searchHistory,
@@ -17,6 +17,7 @@ import {
   getStats,
   exportHistory,
   importHistory,
+  setReuseRecord,
   GroupedRecords,
 } from '@/lib/storage';
 import { Layout } from './layout';
@@ -172,7 +173,7 @@ export const HistoryPage: React.FC = () => {
   };
 
   // 获取统计信息
-  const stats = useMemo(() => getStats(), [groupedRecords]);
+  const stats = useMemo(() => getStats(), []);
 
   return (
     <Layout onHistoryClick={() => router.push('/')}>
@@ -235,8 +236,8 @@ export const HistoryPage: React.FC = () => {
               type="text"
               placeholder="搜索餐厅名称、菜系或查询内容..."
               value={searchKeyword}
-              onChange={(e) => {
-                setSearchKeyword(e.target.value);
+              onChange={(value) => {
+                setSearchKeyword(value);
                 setCurrentPage(1);
               }}
               className="max-w-md"
@@ -313,7 +314,7 @@ export const HistoryPage: React.FC = () => {
                     {record.query}
                   </p>
 
-                  {/* 选中的餐厅 */}
+                  {/* 选中的餐厅/选项 */}
                   <div className="border-t pt-3">
                     <div className="flex items-center gap-2 mb-2">
                       <svg className="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
@@ -326,17 +327,17 @@ export const HistoryPage: React.FC = () => {
                     </h4>
                     <div className="flex items-center gap-2 text-xs text-gray-600 flex-wrap">
                       <span className="px-2 py-0.5 bg-gray-100 rounded">
-                        {record.selected.cuisineType}
+                        {isCustomOption(record.selected) ? '自定义' : record.selected.cuisineType}
                       </span>
-                      {record.selected.distance && (
+                      {!isCustomOption(record.selected) && record.selected.distance && (
                         <span>{formatDistance(record.selected.distance)}</span>
                       )}
                     </div>
                   </div>
 
-                  {/* 参与餐厅数 */}
+                  {/* 参与选项数 */}
                   <div className="mt-3 pt-3 border-t text-xs text-gray-500">
-                    从 {record.restaurants.length} 家餐厅中选择
+                    从 {record.restaurants.length + (record.customOptions?.length || 0)} 个选项中选择
                   </div>
                 </Card>
               ))}
@@ -410,11 +411,13 @@ export const HistoryPage: React.FC = () => {
           >
             <HistoryDetail
               record={selectedRecord}
-              onClose={() => setSelectedRecord(null)}
               onReuse={(record) => {
-                // TODO: 实现重新使用功能
-                console.log('Reuse record:', record);
-                alert('重新使用功能即将推出');
+                // 保存记录到临时存储
+                setReuseRecord(record);
+                // 关闭模态框
+                setSelectedRecord(null);
+                // 导航到首页
+                router.push('/');
               }}
             />
           </Modal>

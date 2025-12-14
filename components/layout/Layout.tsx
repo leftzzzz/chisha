@@ -28,15 +28,19 @@ export const Layout: React.FC<LayoutProps> = ({
   const isDesktop = useMediaQuery('(min-width: 1024px)');
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="h-screen flex flex-col overflow-hidden">
       {/* 头部 */}
       <Header onHistoryClick={onHistoryClick} />
 
       {/* 主内容区 */}
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 relative overflow-hidden">
         {isDesktop && leftPanel && rightPanel ? (
           // 桌面端布局
-          <DesktopLayout leftPanel={leftPanel} rightPanel={rightPanel} />
+          <>
+            <DesktopLayout leftPanel={leftPanel} rightPanel={rightPanel} />
+            {/* 渲染模态框等 children */}
+            {children}
+          </>
         ) : (
           // 移动端布局
           <MobileLayout>{children}</MobileLayout>

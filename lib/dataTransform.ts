@@ -96,56 +96,39 @@ function shouldReplace(existing: Restaurant, candidate: Restaurant): boolean {
 }
 
 /**
- * 过滤餐厅（根据菜系和价格）
+ * 过滤餐厅（仅价格过滤）
  */
 export function filterRestaurants(
   restaurants: Restaurant[],
   options?: {
-    cuisineTypes?: string[];
     priceRange?: { min?: number; max?: number };
   }
 ): Restaurant[] {
-  if (!options) {
+  if (!options?.priceRange) {
     return restaurants;
   }
 
-  let filtered = restaurants;
-
-  // 菜系过滤
-  if (options.cuisineTypes && options.cuisineTypes.length > 0) {
-    filtered = filtered.filter((r) => {
-      return options.cuisineTypes!.some((cuisine) =>
-        r.cuisineType.includes(cuisine)
-      );
-    });
-  }
-
-  // 价格过滤
-  if (options.priceRange) {
-    filtered = filtered.filter((r) => {
-      if (!r.averagePrice) {
-        // 如果没有价格信息，保留
-        return true;
-      }
-
-      const { min, max } = options.priceRange!;
-
-      if (min !== undefined && r.averagePrice < min) {
-        return false;
-      }
-
-      if (max !== undefined && r.averagePrice > max) {
-        return false;
-      }
-
+  const filtered = restaurants.filter((r) => {
+    if (!r.averagePrice) {
       return true;
-    });
-  }
+    }
 
-  logger.info('Restaurants filtered', {
+    const { min, max } = options.priceRange!;
+
+    if (min !== undefined && r.averagePrice < min) {
+      return false;
+    }
+
+    if (max !== undefined && r.averagePrice > max) {
+      return false;
+    }
+
+    return true;
+  });
+
+  logger.info('Restaurants filtered by price', {
     beforeCount: restaurants.length,
     afterCount: filtered.length,
-    filters: options,
   });
 
   return filtered;

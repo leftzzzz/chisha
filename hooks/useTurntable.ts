@@ -134,8 +134,13 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
     const targetIndex = Math.floor(Math.random() * itemCount);
 
     // 计算目标角度
+    // 注意：每个扇形占用 anglePerItem 度，该扇形的中心角是 startAngle + anglePerItem/2
+    // 但扇形的 startAngle 是 index * anglePerItem，减去 90° 的偏移后才是实际位置
+    // 所以扇形中心的实际位置是 (index * anglePerItem - 90) + anglePerItem/2 = (index + 0.5) * anglePerItem - 90
+    // 要让指针指向该中心，转盘需要旋转使得该中心移到指针位置（-90°）
+    // 所以转盘旋转角度应该是 -(targetIndex + 0.5) * anglePerItem
     const anglePerItem = 360 / itemCount;
-    const targetAngle = targetIndex * anglePerItem;
+    const targetAngle = -(targetIndex + 0.5) * anglePerItem;
 
     // 随机旋转圈数
     const rotations =

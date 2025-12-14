@@ -7,6 +7,7 @@ import { ApiError } from '@/types';
 import { logger } from './logger';
 import { fetchWithTimeout } from './withTimeout';
 import { ErrorCode } from './apiResponse';
+import { osmReverseGeocode } from './osm';
 
 const AMAP_API_KEY = process.env.AMAP_API_KEY;
 const AMAP_SECURITY_CODE = process.env.AMAP_SECURITY_CODE;
@@ -14,7 +15,7 @@ const AMAP_BASE_URL = 'https://restapi.amap.com/v3';
 const AMAP_TIMEOUT = 10000; // 10 秒超时
 
 // 高德 POI 类型映射（餐饮服务相关）
-const POI_TYPES = '050000|餐饮服务';
+const DEFAULT_POI_TYPE = '050000'; // 餐饮服务（最宽泛的餐饮大类）
 
 /**
  * 高德 API 响应类型
@@ -46,12 +47,14 @@ interface AmapPoi {
  * @param keywords 搜索关键词数组
  * @param location 搜索中心点
  * @param distance 搜索半径（米）
+ * @param poiType 高德 POI 类型代码（可选，由 LLM 决定）
  * @returns 餐厅列表
  */
 export async function amapPoiSearch(
   keywords: string[],
   location: Location,
-  distance: number = 2000
+  distance: number = 2000,
+  poiType?: string
 ): Promise<Restaurant[]> {
   // 检查 API Key
   if (!AMAP_API_KEY) {
@@ -65,11 +68,14 @@ export async function amapPoiSearch(
   // 合并关键词
   const keyword = keywords.join('|');
 
+  // 使用 LLM 提供的 poiType，如果没有则使用默认的餐饮大类
+  const finalPoiType = poiType || DEFAULT_POI_TYPE;
+
   // 构建请求参数
   const params = new URLSearchParams({
     key: AMAP_API_KEY,
     keywords: keyword,
-    types: POI_TYPES,
+    types: finalPoiType,
     location: `${location.lng},${location.lat}`,
     radius: distance.toString(),
     sortrule: 'distance', // 按距离排序
@@ -87,6 +93,8 @@ export async function amapPoiSearch(
 
   logger.info('Calling Amap POI search', {
     keywords,
+    poiType: finalPoiType,
+    poiTypeSource: poiType ? 'llm' : 'default',
     location,
     distance,
   });
@@ -219,9 +227,9 @@ export async function amapGeocode(
 }
 
 /**
- * 逆向地理编码：坐标转地址
+ * 逆向地理编码：坐标转地址（仅调用高德地图）
  */
-export async function amapReverseGeocode(location: Location): Promise<{
+async function amapReverseGeocodeOnly(location: Location): Promise<{
   address: string;
   formattedAddress?: string;
   province?: string;
@@ -256,19 +264,48 @@ export async function amapReverseGeocode(location: Location): Promise<{
 
     const data = await response.json();
 
+    logger.info('Amap reverse geocode response', {
+      status: data.status,
+      hasRegeocode: !!data.regeocode,
+      regeocode: data.regeocode,
+    });
+
     if (data.status !== '1' || !data.regeocode) {
       throw new ApiError(
         ErrorCode.GEOCODE_NO_RESULTS,
-        'No reverse geocoding results found'
+        'No reverse geocoding results found from Amap'
       );
     }
 
     const regeocode = data.regeocode;
     const addressComponent = regeocode.addressComponent;
+    let formattedAddress = regeocode.formatted_address;
+
+    // 如果 formatted_address 是数组，取第一个元素
+    if (Array.isArray(formattedAddress)) {
+      formattedAddress = formattedAddress[0] || null;
+    }
+
+    // 验证 formatted_address 存在且非空
+    const isValidAddress =
+      typeof formattedAddress === 'string' &&
+      formattedAddress.trim().length > 0;
+
+    if (!isValidAddress) {
+      logger.warn('Amap reverse geocode returned invalid formatted_address', {
+        location,
+        formattedAddress,
+        type: typeof formattedAddress,
+      });
+      throw new ApiError(
+        ErrorCode.GEOCODE_NO_RESULTS,
+        'No address information found for this location'
+      );
+    }
 
     return {
-      address: regeocode.formatted_address,
-      formattedAddress: regeocode.formatted_address,
+      address: formattedAddress,
+      formattedAddress: formattedAddress,
       province: addressComponent?.province,
       city: addressComponent?.city,
       district: addressComponent?.district,
@@ -277,4 +314,72 @@ export async function amapReverseGeocode(location: Location): Promise<{
     logger.error('Amap reverse geocode failed', { error });
     throw error;
   }
+}
+
+/**
+ * 逆向地理编码：坐标转地址（带 OSM 降级方案）
+ * 优先使用高德地图，失败则降级到 OSM Nominatim
+ * 最后降级到坐标格式化地址
+ */
+export async function amapReverseGeocode(location: Location): Promise<{
+  address: string;
+  formattedAddress?: string;
+  province?: string;
+  city?: string;
+  district?: string;
+}> {
+  try {
+    // 优先使用高德地图
+    return await amapReverseGeocodeOnly(location);
+  } catch (amapError) {
+    logger.warn('Amap reverse geocode failed, falling back to OSM Nominatim', {
+      error: amapError instanceof Error ? amapError.message : String(amapError),
+    });
+
+    try {
+      // 降级到 OSM Nominatim
+      const osmResult = await osmReverseGeocode(location);
+      logger.info('OSM Nominatim reverse geocode successful', {
+        address: osmResult.address,
+      });
+      return osmResult;
+    } catch (osmError) {
+      logger.warn('OSM Nominatim reverse geocode also failed, using fallback coordinate format', {
+        amapError: amapError instanceof Error ? amapError.message : String(amapError),
+        osmError: osmError instanceof Error ? osmError.message : String(osmError),
+      });
+
+      // 最后的降级方案：使用坐标格式化为地址
+      // 格式: "36.20°N, 138.25°E" 或更详细的格式
+      const formattedAddress = formatCoordinatesAsAddress(location);
+
+      logger.info('Using fallback address format from coordinates', {
+        location,
+        formattedAddress,
+      });
+
+      return {
+        address: formattedAddress,
+        formattedAddress,
+        province: undefined,
+        city: undefined,
+        district: undefined,
+      };
+    }
+  }
+}
+
+/**
+ * 将坐标格式化为易读的地址字符串
+ * 用作最后的降级方案
+ */
+function formatCoordinatesAsAddress(location: Location): string {
+  const latDir = location.lat >= 0 ? 'N' : 'S';
+  const lngDir = location.lng >= 0 ? 'E' : 'W';
+
+  const latAbs = Math.abs(location.lat);
+  const lngAbs = Math.abs(location.lng);
+
+  // 格式："36.20°N, 138.25°E"
+  return `${latAbs.toFixed(2)}°${latDir}, ${lngAbs.toFixed(2)}°${lngDir}`;
 }

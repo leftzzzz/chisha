@@ -86,24 +86,23 @@ export const SearchInput: React.FC<SearchInputProps> = ({
         </div>
       </div>
 
-      {/* 提示信息 */}
-      <div className="mt-2 flex items-center justify-between">
-        <p id="search-hint" className="text-xs text-gray-500">
-          按 Enter 提交，Shift+Enter 换行
-        </p>
-        {showError && (
-          <p id="search-error" className="text-xs text-red-500" role="alert">
-            {value.trim().length < minLength
-              ? `至少输入 ${minLength} 个字符`
-              : `最多输入 ${maxLength} 个字符`}
-          </p>
-        )}
-        {error && (
-          <p id="search-error" className="text-xs text-red-500" role="alert">
-            {error}
-          </p>
-        )}
-      </div>
+      {/* 错误信息 */}
+      {(showError || error) && (
+        <div className="mt-2 flex items-center justify-end">
+          {showError && (
+            <p id="search-error" className="text-xs text-red-500" role="alert">
+              {value.trim().length < minLength
+                ? `至少输入 ${minLength} 个字符`
+                : `最多输入 ${maxLength} 个字符`}
+            </p>
+          )}
+          {error && (
+            <p id="search-error" className="text-xs text-red-500" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 };

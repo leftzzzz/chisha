@@ -22,3 +22,14 @@ export type { ErrorMessageProps } from './ErrorMessage';
 
 export { Chip } from './Chip';
 export type { ChipProps } from './Chip';
+
+export { ErrorBoundary } from './ErrorBoundary';
+
+export { ErrorAlert } from './ErrorAlert';
+export type { ErrorAlertProps } from './ErrorAlert';
+
+export { BottomSheet } from './BottomSheet';
+export type { BottomSheetProps } from './BottomSheet';
+
+export { Toast, ToastProvider, useToast } from './Toast';
+export type { ToastProps } from './Toast';
