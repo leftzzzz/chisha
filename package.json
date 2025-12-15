@@ -5,6 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:cloudflare": "npx @opennextjs/cloudflare build",
+    "preview": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
@@ -27,6 +30,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.14.6",
     "@testing-library/jest-dom": "^6.1.5",
     "@testing-library/react": "^14.1.2",
     "@testing-library/user-event": "^14.5.1",
