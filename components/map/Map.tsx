@@ -50,7 +50,18 @@ export const Map: React.FC<MapProps> = ({
           return;
         }
 
-        const apiKey = process.env.NEXT_PUBLIC_AMAP_KEY || 'YOUR_AMAP_KEY';
+        // 配置安全代理（安全密钥通过服务端代理，不暴露在前端）
+        // 参考: https://lbs.amap.com/api/javascript-api-v2/guide/abc/jscode
+        (window as unknown as { _AMapSecurityConfig: { serviceHost: string } })._AMapSecurityConfig = {
+          serviceHost: `${window.location.origin}/_AMapService`,
+        };
+
+        const apiKey = process.env.NEXT_PUBLIC_AMAP_KEY || '';
+        if (!apiKey) {
+          reject(new Error('NEXT_PUBLIC_AMAP_KEY is not configured'));
+          return;
+        }
+
         const script = document.createElement('script');
         script.src = `https://webapi.amap.com/maps?v=2.0&key=${apiKey}`;
         script.async = true;
@@ -88,7 +99,12 @@ export const Map: React.FC<MapProps> = ({
         });
       } catch (err) {
         console.error('地图加载失败:', err);
-        setError('地图加载失败');
+        const errorMessage = err instanceof Error ? err.message : '地图加载失败';
+        if (errorMessage.includes('NEXT_PUBLIC_AMAP_KEY')) {
+          setError('地图 API Key 未配置');
+        } else {
+          setError('地图加载失败');
+        }
       }
     };
 
