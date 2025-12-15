@@ -26,7 +26,7 @@ export type { UseLocationReturn } from './useLocation';
 
 // 餐厅搜索
 export { useRestaurantSearch } from './useRestaurantSearch';
-export type { UseRestaurantSearchReturn } from './useRestaurantSearch';
+export type { UseRestaurantSearchReturn, SearchProgress } from './useRestaurantSearch';
 
 // 转盘逻辑
 export { useTurntable, calculateItemPosition } from './useTurntable';

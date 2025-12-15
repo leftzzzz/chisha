@@ -44,6 +44,12 @@
   animation: fadeIn 0.3s ease-in;
 }
 
+/* 淡入动画 - 支持 animation-delay */
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+  opacity: 0;
+}
+
 /* 滑入动画 */
 @keyframes slideUp {
   0% {

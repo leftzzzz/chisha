@@ -6,6 +6,7 @@
  * - 超时控制
  * - 响应数据验证
  * - 重试逻辑
+ * - Agent SSE 流式调用
  *
  * 所有 API 调用都应通过这个文件进行
  */
@@ -23,6 +24,39 @@ import {
   ReverseGeocodeRequest,
   ReverseGeocodeResponse,
 } from '@/types';
+
+/**
+ * 搜索结果中的简要餐厅信息
+ */
+export interface SearchResultRestaurant {
+  id: string;
+  name: string;
+  cuisineType: string;
+  distance?: number;
+}
+
+/**
+ * Agent SSE 事件类型
+ */
+export type AgentEvent =
+  | { type: 'thinking'; message: string }
+  | { type: 'searching'; keywords: string[]; round: number }
+  | { type: 'search_result'; found: number; total: number; restaurants: SearchResultRestaurant[] }
+  | { type: 'filtering'; message: string; total: number }
+  | { type: 'done'; restaurants: Restaurant[]; candidates: Restaurant[] }
+  | { type: 'error'; message: string };
+
+/**
+ * Agent 搜索回调
+ */
+export interface AgentSearchCallbacks {
+  onThinking?: (message: string) => void;
+  onSearching?: (keywords: string[], round: number) => void;
+  onSearchResult?: (found: number, total: number, restaurants: SearchResultRestaurant[]) => void;
+  onFiltering?: (message: string, total: number) => void;
+  onDone?: (restaurants: Restaurant[], candidates: Restaurant[]) => void;
+  onError?: (message: string) => void;
+}
 
 /**
  * API 错误类
@@ -304,6 +338,150 @@ export async function reverseGeocode(location: Location): Promise<string> {
       );
     }
     throw error;
+  }
+}
+
+/**
+ * Agent 搜索结果
+ */
+export interface AgentSearchResult {
+  restaurants: Restaurant[];
+  candidates: Restaurant[];
+}
+
+/**
+ * Agent 搜索（流式）
+ *
+ * 使用 Agent 进行智能餐厅搜索，通过 SSE 实时返回进度
+ *
+ * @param query - 用户查询
+ * @param location - 用户位置
+ * @param callbacks - 事件回调
+ * @returns Promise，完成时返回选中餐厅和候补餐厅
+ *
+ * @example
+ * ```ts
+ * const { restaurants, candidates } = await agentSearch('想吃辣的', location, {
+ *   onThinking: (msg) => console.log('思考:', msg),
+ *   onSearching: (kw, round) => console.log(`第${round}轮搜索:`, kw),
+ *   onSearchResult: (found, total) => console.log(`找到 ${found} 家，共 ${total} 家`),
+ * });
+ * ```
+ */
+export async function agentSearch(
+  query: string,
+  location: Location,
+  callbacks?: AgentSearchCallbacks
+): Promise<AgentSearchResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
+
+  try {
+    const response = await fetch('/api/agent/search', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query, location }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new APIError(
+        errorData.error || `Agent 搜索失败: ${response.status}`,
+        'AGENT_ERROR',
+        response.status
+      );
+    }
+
+    if (!response.body) {
+      throw new APIError('无法获取响应流', 'STREAM_ERROR');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: AgentSearchResult = { restaurants: [], candidates: [] };
+    let hasReceivedDone = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // 解析 SSE 事件
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // 保留不完整的行
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const event: AgentEvent = JSON.parse(line.slice(6));
+
+            switch (event.type) {
+              case 'thinking':
+                callbacks?.onThinking?.(event.message);
+                break;
+              case 'searching':
+                callbacks?.onSearching?.(event.keywords, event.round);
+                break;
+              case 'search_result':
+                callbacks?.onSearchResult?.(event.found, event.total, event.restaurants);
+                break;
+              case 'filtering':
+                callbacks?.onFiltering?.(event.message, event.total);
+                break;
+              case 'done':
+                // 只处理第一个 done 事件
+                if (!hasReceivedDone) {
+                  hasReceivedDone = true;
+                  result = {
+                    restaurants: event.restaurants,
+                    candidates: event.candidates || [],
+                  };
+                  callbacks?.onDone?.(event.restaurants, event.candidates || []);
+                }
+                break;
+              case 'error':
+                callbacks?.onError?.(event.message);
+                throw new APIError(event.message, 'AGENT_ERROR');
+            }
+          } catch (e) {
+            // 忽略解析错误，继续处理
+            if (e instanceof APIError) throw e;
+          }
+        }
+      }
+    }
+
+    if (result.restaurants.length === 0) {
+      throw new APIError(
+        '未找到符合条件的餐厅，试试调整搜索条件?',
+        'NO_RESULTS'
+      );
+    }
+
+    return result;
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    if (error instanceof APIError) {
+      throw error;
+    }
+
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new APIError('搜索超时，请重试', 'TIMEOUT');
+    }
+
+    throw new APIError(
+      error instanceof Error ? error.message : 'Agent 搜索失败',
+      'AGENT_ERROR'
+    );
   }
 }
 

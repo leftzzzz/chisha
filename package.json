@@ -15,6 +15,9 @@
     "check": "node scripts/check-setup.js"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^2.0.86",
+    "@ai-sdk/openai-compatible": "^1.0.29",
+    "ai": "^5.0.113",
     "fflate": "^0.8.2",
     "nanoid": "^5.1.6",
     "next": "^16.0.10",

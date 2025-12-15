@@ -43,7 +43,7 @@ export const HomePage: React.FC = () => {
     dispatch,
   } = useAppState();
   const { location: detectedLocation, getAutoLocation, isLocating, error: locationError, geocodeAddress, clearLocation } = useLocation();
-  const { search, isSearching } = useRestaurantSearch();
+  const { search, isSearching, progress } = useRestaurantSearch();
   const { rotation, selectedIndex, isSpinning, startSpin, reset: resetTurntable } = useTurntable(state.restaurants.length + state.customOptions.length);
   const errorAlert = useErrorAlert();
 
@@ -281,10 +281,7 @@ export const HomePage: React.FC = () => {
   if (state.step === 'UNDERSTANDING' || state.step === 'SEARCHING') {
     return (
       <Layout>
-        <LoadingSteps
-          step={state.step === 'UNDERSTANDING' ? 1 : 2}
-          message={state.step === 'UNDERSTANDING' ? '理解您的需求...' : '搜索附近餐厅...'}
-        />
+        <LoadingSteps progress={progress} />
       </Layout>
     );
   }
