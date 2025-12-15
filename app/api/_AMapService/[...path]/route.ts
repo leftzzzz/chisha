@@ -7,7 +7,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-const AMAP_API_KEY = process.env.NEXT_PUBLIC_AMAP_KEY;
 const AMAP_SECURITY_CODE = process.env.AMAP_SECURITY_CODE;
 
 export async function GET(
