@@ -1,0 +1,500 @@
+/**
+ * AppReducer 测试
+ *
+ * 测试所有 reducer actions 的状态转换逻辑
+ */
+
+import { appReducer, initialState } from '@/context/AppReducer';
+import type { AppState, Restaurant, CustomOption, Location } from '@/types';
+
+describe('AppReducer', () => {
+  const mockLocation: Location = {
+    lat: 39.9,
+    lng: 116.4,
+    address: '北京市',
+  };
+
+  const mockRestaurant: Restaurant = {
+    id: 'r1',
+    name: '测试餐厅',
+    cuisineType: '川菜',
+    address: '测试地址',
+    location: mockLocation,
+    source: 'amap',
+    rating: 4.5,
+    distance: 500,
+  };
+
+  const mockCustomOption: CustomOption = {
+    id: 'c1',
+    name: '自定义选项',
+    isCustom: true,
+  };
+
+  describe('SET_QUERY', () => {
+    it('should set user query and clear error', () => {
+      const state = { ...initialState, error: '错误信息' };
+      const action = { type: 'SET_QUERY' as const, payload: '我想吃火锅' };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.userQuery).toBe('我想吃火锅');
+      expect(newState.error).toBeNull();
+    });
+  });
+
+  describe('SET_LOCATION', () => {
+    it('should set user location and clear error', () => {
+      const state = { ...initialState, error: '错误信息' };
+      const action = { type: 'SET_LOCATION' as const, payload: mockLocation };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.userLocation).toEqual(mockLocation);
+      expect(newState.error).toBeNull();
+    });
+
+    it('should allow setting location to null', () => {
+      const state = { ...initialState, userLocation: mockLocation };
+      const action = { type: 'SET_LOCATION' as const, payload: null };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.userLocation).toBeNull();
+    });
+  });
+
+  describe('SET_STEP', () => {
+    it('should set step and clear error when not ERROR', () => {
+      const state = { ...initialState, error: '错误信息' };
+      const action = { type: 'SET_STEP' as const, payload: 'READY' };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.step).toBe('READY');
+      expect(newState.error).toBeNull();
+    });
+
+    it('should preserve error when step is ERROR', () => {
+      const state = { ...initialState, error: '错误信息' };
+      const action = { type: 'SET_STEP' as const, payload: 'ERROR' };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.step).toBe('ERROR');
+      expect(newState.error).toBe('错误信息');
+    });
+  });
+
+  describe('SET_PARSED_REQUIREMENT', () => {
+    it('should set parsed requirement and clear error', () => {
+      const parsed = {
+        keywords: ['火锅'],
+        cuisineTypes: ['火锅'],
+        searchRadius: 2000,
+      };
+      const action = { type: 'SET_PARSED_REQUIREMENT' as const, payload: parsed };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.parsedRequirement).toEqual(parsed);
+      expect(newState.error).toBeNull();
+    });
+  });
+
+  describe('SET_RESTAURANTS', () => {
+    it('should set restaurants and reset selected index', () => {
+      const state = { ...initialState, selectedIndex: 3 };
+      const restaurants = [mockRestaurant];
+      const action = { type: 'SET_RESTAURANTS' as const, payload: restaurants };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toEqual(restaurants);
+      expect(newState.selectedIndex).toBe(-1);
+      expect(newState.error).toBeNull();
+    });
+  });
+
+  describe('SET_RESTAURANTS_WITH_CANDIDATES', () => {
+    it('should set turntable and candidate restaurants', () => {
+      const turntable = [mockRestaurant];
+      const candidates = [{ ...mockRestaurant, id: 'r2' }];
+      const action = {
+        type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
+        payload: { turntable, candidates },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.restaurants).toEqual(turntable);
+      expect(newState.candidateRestaurants).toEqual(candidates);
+      expect(newState.removedRestaurants).toEqual([]);
+      expect(newState.customOptions).toEqual([]);
+      expect(newState.selectedIndex).toBe(-1);
+    });
+  });
+
+  describe('SET_SELECTED_INDEX', () => {
+    it('should set valid index', () => {
+      const state = { ...initialState, restaurants: [mockRestaurant] };
+      const action = { type: 'SET_SELECTED_INDEX' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.selectedIndex).toBe(0);
+      expect(newState.error).toBeNull();
+    });
+
+    it('should reject invalid index less than -1', () => {
+      const state = { ...initialState, restaurants: [mockRestaurant] };
+      const action = { type: 'SET_SELECTED_INDEX' as const, payload: -2 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.selectedIndex).toBe(-1); // unchanged
+    });
+
+    it('should reject index >= restaurants.length', () => {
+      const state = { ...initialState, restaurants: [mockRestaurant] };
+      const action = { type: 'SET_SELECTED_INDEX' as const, payload: 1 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.selectedIndex).toBe(-1); // unchanged
+    });
+  });
+
+  describe('SET_ERROR', () => {
+    it('should set error and change step to ERROR', () => {
+      const action = { type: 'SET_ERROR' as const, payload: '发生错误' };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.error).toBe('发生错误');
+      expect(newState.step).toBe('ERROR');
+    });
+
+    it('should clear error when payload is null', () => {
+      const state = { ...initialState, error: '错误', step: 'ERROR' };
+      const action = { type: 'SET_ERROR' as const, payload: null };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.error).toBeNull();
+      expect(newState.step).toBe('ERROR'); // step unchanged
+    });
+  });
+
+  describe('DELETE_RESTAURANT', () => {
+    it('should remove restaurant and add to removed list', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }];
+      const state = { ...initialState, restaurants, step: 'READY' };
+      const action = { type: 'DELETE_RESTAURANT' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(1);
+      expect(newState.removedRestaurants).toHaveLength(1);
+      expect(newState.removedRestaurants[0]).toEqual(mockRestaurant);
+    });
+
+    it('should reset selected index when deleting selected restaurant', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }];
+      const state = { ...initialState, restaurants, selectedIndex: 0, step: 'READY' };
+      const action = { type: 'DELETE_RESTAURANT' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.selectedIndex).toBe(-1);
+    });
+
+    it('should adjust selected index when deleting before selected', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }, { ...mockRestaurant, id: 'r3' }];
+      const state = { ...initialState, restaurants, selectedIndex: 2, step: 'READY' };
+      const action = { type: 'DELETE_RESTAURANT' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.selectedIndex).toBe(1);
+    });
+
+    it('should set error when total options < 3', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }];
+      const state = { ...initialState, restaurants, step: 'READY' };
+      const action = { type: 'DELETE_RESTAURANT' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.step).toBe('INPUT');
+      expect(newState.error).toContain('选项数量不足');
+    });
+
+    it('should reject invalid index', () => {
+      const state = { ...initialState, restaurants: [mockRestaurant], step: 'READY' };
+      const action = { type: 'DELETE_RESTAURANT' as const, payload: 5 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(1); // unchanged
+    });
+  });
+
+  describe('RESTORE_RESTAURANT', () => {
+    it('should restore restaurant from removed list', () => {
+      const removed = [mockRestaurant];
+      const state = { ...initialState, removedRestaurants: removed, step: 'READY' };
+      const action = { type: 'RESTORE_RESTAURANT' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(1);
+      expect(newState.restaurants[0]).toEqual(mockRestaurant);
+      expect(newState.removedRestaurants).toHaveLength(0);
+      expect(newState.error).toBeNull();
+    });
+
+    it('should set error when turntable is full (8 restaurants)', () => {
+      const restaurants = Array(8).fill(null).map((_, i) => ({ ...mockRestaurant, id: `r${i}` }));
+      const removed = [mockRestaurant];
+      const state = { ...initialState, restaurants, removedRestaurants: removed };
+      const action = { type: 'RESTORE_RESTAURANT' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(8); // unchanged
+      expect(newState.error).toContain('转盘已满');
+    });
+
+    it('should reject invalid index', () => {
+      const state = { ...initialState, removedRestaurants: [mockRestaurant] };
+      const action = { type: 'RESTORE_RESTAURANT' as const, payload: 5 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.removedRestaurants).toHaveLength(1); // unchanged
+    });
+  });
+
+  describe('ADD_FROM_CANDIDATES', () => {
+    it('should move restaurant from candidates to turntable', () => {
+      const candidates = [mockRestaurant];
+      const state = { ...initialState, candidateRestaurants: candidates, step: 'READY' };
+      const action = { type: 'ADD_FROM_CANDIDATES' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(1);
+      expect(newState.restaurants[0]).toEqual(mockRestaurant);
+      expect(newState.candidateRestaurants).toHaveLength(0);
+      expect(newState.error).toBeNull();
+    });
+
+    it('should set error when turntable is full', () => {
+      const restaurants = Array(8).fill(null).map((_, i) => ({ ...mockRestaurant, id: `r${i}` }));
+      const candidates = [mockRestaurant];
+      const state = { ...initialState, restaurants, candidateRestaurants: candidates };
+      const action = { type: 'ADD_FROM_CANDIDATES' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(8); // unchanged
+      expect(newState.error).toContain('转盘已满');
+    });
+
+    it('should reject invalid index', () => {
+      const state = { ...initialState, candidateRestaurants: [mockRestaurant] };
+      const action = { type: 'ADD_FROM_CANDIDATES' as const, payload: 5 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.candidateRestaurants).toHaveLength(1); // unchanged
+    });
+  });
+
+  describe('REMOVE_TO_CANDIDATES', () => {
+    it('should move restaurant from turntable to candidates', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }, { ...mockRestaurant, id: 'r3' }];
+      const state = { ...initialState, restaurants, step: 'READY' };
+      const action = { type: 'REMOVE_TO_CANDIDATES' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(2);
+      expect(newState.candidateRestaurants).toHaveLength(1);
+      expect(newState.candidateRestaurants[0]).toEqual(mockRestaurant);
+    });
+
+    it('should reset selected index when removing selected restaurant', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }, { ...mockRestaurant, id: 'r3' }];
+      const state = { ...initialState, restaurants, selectedIndex: 0, step: 'READY' };
+      const action = { type: 'REMOVE_TO_CANDIDATES' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.selectedIndex).toBe(-1);
+    });
+
+    it('should set error when total options < 3', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }];
+      const state = { ...initialState, restaurants, step: 'READY' };
+      const action = { type: 'REMOVE_TO_CANDIDATES' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.step).toBe('INPUT');
+      expect(newState.error).toContain('选项数量不足');
+    });
+
+    it('should reject invalid index', () => {
+      const state = { ...initialState, restaurants: [mockRestaurant] };
+      const action = { type: 'REMOVE_TO_CANDIDATES' as const, payload: 5 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(1); // unchanged
+    });
+  });
+
+  describe('ADD_CUSTOM_OPTION', () => {
+    it('should add custom option', () => {
+      const action = { type: 'ADD_CUSTOM_OPTION' as const, payload: mockCustomOption };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.customOptions).toHaveLength(1);
+      expect(newState.customOptions[0]).toEqual(mockCustomOption);
+      expect(newState.error).toBeNull();
+    });
+
+    it('should set error when total options >= 8', () => {
+      const restaurants = Array(8).fill(null).map((_, i) => ({ ...mockRestaurant, id: `r${i}` }));
+      const state = { ...initialState, restaurants };
+      const action = { type: 'ADD_CUSTOM_OPTION' as const, payload: mockCustomOption };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.customOptions).toHaveLength(0); // unchanged
+      expect(newState.error).toContain('转盘已满');
+    });
+  });
+
+  describe('ADD_RESTAURANT', () => {
+    it('should add restaurant to turntable', () => {
+      const action = { type: 'ADD_RESTAURANT' as const, payload: mockRestaurant };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.restaurants).toHaveLength(1);
+      expect(newState.restaurants[0]).toEqual(mockRestaurant);
+      expect(newState.error).toBeNull();
+    });
+
+    it('should set error when turntable is full', () => {
+      const restaurants = Array(8).fill(null).map((_, i) => ({ ...mockRestaurant, id: `r${i}` }));
+      const state = { ...initialState, restaurants };
+      const action = { type: 'ADD_RESTAURANT' as const, payload: mockRestaurant };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(8); // unchanged
+      expect(newState.error).toContain('转盘已满');
+    });
+
+    it('should set error when restaurant already exists', () => {
+      const state = { ...initialState, restaurants: [mockRestaurant] };
+      const action = { type: 'ADD_RESTAURANT' as const, payload: mockRestaurant };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(1); // unchanged
+      expect(newState.error).toContain('已在转盘上');
+    });
+  });
+
+  describe('REMOVE_CUSTOM_OPTION', () => {
+    it('should remove custom option', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }, { ...mockRestaurant, id: 'r3' }];
+      const state = { ...initialState, restaurants, customOptions: [mockCustomOption], step: 'READY' };
+      const action = { type: 'REMOVE_CUSTOM_OPTION' as const, payload: 'c1' };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.customOptions).toHaveLength(0);
+    });
+
+    it('should set error when total options < 3', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }];
+      const state = { ...initialState, restaurants, customOptions: [mockCustomOption], step: 'READY' };
+      const action = { type: 'REMOVE_CUSTOM_OPTION' as const, payload: 'c1' };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.step).toBe('INPUT');
+      expect(newState.error).toContain('选项数量不足');
+    });
+  });
+
+  describe('RESTORE_FROM_HISTORY', () => {
+    it('should restore state from history record', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }, { ...mockRestaurant, id: 'r3' }];
+      const action = {
+        type: 'RESTORE_FROM_HISTORY' as const,
+        payload: {
+          query: '火锅',
+          location: mockLocation,
+          restaurants,
+          customOptions: [mockCustomOption],
+        },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.step).toBe('READY');
+      expect(newState.userQuery).toBe('火锅');
+      expect(newState.userLocation).toEqual(mockLocation);
+      expect(newState.restaurants).toEqual(restaurants);
+      expect(newState.customOptions).toEqual([mockCustomOption]);
+      expect(newState.selectedIndex).toBe(-1);
+      expect(newState.error).toBeNull();
+    });
+
+    it('should set error when total options < 3', () => {
+      const restaurants = [mockRestaurant];
+      const action = {
+        type: 'RESTORE_FROM_HISTORY' as const,
+        payload: {
+          query: '火锅',
+          location: mockLocation,
+          restaurants,
+        },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.error).toContain('选项数量不足');
+    });
+  });
+
+  describe('RESET_STATE', () => {
+    it('should reset to initial state', () => {
+      const state: AppState = {
+        step: 'RESULT',
+        userQuery: '测试',
+        userLocation: mockLocation,
+        parsedRequirement: { keywords: ['test'], cuisineTypes: [], searchRadius: 2000 },
+        restaurants: [mockRestaurant],
+        candidateRestaurants: [],
+        removedRestaurants: [],
+        customOptions: [mockCustomOption],
+        selectedIndex: 0,
+        error: '错误',
+      };
+      const action = { type: 'RESET_STATE' as const };
+
+      const newState = appReducer(state, action);
+
+      expect(newState).toEqual(initialState);
+    });
+  });
+});

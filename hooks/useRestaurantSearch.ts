@@ -15,7 +15,7 @@
 
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Location } from '@/types';
 import { agentSearch, APIError, SearchResultRestaurant } from '@/lib/api';
 import { useAppState } from './useAppState';
@@ -81,6 +81,9 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
     message: '',
   });
 
+  // 用于取消上一个搜索请求
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   /**
    * 执行 Agent 搜索
    */
@@ -96,6 +99,15 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         setError('请提供位置信息');
         return;
       }
+
+      // 取消上一个正在进行的搜索请求
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
+      // 创建新的 AbortController
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
 
       setIsSearching(true);
       setStep('SEARCHING');
@@ -158,7 +170,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
               message,
             });
           },
-        });
+        }, abortController.signal);
 
         // 搜索完成
         const totalFound = restaurants.length + candidates.length;
@@ -173,6 +185,12 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         setStep('READY');
 
       } catch (error) {
+        // 如果是请求被取消，不显示错误
+        if (error instanceof Error && error.name === 'AbortError') {
+          console.log('Search request was cancelled');
+          return;
+        }
+
         console.error('Agent search error:', error);
 
         const errorCode = error instanceof APIError ? (error.code || 'UNKNOWN_ERROR') : 'UNKNOWN_ERROR';
@@ -189,6 +207,10 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
 
       } finally {
         setIsSearching(false);
+        // 清理 AbortController 引用
+        if (abortControllerRef.current === abortController) {
+          abortControllerRef.current = null;
+        }
       }
     },
     [setStep, setRestaurantsWithCandidates, setError]

@@ -281,7 +281,24 @@ export async function callOpenAI(
         throw new ApiError(ErrorCode.LLM_API_ERROR, detailedError);
       }
 
-      let data: any;
+      let data: {
+        choices?: Array<{
+          message?: {
+            content?: string;
+            function_call?: {
+              name: string;
+              arguments: string;
+            };
+            tool_calls?: Array<{
+              type: string;
+              function: {
+                name: string;
+                arguments: string;
+              };
+            }>;
+          };
+        }>;
+      };
       try {
         data = await response.json();
       } catch (jsonError) {

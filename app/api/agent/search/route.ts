@@ -19,10 +19,10 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 
-// Agent 配置
-const MAX_ROUNDS = 5; // 最大搜索轮数
+// Agent 配置（性能优化版）
+const MAX_ROUNDS = 3; // 最大搜索轮数（优化：从5减少到3，提升搜索速度）
 const TARGET_COUNT = 8; // 目标餐厅数量
-const EARLY_STOP_COUNT = 16; // 达到此数量后可提前结束
+const EARLY_STOP_COUNT = 8; // 达到此数量后可提前结束（优化：从16减少到8，达到目标即立即停止）
 
 // 创建 OpenAI Compatible Provider（使用 Chat Completions API）
 const provider = createOpenAICompatible({
@@ -44,26 +44,21 @@ const AgentSearchRequestSchema = z.object({
   }),
 });
 
-// Agent 系统提示词
-const AGENT_SYSTEM_PROMPT = `你是餐厅搜索助手。根据用户需求搜索餐厅。
+// Agent 系统提示词（性能优化版：强调快速搜索和立即结束）
+const AGENT_SYSTEM_PROMPT = `你是高效餐厅搜索助手。立即搜索并快速完成任务。
 
-示例1：
-用户：想吃火锅
-你应该：search_restaurants(keywords=["火锅"])
+核心规则：
+1. 用户明确说要什么就搜什么，不要改类型
+2. 找到8家餐厅后立即调用 finish_search 结束
+3. 最多搜索3次就必须结束，不要犹豫
 
-示例2：
-用户：想吃日料
-你应该：search_restaurants(keywords=["日料"])
+示例：
+- "想吃火锅" → search_restaurants(keywords=["火锅"]) → 找到8家 → 立即 finish_search
+- "想吃日料" → search_restaurants(keywords=["日料"]) → 找到8家 → 立即 finish_search
+- "约会吃什么好" → search_restaurants(keywords=["西餐", "日料"]) → 找到8家 → 立即 finish_search
+- "附近有什么吃的" → search_restaurants(keywords=["餐厅"]) → 找到8家 → 立即 finish_search
 
-示例3：
-用户：约会吃什么好
-你应该：search_restaurants(keywords=["西餐", "日料"])
-
-示例4：
-用户：附近有什么吃的
-你应该：search_restaurants(keywords=["餐厅", "美食"])
-
-规则：用户明确说要什么就搜什么，不要自作主张改成别的类型。`;
+重要：达到8家餐厅后立即调用 finish_search，不要继续搜索！`;
 
 /**
  * SSE 事件类型定义
@@ -132,6 +127,7 @@ export async function POST(request: Request) {
   const searchState = {
     allFoundRestaurants: [] as Restaurant[],
     searchRound: 0,
+    hasSentDone: false, // 标记是否已发送 done 事件
   };
 
   // 创建 SSE 流
@@ -215,6 +211,9 @@ export async function POST(request: Request) {
                     })),
                   });
 
+                  // 更激进的提前停止提示
+                  const shouldFinishNow = searchState.allFoundRestaurants.length >= EARLY_STOP_COUNT;
+
                   return {
                     success: true,
                     found: restaurants.length,
@@ -228,12 +227,12 @@ export async function POST(request: Request) {
                     })),
                     message:
                       restaurants.length > 0
-                        ? `找到 ${restaurants.length} 家，累计 ${searchState.allFoundRestaurants.length} 家`
+                        ? `找到 ${restaurants.length} 家，累计 ${searchState.allFoundRestaurants.length} 家${shouldFinishNow ? '，已达目标！' : ''}`
                         : '未找到，建议换关键词或扩大范围',
-                    // 提前结束提示：达到足够数量时建议结束搜索
-                    shouldFinish: searchState.allFoundRestaurants.length >= EARLY_STOP_COUNT,
-                    finishHint: searchState.allFoundRestaurants.length >= EARLY_STOP_COUNT
-                      ? `已找到 ${searchState.allFoundRestaurants.length} 家餐厅，数量充足，请立即调用 finish_search 完成搜索`
+                    // 提前结束提示：达到8家就强制要求立即结束
+                    shouldFinish: shouldFinishNow,
+                    finishHint: shouldFinishNow
+                      ? `✓ 已找到 ${searchState.allFoundRestaurants.length} 家餐厅，达到目标数量！请立即调用 finish_search 完成搜索，不要继续搜索！`
                       : undefined,
                   };
                 } catch (error) {
@@ -300,6 +299,9 @@ export async function POST(request: Request) {
                 // 发送完成事件（包含选中和候补）
                 sendEvent(controller, { type: 'done', restaurants: selected, candidates });
 
+                // 设置标志，避免重复发送
+                searchState.hasSentDone = true;
+
                 return {
                   success: true,
                   count: selected.length,
@@ -315,15 +317,14 @@ export async function POST(request: Request) {
         await result.text;
 
         // 如果 Agent 没有调用 finish_search，手动返回结果
-        if (searchState.allFoundRestaurants.length > 0) {
+        if (!searchState.hasSentDone && searchState.allFoundRestaurants.length > 0) {
           const sorted = searchState.allFoundRestaurants
             .sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
           const selected = sorted.slice(0, TARGET_COUNT);
           const candidates = sorted.slice(TARGET_COUNT);
 
-          // 检查是否已经发送过 done 事件（通过判断 searchRound 是否有变化来估计）
           sendEvent(controller, { type: 'done', restaurants: selected, candidates });
-        } else {
+        } else if (!searchState.hasSentDone) {
           sendEvent(controller, { type: 'error', message: '未找到符合条件的餐厅' });
         }
 

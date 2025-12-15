@@ -357,24 +357,32 @@ export interface AgentSearchResult {
  * @param query - 用户查询
  * @param location - 用户位置
  * @param callbacks - 事件回调
+ * @param signal - AbortSignal 用于取消请求
  * @returns Promise，完成时返回选中餐厅和候补餐厅
  *
  * @example
  * ```ts
+ * const controller = new AbortController();
  * const { restaurants, candidates } = await agentSearch('想吃辣的', location, {
  *   onThinking: (msg) => console.log('思考:', msg),
  *   onSearching: (kw, round) => console.log(`第${round}轮搜索:`, kw),
  *   onSearchResult: (found, total) => console.log(`找到 ${found} 家，共 ${total} 家`),
- * });
+ * }, controller.signal);
  * ```
  */
 export async function agentSearch(
   query: string,
   location: Location,
-  callbacks?: AgentSearchCallbacks
+  callbacks?: AgentSearchCallbacks,
+  signal?: AbortSignal
 ): Promise<AgentSearchResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
+
+  // 如果传入了外部 signal，监听其 abort 事件
+  if (signal) {
+    signal.addEventListener('abort', () => controller.abort());
+  }
 
   try {
     const response = await fetch('/api/agent/search', {

@@ -197,7 +197,7 @@ function main() {
     } else {
       log('  ⚠ 路径别名 @/* 未配置', 'yellow');
     }
-  } catch (error) {
+  } catch {
     log('  ✗ tsconfig.json 解析失败', 'red');
     allPassed = false;
   }
@@ -229,7 +229,7 @@ function main() {
     } else {
       log('  ⚠ node_modules 不存在，请运行 npm install', 'yellow');
     }
-  } catch (error) {
+  } catch {
     log('  ✗ package.json 解析失败', 'red');
     allPassed = false;
   }

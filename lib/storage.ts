@@ -15,6 +15,7 @@
  */
 
 import { TurntableRecord, Location, Restaurant, isCustomOption } from '@/types';
+import { nanoid } from 'nanoid';
 
 /**
  * 存储配置
@@ -357,7 +358,7 @@ export function createRecord(
  * 生成唯一 ID
  */
 function generateId(): string {
-  return `record-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  return `record-${Date.now()}-${nanoid(9)}`;
 }
 
 /**

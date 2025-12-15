@@ -166,7 +166,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           </div>
         ) : posterDataUrl ? (
           <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
+            { }
             <img
               src={posterDataUrl}
               alt="分享海报"
@@ -238,7 +238,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
+      { }
       <img
         src={posterDataUrl}
         alt="分享海报"
