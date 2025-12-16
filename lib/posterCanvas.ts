@@ -134,7 +134,7 @@ function drawMiniTurntable(
 
   ctx.restore();
 
-  // 绘制指针 (不旋转)
+  // 绘制指针 (不旋转) -> 指向下
   ctx.save();
   ctx.translate(centerX, centerY);
 
@@ -144,9 +144,10 @@ function drawMiniTurntable(
   ctx.shadowOffsetY = 2;
 
   ctx.beginPath();
-  ctx.moveTo(0, -radius - 8); // 顶点
-  ctx.lineTo(8, -radius + 4);
-  ctx.lineTo(-8, -radius + 4);
+  // 指向圆心：顶点在下 (-radius + 4)，底边在上 (-radius - 8)
+  ctx.moveTo(0, -radius + 6); // 顶点 (稍微深入一点点)
+  ctx.lineTo(8, -radius - 8);
+  ctx.lineTo(-8, -radius - 8);
   ctx.closePath();
   ctx.fillStyle = AURORA_COLORS.accent;
   ctx.fill();
@@ -266,7 +267,7 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
   // --------------------------------------------------------
   // 3. 绘制标题区域
   // --------------------------------------------------------
-  const contentStartY = 200; // 整体上移一点
+  const contentStartY = 180; // 稍微再上移一点
 
   // Badge: "今天吃这个"
   ctx.textAlign = 'center';
@@ -309,8 +310,8 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
   // --------------------------------------------------------
   const cardX = 64;
   const cardWidth = width - cardX * 2;
-  const cardHeight = 480;
-  const cardY = titleY + 140; // 拉开与标题的距离
+  const cardHeight = 520; // 增加高度以容纳转盘 inside
+  const cardY = titleY + 140;
   const cardRadius = 56;
 
   // 卡片主体
@@ -323,10 +324,10 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
   ctx.fill();
   ctx.restore();
 
-  // 4.1 顶部迷你转盘挂饰
+  // 4.1 迷你转盘 (移入卡片内部)
   const miniTurntableRadius = 54;
   const mtCx = width / 2;
-  const mtCy = cardY;
+  const mtCy = cardY + 80; // 下移，完全进入卡片
 
   // 背景遮罩
   ctx.save();
@@ -341,8 +342,8 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
 
   drawMiniTurntable(ctx, mtCx, mtCy, miniTurntableRadius, allOptions, selectedIndex);
 
-  // 4.2 引导文案
-  const innerStartY = cardY + 100;
+  // 4.2 引导文案 (下移)
+  const innerStartY = mtCy + miniTurntableRadius + 45;
   ctx.fillStyle = AURORA_COLORS.accent;
   ctx.font = '700 26px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
   ctx.fillText('✨ 决定是你了 ✨', width / 2, innerStartY);
