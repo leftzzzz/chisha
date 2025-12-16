@@ -145,9 +145,9 @@ function drawMiniTurntable(
 
   ctx.beginPath();
   // 指向圆心：顶点在下 (-radius + 4)，底边在上 (-radius - 8)
-  ctx.moveTo(0, -radius + 6); // 顶点 (稍微深入一点点)
-  ctx.lineTo(8, -radius - 8);
-  ctx.lineTo(-8, -radius - 8);
+  ctx.moveTo(0, -radius + 8); // 顶点 (更加深入一点点, sharp)
+  ctx.lineTo(9, -radius - 8);
+  ctx.lineTo(-9, -radius - 8);
   ctx.closePath();
   ctx.fillStyle = AURORA_COLORS.accent;
   ctx.fill();
@@ -327,7 +327,7 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
   // 4.1 迷你转盘 (移入卡片内部)
   const miniTurntableRadius = 54;
   const mtCx = width / 2;
-  const mtCy = cardY + 80; // 下移，完全进入卡片
+  const mtCy = cardY + 130; // 下移以实现视觉居中 (Original: +80)
 
   // 背景遮罩
   ctx.save();
@@ -342,7 +342,7 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
 
   drawMiniTurntable(ctx, mtCx, mtCy, miniTurntableRadius, allOptions, selectedIndex);
 
-  // 4.2 引导文案 (下移)
+  // 4.2 引导文案 (保持相对位置)
   const innerStartY = mtCy + miniTurntableRadius + 45;
   ctx.fillStyle = AURORA_COLORS.accent;
   ctx.font = '700 26px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
