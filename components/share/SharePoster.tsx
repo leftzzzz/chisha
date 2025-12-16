@@ -1,16 +1,17 @@
 /**
  * SharePoster 组件
  *
- * Apple 风格的分享海报，用于生成分享图片
+ * Apple 风格的分享海报 - Aurora Flow (流体极光) 设计
  * 尺寸: 1080x1440 (3:4)
  *
- * 设计特点：
- * - 大量留白，呼吸感强
- * - 柔和的渐变背景
- * - 精致的卡片设计
- * - 清晰的视觉层次
+ * 设计理念 (Design Philosophy):
+ * - Emotion (情绪): 传递"终于决定了"的愉悦与期待
+ * - Depth (纵深): 通过层叠、阴影和模糊构建空间感
+ * - Vibrancy (活力): 使用高饱和度流体渐变作为背景
  *
- * 注意：为了确保 html2canvas 兼容性，所有样式使用内联 style
+ * 技术约束:
+ * - 必须使用内联样式以兼容 html2canvas
+ * - 避免使用高级 CSS 特性 (如 backdrop-filter)，改用半透明叠加模拟
  */
 
 'use client';
@@ -18,17 +19,22 @@
 import React, { forwardRef, useEffect, useRef, useCallback } from 'react';
 import { Restaurant, TurntableOption, isCustomOption } from '@/types';
 
-// 柔和的马卡龙配色
-const COLORS = [
-  '#FFB5BA', // 樱花粉
-  '#B8E0D2', // 薄荷绿
-  '#D6EADF', // 淡青绿
-  '#EAC4D5', // 淡紫粉
-  '#FFE5B4', // 淡杏色
-  '#D4E4ED', // 天空蓝
-  '#E8D5C4', // 奶茶色
-  '#C9B1FF', // 淡紫色
-];
+// -----------------------------------------------------------------------------
+// 视觉常量定义
+// -----------------------------------------------------------------------------
+
+// 极光背景色板
+const AURORA_COLORS = {
+  bg: '#FFF8F6',
+  orb1: '#FF9A9E', // 暖粉
+  orb2: '#FECFEF', // 浅紫
+  orb3: '#A18CD1', // 梦幻紫
+  orb4: '#FBC2EB', // 玫瑰粉
+  accent: '#FF6B6B', // 强调色
+};
+
+// 装饰性 Emoji 列表 (3D 质感)
+const DECO_EMOJIS = ['🍔', '🍱', '🍜', '🍕', '🍣', '🥨', '🥑', '🥩'];
 
 export interface SharePosterProps {
   query: string;
@@ -45,26 +51,21 @@ export const SharePoster = forwardRef<HTMLDivElement, SharePosterProps>(
     const selectedIndex = allOptions.findIndex(opt => opt.id === selectedOption.id);
     const qrImgRef = useRef<HTMLImageElement>(null);
 
-    // 监听二维码图片加载
+    // 随机选择几个装饰 Emoji
+    const randomDecos = useRef(
+      DECO_EMOJIS.sort(() => 0.5 - Math.random()).slice(0, 3)
+    ).current;
+
     const handleQRLoad = useCallback(() => {
-      if (onReady) {
-        // 延迟一小段时间确保渲染完成
-        setTimeout(onReady, 100);
-      }
+      if (onReady) setTimeout(onReady, 100);
     }, [onReady]);
 
-    // 如果没有二维码但有回调，也要触发
     useEffect(() => {
-      if (!qrCodeDataUrl && onReady) {
-        setTimeout(onReady, 100);
-      }
+      if (!qrCodeDataUrl && onReady) setTimeout(onReady, 100);
     }, [qrCodeDataUrl, onReady]);
 
-    // 格式化距离显示
     const formatDistance = (distance: number) => {
-      if (distance < 1000) {
-        return `${Math.round(distance)}m`;
-      }
+      if (distance < 1000) return `${Math.round(distance)}m`;
       return `${(distance / 1000).toFixed(1)}km`;
     };
 
@@ -74,255 +75,310 @@ export const SharePoster = forwardRef<HTMLDivElement, SharePosterProps>(
         style={{
           width: '1080px',
           height: '1440px',
-          background: 'linear-gradient(165deg, #FFF8F6 0%, #FFF5F8 50%, #FDF6FF 100%)',
-          fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif',
+          background: AURORA_COLORS.bg,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Segoe UI", Roboto, sans-serif',
           position: 'relative',
           overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'space-between',
         }}
       >
-        {/* 装饰性背景元素 */}
+        {/* ========================================================================
+           1. 背景层 (Aurora Orbs)
+           使用多个径向渐变模拟流体极光效果
+           ======================================================================== */}
         <div style={{
           position: 'absolute',
-          top: '-200px',
-          right: '-200px',
-          width: '600px',
-          height: '600px',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(255,182,193,0.15) 0%, transparent 70%)',
-        }} />
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 0,
+        }}>
+          {/* 左上 - 暖粉 */}
+          <div style={{
+            position: 'absolute',
+            top: '-20%',
+            left: '-20%',
+            width: '80%',
+            height: '60%',
+            background: `radial-gradient(circle, ${AURORA_COLORS.orb1} 0%, rgba(255,255,255,0) 70%)`,
+            opacity: 0.8,
+          }} />
+          {/* 右上 - 浅紫 */}
+          <div style={{
+            position: 'absolute',
+            top: '-10%',
+            right: '-10%',
+            width: '70%',
+            height: '50%',
+            background: `radial-gradient(circle, ${AURORA_COLORS.orb2} 0%, rgba(255,255,255,0) 70%)`,
+            opacity: 0.9,
+          }} />
+          {/* 左下 - 梦幻紫 */}
+          <div style={{
+            position: 'absolute',
+            bottom: '-10%',
+            left: '-10%',
+            width: '60%',
+            height: '60%',
+            background: `radial-gradient(circle, ${AURORA_COLORS.orb3} 0%, rgba(255,255,255,0) 70%)`,
+            opacity: 0.6,
+          }} />
+          {/* 右下 - 玫瑰粉 */}
+          <div style={{
+            position: 'absolute',
+            bottom: '10%',
+            right: '-20%',
+            width: '80%',
+            height: '50%',
+            background: `radial-gradient(circle, ${AURORA_COLORS.orb4} 0%, rgba(255,255,255,0) 70%)`,
+            opacity: 0.7,
+          }} />
+        </div>
+
+        {/* ========================================================================
+           2. 悬浮装饰层 (Floating 3D Elements)
+           增加画面的空间感
+           ======================================================================== */}
         <div style={{
           position: 'absolute',
-          bottom: '-150px',
-          left: '-150px',
-          width: '500px',
-          height: '500px',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(200,180,255,0.12) 0%, transparent 70%)',
-        }} />
-
-        {/* 顶部品牌区域 */}
-        <div style={{
-          paddingTop: '80px',
-          textAlign: 'center',
+          top: '120px',
+          right: '80px',
+          fontSize: '120px',
+          transform: 'rotate(15deg)',
+          filter: 'drop-shadow(0 20px 30px rgba(0,0,0,0.15))',
+          zIndex: 1,
         }}>
-          {/* 转盘装饰 */}
-          <div style={{
-            display: 'inline-block',
-            padding: '20px',
-            borderRadius: '50%',
-            background: 'rgba(255,255,255,0.6)',
-            boxShadow: '0 8px 32px rgba(255,107,107,0.08)',
-          }}>
-            <MiniTurntable
-              options={allOptions}
-              selectedIndex={selectedIndex}
-              size={220}
-            />
-          </div>
+          {randomDecos[0]}
+        </div>
+        <div style={{
+          position: 'absolute',
+          bottom: '380px',
+          left: '-40px',
+          fontSize: '140px',
+          transform: 'rotate(-25deg)',
+          filter: 'blur(1px) drop-shadow(0 20px 30px rgba(0,0,0,0.12))',
+          zIndex: 1,
+        }}>
+          {randomDecos[1]}
+        </div>
+        <div style={{
+          position: 'absolute',
+          top: '400px',
+          right: '-50px',
+          fontSize: '100px',
+          transform: 'rotate(45deg)',
+          filter: 'blur(2px) drop-shadow(0 15px 25px rgba(0,0,0,0.1))',
+          zIndex: 1,
+        }}>
+          {randomDecos[2]}
         </div>
 
-        {/* 主标题区域 */}
+
+        {/* ========================================================================
+           3. 主要内容区域 (Content)
+           ======================================================================== */}
         <div style={{
-          textAlign: 'center',
-          marginTop: '48px',
-          padding: '0 80px',
+          width: '100%',
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          zIndex: 10,
+          padding: '100px 64px 0',
         }}>
-          <div style={{
-            fontSize: '72px',
-            fontWeight: 700,
-            color: '#1D1D1F',
-            letterSpacing: '-2px',
-            lineHeight: 1.1,
-          }}>
-            今天吃啥?
-          </div>
-          <div style={{
-            marginTop: '20px',
-            fontSize: '28px',
-            color: '#6E6E73',
-            fontWeight: 400,
-            letterSpacing: '2px',
-          }}>
-            {query ? `「${query}」` : '让选择变得简单'}
-          </div>
-        </div>
 
-        {/* 结果卡片 */}
-        <div style={{
-          margin: '56px 64px',
-          background: 'rgba(255,255,255,0.85)',
-          borderRadius: '32px',
-          padding: '48px',
-          boxShadow: '0 4px 24px rgba(0,0,0,0.04), 0 12px 48px rgba(255,107,107,0.06)',
-          border: '1px solid rgba(255,255,255,0.8)',
-        }}>
-          {/* 选中标签 */}
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            background: 'linear-gradient(135deg, #FF6B6B 0%, #FF8E8E 100%)',
-            color: 'white',
-            padding: '12px 24px',
-            borderRadius: '100px',
-            fontSize: '22px',
-            fontWeight: 600,
-            marginBottom: '28px',
-            boxShadow: '0 4px 16px rgba(255,107,107,0.25)',
-          }}>
-            <span style={{ marginRight: '8px' }}>✦</span>
-            转盘选中
-          </div>
-
-          {/* 餐厅名称 */}
-          <div style={{
-            fontSize: '52px',
-            fontWeight: 700,
-            color: '#1D1D1F',
-            marginBottom: '24px',
-            lineHeight: 1.25,
-            letterSpacing: '-1px',
-          }}>
-            {selectedOption.name}
-          </div>
-
-          {/* 餐厅信息标签组 */}
-          {restaurant && (
+          {/* 标题组 */}
+          <div style={{ textAlign: 'center', marginBottom: '60px' }}>
             <div style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-            }}>
-              {/* 菜系标签 */}
-              <span style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                background: 'linear-gradient(135deg, rgba(255,107,107,0.12) 0%, rgba(255,107,107,0.08) 100%)',
-                color: '#E85555',
-                padding: '10px 20px',
-                borderRadius: '100px',
-                fontSize: '24px',
-                fontWeight: 500,
-                marginRight: '12px',
-                marginBottom: '12px',
-              }}>
-                {restaurant.cuisineType}
-              </span>
-
-              {/* 距离标签 */}
-              {restaurant.distance && (
-                <span style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  background: 'rgba(110,110,115,0.08)',
-                  color: '#6E6E73',
-                  padding: '10px 20px',
-                  borderRadius: '100px',
-                  fontSize: '24px',
-                  fontWeight: 500,
-                  marginRight: '12px',
-                  marginBottom: '12px',
-                }}>
-                  <span style={{ marginRight: '6px' }}>📍</span>
-                  {formatDistance(restaurant.distance)}
-                </span>
-              )}
-
-              {/* 评分标签 */}
-              {restaurant.rating && (
-                <span style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  background: 'rgba(255,193,7,0.12)',
-                  color: '#D4A000',
-                  padding: '10px 20px',
-                  borderRadius: '100px',
-                  fontSize: '24px',
-                  fontWeight: 500,
-                  marginBottom: '12px',
-                }}>
-                  <span style={{ marginRight: '6px' }}>⭐</span>
-                  {restaurant.rating.toFixed(1)}
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* 自定义选项标签 */}
-          {isCustom && (
-            <span style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              background: 'rgba(110,110,115,0.08)',
-              color: '#6E6E73',
-              padding: '10px 20px',
+              display: 'inline-block',
+              padding: '12px 24px',
+              background: 'rgba(255,255,255,0.6)',
               borderRadius: '100px',
-              fontSize: '24px',
-              fontWeight: 500,
+              marginBottom: '24px',
+              border: '1px solid rgba(255,255,255,0.8)',
+              boxShadow: '0 4px 20px rgba(255,107,107,0.1)',
             }}>
-              自定义选项
-            </span>
-          )}
-        </div>
+              <span style={{ fontSize: '20px', color: '#666', fontWeight: 500, letterSpacing: '2px' }}>
+                DECISION MADE
+              </span>
+            </div>
 
-        {/* 底部 CTA 区域 */}
-        <div style={{
-          position: 'absolute',
-          bottom: '72px',
-          left: '0',
-          right: '0',
-          textAlign: 'center',
-        }}>
-          <div style={{
-            fontSize: '28px',
-            color: '#1D1D1F',
-            fontWeight: 600,
-            marginBottom: '28px',
-            letterSpacing: '1px',
-          }}>
-            扫码一起来选吧
+            <div style={{
+              fontSize: '84px',
+              fontWeight: 800,
+              color: '#1D1D1F',
+              lineHeight: 1,
+              letterSpacing: '-2px',
+              marginBottom: '16px',
+              textShadow: '0 20px 40px rgba(255,255,255,0.8)', // 增加一点光晕增强对比
+            }}>
+              今天吃啥?
+            </div>
+            <div style={{
+              fontSize: '32px',
+              color: '#6E6E73',
+              fontWeight: 400,
+              letterSpacing: '1px',
+            }}>
+              {query ? `在「${query}」找到了答案` : '选择困难症的终极解药'}
+            </div>
           </div>
 
-          {/* 二维码容器 - 使用 img 标签确保 html2canvas 兼容 */}
+          {/* 转盘选中结果 - 核心卡片 */}
           <div style={{
-            display: 'inline-block',
-            background: 'white',
-            padding: '20px',
-            borderRadius: '24px',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.06)',
+            position: 'relative',
+            width: '100%',
+            background: 'rgba(255,255,255,0.75)',
+            borderRadius: '48px',
+            padding: '72px 56px',
+            // 模拟 Glassmorphism: 双重阴影做层次，边框做高光
+            boxShadow: `
+                0 20px 60px -10px rgba(50,50,93,0.1),
+                0 12px 24px -10px rgba(0,0,0,0.05),
+                inset 0 0 0 2px rgba(255,255,255,0.8)
+            `,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            marginBottom: '64px',
+          }}>
+            {/* 顶部挂饰 - 迷你转盘 */}
+            <div style={{
+              position: 'absolute',
+              top: '-50px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'white',
+              padding: '10px',
+              borderRadius: '50%',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+            }}>
+              <MiniTurntable options={allOptions} selectedIndex={selectedIndex} size={100} />
+            </div>
+
+            <div style={{ height: '30px' }}></div> {/* Spacer for turntable */}
+
+            {/* 选中文字 */}
+            <div style={{
+              fontSize: '24px',
+              color: AURORA_COLORS.accent,
+              fontWeight: 700,
+              letterSpacing: '4px',
+              textTransform: 'uppercase',
+              marginBottom: '28px',
+              display: 'flex',
+              alignItems: 'center',
+            }}>
+              <span style={{ fontSize: '24px', marginRight: '8px' }}>✨</span>
+              THE WINNER IS
+              <span style={{ fontSize: '24px', marginLeft: '8px' }}>✨</span>
+            </div>
+
+            {/* 餐厅名称 (Hero Text) */}
+            <div style={{
+              fontSize: selectedOption.name.length > 8 ? '56px' : '72px',
+              fontWeight: 800,
+              color: '#000',
+              textAlign: 'center',
+              lineHeight: 1.1,
+              marginBottom: '36px',
+              // 文字渐变模拟
+              background: '-webkit-linear-gradient(45deg, #1D1D1F 30%, #484848 90%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              // Fallback for html2canvas support (sometimes gradient text is tricky, use color directly if needed)
+              // html2canvas text-gradient support is partial, keeping standard color fallback just in case
+            }}>
+              {selectedOption.name}
+            </div>
+
+            {/* 信息标签 Chip Group */}
+            {restaurant && (
+              <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                justifyContent: 'center',
+                gap: '16px',
+              }}>
+                <Tag icon="🥘" text={restaurant.cuisineType} />
+                {restaurant.distance !== undefined && (
+                  <Tag icon="📍" text={formatDistance(restaurant.distance)} />
+                )}
+                {restaurant.rating && (
+                  <Tag icon="⭐" text={restaurant.rating.toFixed(1)} />
+                )}
+              </div>
+            )}
+            {isCustom && (
+              <Tag icon="✏️" text="自定义选项" />
+            )}
+          </div>
+        </div>
+
+        {/* ========================================================================
+           4. 底部栏 (Footer)
+           ======================================================================== */}
+        <div style={{
+          width: '100%',
+          background: 'white',
+          padding: '60px 80px',
+          borderTopLeftRadius: '60px',
+          borderTopRightRadius: '60px',
+          boxShadow: '0 -10px 40px rgba(0,0,0,0.03)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          zIndex: 20,
+        }}>
+          {/* 左侧文字信息 */}
+          <div style={{ flex: 1 }}>
+            <div style={{
+              fontSize: '36px',
+              fontWeight: 700,
+              color: '#1D1D1F',
+              marginBottom: '12px',
+            }}>
+              扫码也来转一转
+            </div>
+            <div style={{
+              fontSize: '24px',
+              color: '#86868B',
+            }}>
+              今天吃啥 · 你的美食决策助手
+            </div>
+          </div>
+
+          {/* 右侧二维码 */}
+          <div style={{
+            background: '#F5F5F7',
+            padding: '12px',
+            borderRadius: '20px',
           }}>
             {qrCodeDataUrl ? (
               <img
                 ref={qrImgRef}
                 src={qrCodeDataUrl}
                 alt="QR Code"
-                width={180}
-                height={180}
+                width={140}
+                height={140}
                 style={{
                   display: 'block',
-                  width: '180px',
-                  height: '180px',
+                  borderRadius: '12px',
                 }}
                 onLoad={handleQRLoad}
                 onError={handleQRLoad}
               />
             ) : (
               <div style={{
-                width: '180px',
-                height: '180px',
-                background: '#F5F5F7',
+                width: '140px',
+                height: '140px',
                 borderRadius: '12px',
               }} />
             )}
-          </div>
-
-          {/* 品牌署名 */}
-          <div style={{
-            fontSize: '22px',
-            color: '#8E8E93',
-            marginTop: '28px',
-            fontWeight: 400,
-          }}>
-            今天吃啥 · 让选择变得简单
           </div>
         </div>
       </div>
@@ -332,8 +388,27 @@ export const SharePoster = forwardRef<HTMLDivElement, SharePosterProps>(
 
 SharePoster.displayName = 'SharePoster';
 
+// -----------------------------------------------------------------------------
+// 子组件
+// -----------------------------------------------------------------------------
+
+const Tag = ({ icon, text }: { icon: string; text: string }) => (
+  <div style={{
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '12px 24px',
+    borderRadius: '100px',
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    border: '1px solid rgba(0,0,0,0.04)',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
+  }}>
+    <span style={{ fontSize: '24px', marginRight: '8px' }}>{icon}</span>
+    <span style={{ fontSize: '24px', fontWeight: 600, color: '#424245' }}>{text}</span>
+  </div>
+);
+
 /**
- * 迷你转盘组件 - 简洁优雅的设计
+ * 迷你转盘组件 (Simplified Version)
  */
 interface MiniTurntableProps {
   options: TurntableOption[];
@@ -343,80 +418,62 @@ interface MiniTurntableProps {
 
 const MiniTurntable: React.FC<MiniTurntableProps> = ({ options, selectedIndex, size }) => {
   const total = options.length;
-  const anglePerSegment = 360 / total;
+  // 限制最大显示数量，避免视觉过于密集
+  const displayTotal = Math.min(total, 12);
+  const anglePerSegment = 360 / displayTotal;
   const radius = size / 2;
+  const rotation = -(selectedIndex * (360 / total) + (360 / total) / 2) + 90;
 
-  // 计算旋转角度（让选中的扇区在顶部）
-  const selectedAngle = selectedIndex * anglePerSegment + anglePerSegment / 2;
-  const rotation = -selectedAngle + 90;
+  // 使用更柔和的色板对应 Poster 主题
+  const PALETTE = [
+    '#FF9A9E', '#FECFEF', '#A18CD1', '#FBC2EB', '#fad0c4', '#ffd1ff'
+  ];
 
   return (
     <div style={{
-      display: 'inline-block',
-      position: 'relative',
       width: `${size}px`,
       height: `${size}px`,
+      position: 'relative',
     }}>
       {/* 指针 */}
       <div style={{
         position: 'absolute',
-        top: '-16px',
+        top: '-8px',
         left: '50%',
-        marginLeft: '-14px',
-        zIndex: 10,
+        transform: 'translateX(-50%)',
         width: '0',
         height: '0',
-        borderLeft: '14px solid transparent',
-        borderRight: '14px solid transparent',
-        borderTop: '24px solid #FF6B6B',
-        filter: 'drop-shadow(0 2px 4px rgba(255,107,107,0.3))',
+        borderLeft: '8px solid transparent',
+        borderRight: '8px solid transparent',
+        borderTop: `12px solid ${AURORA_COLORS.accent}`,
+        zIndex: 10,
+        filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.2))',
       }} />
 
-      {/* 转盘 SVG */}
-      <svg
-        width={size}
-        height={size}
-        viewBox={`0 0 ${size} ${size}`}
-        style={{ filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.08))' }}
-      >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <g transform={`rotate(${rotation}, ${radius}, ${radius})`}>
-          {/* 扇区 */}
-          {options.map((_, index) => {
+          {Array.from({ length: displayTotal }).map((_, index) => {
+            // 简化的扇形绘制
             const startAngle = (index * anglePerSegment - 90) * (Math.PI / 180);
             const endAngle = ((index + 1) * anglePerSegment - 90) * (Math.PI / 180);
-            const r = radius - 2;
-
+            const r = radius;
             const x1 = radius + r * Math.cos(startAngle);
             const y1 = radius + r * Math.sin(startAngle);
             const x2 = radius + r * Math.cos(endAngle);
             const y2 = radius + r * Math.sin(endAngle);
-
             const largeArc = anglePerSegment > 180 ? 1 : 0;
-
             return (
               <path
                 key={index}
                 d={`M ${radius} ${radius} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`}
-                fill={COLORS[index % COLORS.length]}
+                fill={PALETTE[index % PALETTE.length]}
                 stroke="white"
-                strokeWidth="2"
+                strokeWidth="1.5"
               />
             );
           })}
-
-          {/* 中心装饰圆 */}
-          <circle
-            cx={radius}
-            cy={radius}
-            r={radius * 0.22}
-            fill="white"
-          />
-          <circle
-            cx={radius}
-            cy={radius}
-            r={radius * 0.08}
-            fill="#FF6B6B"
-          />
+          {/* 中心白点 */}
+          <circle cx={radius} cy={radius} r={radius * 0.15} fill="white" />
         </g>
       </svg>
     </div>
