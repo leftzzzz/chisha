@@ -319,12 +319,12 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
   // --------------------------------------------------------
   // 3. 绘制标题区域
   // --------------------------------------------------------
-  const contentStartY = 100;
+  const contentStartY = 220;
 
-  // DECISION MADE Badge
+  // 决定达成 Badge (原 DECISION MADE)
   ctx.textAlign = 'center';
-  const badgeText = 'DECISION MADE';
-  ctx.font = '500 20px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
+  const badgeText = '今天吃这个';
+  ctx.font = '500 22px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
   const badgeWidth = ctx.measureText(badgeText).width + 48;
   const badgeHeight = 44;
   const badgeX = (width - badgeWidth) / 2;
@@ -367,7 +367,7 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
   // --------------------------------------------------------
   const cardX = 64;
   const cardWidth = width - cardX * 2;
-  const cardHeight = 600; // Increased height
+  const cardHeight = 460; // Increased height
   const cardY = contentStartY + 270;
   const cardRadius = 48;
 
@@ -416,12 +416,12 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
 
   drawMiniTurntable(ctx, mtCx, mtCy, miniTurntableRadius, allOptions, selectedIndex);
 
-  // 4.2 "THE WINNER IS"
+  // 4.2 "THE WINNER IS" -> "决定是你了"
   const innerStartY = cardY + 90;
   ctx.fillStyle = AURORA_COLORS.accent;
   ctx.font = '700 24px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
   // ctx.letterSpacing // Canvas API support varies, skipping explicit letterSpacing
-  ctx.fillText('✨ THE WINNER IS ✨', width / 2, innerStartY);
+  ctx.fillText('✨ 决定是你了 ✨', width / 2, innerStartY);
 
   // 4.3 餐厅名称
   const nameY = innerStartY + 80;
@@ -501,9 +501,9 @@ export async function generatePosterCanvas(data: PosterData): Promise<string> {
   ctx.font = '400 24px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
   ctx.fillText('今天吃啥 · 你的美食决策助手', leftMargin, footerContentY + 70);
 
-  // Right: QR Code
-  const qrSize = 140;
-  const rightMargin = 80;
+  // Right: QR Code - 进一步加大
+  const qrSize = 240;
+  const rightMargin = 60; // 稍微减小右边距
   const qrX = width - rightMargin - qrSize;
   const qrY = footerY + (footerHeight - qrSize) / 2;
 
