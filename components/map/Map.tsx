@@ -5,8 +5,6 @@
  * 苹果风格设计 - 作为全屏背景显示
  */
 
-/// <reference path="../../types/amap.d.ts" />
-
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';

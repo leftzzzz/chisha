@@ -43,7 +43,7 @@ export const HomePage: React.FC = () => {
     dispatch,
   } = useAppState();
   const { location: detectedLocation, getAutoLocation, isLocating, error: locationError, geocodeAddress, clearLocation } = useLocation();
-  const { search, isSearching, progress } = useRestaurantSearch();
+  const { search, answerQuestion, isSearching, progress } = useRestaurantSearch();
   const { rotation, selectedIndex, isSpinning, startSpin, reset: resetTurntable } = useTurntable(state.restaurants.length + state.customOptions.length);
   const errorAlert = useErrorAlert();
 
@@ -191,6 +191,7 @@ export const HomePage: React.FC = () => {
           query: state.userQuery,
           location: state.userLocation,
           restaurants: state.restaurants,
+          rejectedRestaurants: state.removedRestaurants,
           customOptions: state.customOptions.length > 0 ? state.customOptions : undefined,
           selected: selectedOption,
         });
@@ -203,7 +204,7 @@ export const HomePage: React.FC = () => {
       }
     }
     prevStepRef.current = state.step;
-  }, [state.step, selectedIndex, isDesktop, state.restaurants, state.customOptions, state.userQuery, state.userLocation]);
+  }, [state.step, selectedIndex, isDesktop, state.restaurants, state.removedRestaurants, state.customOptions, state.userQuery, state.userLocation]);
 
   // 处理扇区点击
   const handleSegmentClick = useCallback((index: number) => {
@@ -281,7 +282,11 @@ export const HomePage: React.FC = () => {
   if (state.step === 'UNDERSTANDING' || state.step === 'SEARCHING') {
     return (
       <Layout>
-        <LoadingSteps progress={progress} />
+        <LoadingSteps
+          progress={progress}
+          onQuestionReply={answerQuestion}
+          isReplying={isSearching}
+        />
       </Layout>
     );
   }

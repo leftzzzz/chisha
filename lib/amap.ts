@@ -40,6 +40,19 @@ interface AmapPoi {
   business_area?: string;
   tag?: string;
   photos?: Array<{ url: string }>;
+  biz_ext?: {
+    rating?: string;
+    cost?: string;
+    opentime?: string;
+    opentime2?: string;
+    opentime_week?: string;
+    business_status?: string;
+  };
+  rating?: string;
+  cost?: string;
+  opentime?: string;
+  opentime_week?: string;
+  business_status?: string;
 }
 
 /**
@@ -140,6 +153,74 @@ export async function amapPoiSearch(
 }
 
 /**
+ * 使用高德 POI 详情接口补全评分、人均、营业时间等字段。
+ * 详情接口失败时不影响主搜索结果。
+ */
+export async function enrichRestaurantsWithAmapDetails(
+  restaurants: Restaurant[],
+  limit: number = 10
+): Promise<Restaurant[]> {
+  if (!AMAP_API_KEY || restaurants.length === 0) {
+    return restaurants;
+  }
+
+  const enrichedRestaurants = [...restaurants];
+  const detailTargets = restaurants
+    .slice(0, limit)
+    .map((restaurant, index) => ({
+      index,
+      amapId: restaurant.id.startsWith('amap_') ? restaurant.id.slice(5) : '',
+    }))
+    .filter((target) => target.amapId.length > 0);
+
+  await Promise.all(detailTargets.map(async (target) => {
+    try {
+      const detail = await amapPoiDetail(target.amapId);
+      if (detail) {
+        enrichedRestaurants[target.index] = {
+          ...enrichedRestaurants[target.index],
+          ...detail,
+          id: enrichedRestaurants[target.index].id,
+          distance: enrichedRestaurants[target.index].distance,
+        };
+      }
+    } catch (error) {
+      logger.warn('Amap detail enrichment failed', {
+        amapId: target.amapId,
+        error,
+      });
+    }
+  }));
+
+  return enrichedRestaurants;
+}
+
+async function amapPoiDetail(amapId: string): Promise<Restaurant | null> {
+  const params = new URLSearchParams({
+    key: AMAP_API_KEY!,
+    id: amapId,
+    extensions: 'all',
+  });
+
+  const url = `${AMAP_BASE_URL}/place/detail?${params.toString()}`;
+  const response = await fetchWithTimeout(url, {}, AMAP_TIMEOUT);
+
+  if (!response.ok) {
+    throw new ApiError(
+      ErrorCode.SEARCH_API_ERROR,
+      `Amap detail API error: ${response.status}`
+    );
+  }
+
+  const data: AmapPoiResponse = await response.json();
+  if (data.status !== '1' || !data.pois || data.pois.length === 0) {
+    return null;
+  }
+
+  return transformAmapPoi(data.pois[0]);
+}
+
+/**
  * 将高德 POI 转换为统一的 Restaurant 格式
  */
 function transformAmapPoi(poi: AmapPoi): Restaurant {
@@ -158,12 +239,55 @@ function transformAmapPoi(poi: AmapPoi): Restaurant {
     id: `amap_${poi.id}`,
     name: poi.name,
     cuisineType,
+    rating: parseOptionalNumber(poi.biz_ext?.rating ?? poi.rating),
     distance: poi.distance ? parseInt(poi.distance, 10) : undefined,
     address: poi.address,
     phone: poi.tel,
+    openingHours: pickOpeningHours(poi),
+    averagePrice: parseOptionalNumber(poi.biz_ext?.cost ?? poi.cost),
+    businessStatus: parseBusinessStatus(poi.biz_ext?.business_status ?? poi.business_status),
     location: { lat, lng },
     source: 'amap',
   };
+}
+
+function parseOptionalNumber(value?: string): number | undefined {
+  if (!value || value === '[]') {
+    return undefined;
+  }
+
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function pickOpeningHours(poi: AmapPoi): string | undefined {
+  return firstNonEmpty([
+    poi.biz_ext?.opentime_week,
+    poi.biz_ext?.opentime2,
+    poi.biz_ext?.opentime,
+    poi.opentime_week,
+    poi.opentime,
+  ]);
+}
+
+function parseBusinessStatus(value?: string): Restaurant['businessStatus'] | undefined {
+  if (!value || value === '[]') {
+    return undefined;
+  }
+
+  if (/休息|关闭|闭店|暂停|停业|打烊/.test(value)) {
+    return 'closed';
+  }
+
+  if (/营业|开门|open/i.test(value)) {
+    return 'open';
+  }
+
+  return 'unknown';
+}
+
+function firstNonEmpty(values: Array<string | undefined>): string | undefined {
+  return values.find((value) => Boolean(value && value !== '[]'));
 }
 
 /**

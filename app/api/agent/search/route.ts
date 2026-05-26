@@ -2,39 +2,22 @@
  * Agent 搜索 API 端点
  * POST /api/agent/search
  *
- * 使用 Vercel AI SDK 实现 Agent 自主搜索餐厅
- * 返回 SSE 流式响应，实时反馈搜索进度
+ * 运行轻量 Agent Loop：
+ * 1. 解析用户目标和硬约束
+ * 2. 规划搜索策略
+ * 3. 调用高德 POI 观察外部结果
+ * 4. 确定性过滤、评分和策略调整
+ * 5. 通过 SSE 返回兼容旧前端的事件和新增 Agent 事件
  */
 
-import { streamText, tool, stepCountIs } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
-import type { Location, Restaurant } from '@/types';
-import { amapPoiSearch } from '@/lib/amap';
+import type { AgentEvent, AgentInput, SearchPlan } from '@/lib/agent/types';
+import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
+import { runSearchAgent } from '@/lib/agent/runtime';
+import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
-import { rateLimit, getClientIP } from '@/lib/rateLimit';
+import { getClientIP, rateLimit } from '@/lib/rateLimit';
 
-// 环境变量
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-
-// Agent 配置（性能优化版）
-const MAX_ROUNDS = 3; // 最大搜索轮数（优化：从5减少到3，提升搜索速度）
-const TARGET_COUNT = 8; // 目标餐厅数量
-const EARLY_STOP_COUNT = 8; // 达到此数量后可提前结束（优化：从16减少到8，达到目标即立即停止）
-
-// 创建 OpenAI Compatible Provider（使用 Chat Completions API）
-const provider = createOpenAICompatible({
-  name: 'dashscope',
-  apiKey: OPENAI_API_KEY,
-  baseURL: OPENAI_BASE_URL,
-});
-
-// 获取模型实例
-const getModel = () => provider.chatModel(OPENAI_MODEL);
-
-// 请求验证
 const AgentSearchRequestSchema = z.object({
   query: z.string().min(1).max(500),
   location: z.object({
@@ -42,291 +25,99 @@ const AgentSearchRequestSchema = z.object({
     lng: z.number(),
     address: z.string().optional(),
   }),
+  preferenceSummary: z.object({
+    favoriteCuisines: z.array(z.object({
+      name: z.string(),
+      weight: z.number(),
+    })).optional(),
+    avoidedCuisines: z.array(z.object({
+      name: z.string(),
+      weight: z.number(),
+    })).optional(),
+    preferredDistanceMeters: z.number().optional(),
+    preferredPriceRange: z.object({
+      min: z.number().optional(),
+      max: z.number().optional(),
+    }).optional(),
+    recentSelectedRestaurants: z.array(z.string()).optional(),
+    recentRejectedRestaurants: z.array(z.string()).optional(),
+  }).optional(),
+  groupPreferenceSummaries: z.array(z.object({
+    favoriteCuisines: z.array(z.object({
+      name: z.string(),
+      weight: z.number(),
+    })).optional(),
+    avoidedCuisines: z.array(z.object({
+      name: z.string(),
+      weight: z.number(),
+    })).optional(),
+    preferredDistanceMeters: z.number().optional(),
+    preferredPriceRange: z.object({
+      min: z.number().optional(),
+      max: z.number().optional(),
+    }).optional(),
+    recentSelectedRestaurants: z.array(z.string()).optional(),
+    recentRejectedRestaurants: z.array(z.string()).optional(),
+  })).optional(),
 });
 
-// Agent 系统提示词（性能优化版：强调快速搜索和立即结束）
-const AGENT_SYSTEM_PROMPT = `你是高效餐厅搜索助手。立即搜索并快速完成任务。
-
-核心规则：
-1. 用户明确说要什么就搜什么，不要改类型
-2. 找到8家餐厅后立即调用 finish_search 结束
-3. 最多搜索3次就必须结束，不要犹豫
-
-示例：
-- "想吃火锅" → search_restaurants(keywords=["火锅"]) → 找到8家 → 立即 finish_search
-- "想吃日料" → search_restaurants(keywords=["日料"]) → 找到8家 → 立即 finish_search
-- "约会吃什么好" → search_restaurants(keywords=["西餐", "日料"]) → 找到8家 → 立即 finish_search
-- "附近有什么吃的" → search_restaurants(keywords=["餐厅"]) → 找到8家 → 立即 finish_search
-
-重要：达到8家餐厅后立即调用 finish_search，不要继续搜索！`;
-
-/**
- * SSE 事件类型定义
- */
-type AgentEvent =
-  | { type: 'thinking'; message: string }
-  | { type: 'searching'; keywords: string[]; round: number }
-  | { type: 'search_result'; found: number; total: number; restaurants: Array<{ id: string; name: string; cuisineType: string; distance?: number }> }
-  | { type: 'filtering'; message: string; total: number }
-  | { type: 'done'; restaurants: Restaurant[]; candidates: Restaurant[] }
-  | { type: 'error'; message: string };
-
-/**
- * 发送 SSE 事件
- */
 function sendEvent(controller: ReadableStreamDefaultController, event: AgentEvent) {
   const data = JSON.stringify(event);
   controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
 }
 
 export async function POST(request: Request) {
-  // 限流检查
   const ip = getClientIP(request);
   const rateLimitResult = rateLimit(ip, 3, 60 * 1000);
 
   if (!rateLimitResult.success) {
-    return new Response(
-      JSON.stringify({ error: '请求过于频繁，请稍后再试' }),
-      { status: 429, headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({ error: '请求过于频繁，请稍后再试' }, 429);
   }
 
-  // 检查 API Key
-  if (!OPENAI_API_KEY) {
-    return new Response(
-      JSON.stringify({ error: 'OpenAI API key is not configured' }),
-      { status: 503, headers: { 'Content-Type': 'application/json' } }
-    );
-  }
-
-  let requestData: { query: string; location: Location };
+  let input: AgentInput;
 
   try {
-    const body = await request.json();
+    const body: unknown = await request.json();
     const validation = AgentSearchRequestSchema.safeParse(body);
 
     if (!validation.success) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid request parameters', details: validation.error.errors }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      return jsonResponse(
+        { error: 'Invalid request parameters', details: validation.error.errors },
+        400
       );
     }
 
-    requestData = validation.data;
+    const summaries = [
+      validation.data.preferenceSummary,
+      ...(validation.data.groupPreferenceSummaries ?? []),
+    ].filter((summary): summary is NonNullable<typeof validation.data.preferenceSummary> => Boolean(summary));
+
+    input = {
+      query: validation.data.query,
+      location: validation.data.location,
+      preferenceSummary: mergeUserPreferenceSummaries(summaries),
+    };
   } catch {
-    return new Response(
-      JSON.stringify({ error: 'Invalid JSON body' }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({ error: 'Invalid JSON body' }, 400);
   }
 
-  const { query, location } = requestData;
-  logger.info('Agent search started', { query, location });
+  logger.info('Agent search started', {
+    query: input.query,
+    location: input.location,
+    hasPreferenceSummary: Boolean(input.preferenceSummary),
+  });
 
-  // 请求级别的状态（避免 serverless 环境下的状态污染）
-  const searchState = {
-    allFoundRestaurants: [] as Restaurant[],
-    searchRound: 0,
-    hasSentDone: false, // 标记是否已发送 done 事件
-  };
-
-  // 创建 SSE 流
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        // 发送开始事件
-        sendEvent(controller, { type: 'thinking', message: '正在分析您的需求...' });
-
-        // 使用 Vercel AI SDK（Chat Completions API）
-        // 注意：此 API 不支持系统提示词，所有内容放在用户消息中
-        const result = await streamText({
-          model: getModel(),
-          prompt: `${AGENT_SYSTEM_PROMPT}
-
----
-用户位置：${location.address || `${location.lat}, ${location.lng}`}
-用户需求：${query}
-
-请立即调用 search_restaurants 工具搜索餐厅。`,
-          tools: {
-            // 搜索餐厅工具
-            search_restaurants: tool({
-              description: `搜索指定条件的餐厅。可多次调用搜索不同类型，结果会累积去重。`,
-              inputSchema: z.object({
-                keywords: z.array(z.string()).describe('搜索关键词，如 ["川菜", "火锅"]'),
-                radius: z.number().default(2000).describe('搜索半径（米）'),
-                poiType: z.string().optional().describe('高德POI类型代码'),
-              }),
-              execute: async ({ keywords, radius, poiType }: { keywords: string[]; radius: number; poiType?: string }) => {
-                searchState.searchRound++;
-
-                if (searchState.searchRound > MAX_ROUNDS) {
-                  return {
-                    success: false,
-                    message: '已达到最大搜索轮数，请调用 finish_search',
-                    totalFound: searchState.allFoundRestaurants.length,
-                  };
-                }
-
-                // 发送搜索中事件
-                sendEvent(controller, {
-                  type: 'searching',
-                  keywords,
-                  round: searchState.searchRound,
-                });
-
-                logger.info('Agent searching', {
-                  round: searchState.searchRound,
-                  keywords,
-                  radius,
-                  poiType,
-                });
-
-                try {
-                  const restaurants = await amapPoiSearch(keywords, location, radius, poiType);
-
-                  // 去重合并
-                  for (const r of restaurants) {
-                    const exists = searchState.allFoundRestaurants.some(
-                      existing =>
-                        existing.name === r.name &&
-                        Math.abs(existing.location.lat - r.location.lat) < 0.001 &&
-                        Math.abs(existing.location.lng - r.location.lng) < 0.001
-                    );
-                    if (!exists) {
-                      searchState.allFoundRestaurants.push(r);
-                    }
-                  }
-
-                  // 发送搜索结果事件（带上所有已找到的餐厅）
-                  sendEvent(controller, {
-                    type: 'search_result',
-                    found: restaurants.length,
-                    total: searchState.allFoundRestaurants.length,
-                    restaurants: searchState.allFoundRestaurants.map(r => ({
-                      id: r.id,
-                      name: r.name,
-                      cuisineType: r.cuisineType,
-                      distance: r.distance,
-                    })),
-                  });
-
-                  // 更激进的提前停止提示
-                  const shouldFinishNow = searchState.allFoundRestaurants.length >= EARLY_STOP_COUNT;
-
-                  return {
-                    success: true,
-                    found: restaurants.length,
-                    totalFound: searchState.allFoundRestaurants.length,
-                    restaurants: restaurants.map(r => ({
-                      id: r.id,
-                      name: r.name,
-                      cuisineType: r.cuisineType,
-                      distance: r.distance,
-                      address: r.address,
-                    })),
-                    message:
-                      restaurants.length > 0
-                        ? `找到 ${restaurants.length} 家，累计 ${searchState.allFoundRestaurants.length} 家${shouldFinishNow ? '，已达目标！' : ''}`
-                        : '未找到，建议换关键词或扩大范围',
-                    // 提前结束提示：达到8家就强制要求立即结束
-                    shouldFinish: shouldFinishNow,
-                    finishHint: shouldFinishNow
-                      ? `✓ 已找到 ${searchState.allFoundRestaurants.length} 家餐厅，达到目标数量！请立即调用 finish_search 完成搜索，不要继续搜索！`
-                      : undefined,
-                  };
-                } catch (error) {
-                  logger.error('Search tool error', { error });
-                  return {
-                    success: false,
-                    message: `搜索失败: ${error instanceof Error ? error.message : '未知错误'}`,
-                    totalFound: searchState.allFoundRestaurants.length,
-                  };
-                }
-              },
-            }),
-
-            // 完成搜索
-            finish_search: tool({
-              description: `搜索完成，从已找到的餐厅中选择最符合用户需求的${TARGET_COUNT}家。必须根据用户的具体需求（如想吃火锅就选火锅店）选择，不要只按距离选择。`,
-              inputSchema: z.object({
-                selectedIds: z.array(z.string()).max(TARGET_COUNT).describe('选中的餐厅ID列表，必须是最符合用户需求的餐厅'),
-                reasoning: z.string().describe('选择理由，说明为什么这些餐厅最符合用户需求'),
-              }),
-              execute: async ({ selectedIds, reasoning }: { selectedIds: string[]; reasoning: string }) => {
-                logger.info('Agent finishing', {
-                  selectedIds,
-                  reasoning,
-                  totalFound: searchState.allFoundRestaurants.length,
-                });
-
-                // 发送筛选中事件（不使用thinking，避免进度条回退）
-                sendEvent(controller, {
-                  type: 'filtering',
-                  message: '正在筛选最合适的餐厅...',
-                  total: searchState.allFoundRestaurants.length
-                });
-
-                // 根据 ID 筛选
-                let selected = searchState.allFoundRestaurants.filter(r =>
-                  selectedIds.includes(r.id)
-                );
-
-                // 补充不足的
-                if (selected.length < TARGET_COUNT && searchState.allFoundRestaurants.length > 0) {
-                  const remaining = searchState.allFoundRestaurants
-                    .filter(r => !selectedIds.includes(r.id))
-                    .sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
-
-                  while (selected.length < TARGET_COUNT && remaining.length > 0) {
-                    selected.push(remaining.shift()!);
-                  }
-                }
-
-                // 如果没有选中任何，返回所有（按距离排序）
-                if (selected.length === 0 && searchState.allFoundRestaurants.length > 0) {
-                  selected = searchState.allFoundRestaurants
-                    .sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity))
-                    .slice(0, TARGET_COUNT);
-                }
-
-                // 获取候补餐厅（所有搜索到但没被选中的）
-                const selectedIdSet = new Set(selected.map(r => r.id));
-                const candidates = searchState.allFoundRestaurants
-                  .filter(r => !selectedIdSet.has(r.id))
-                  .sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
-
-                // 发送完成事件（包含选中和候补）
-                sendEvent(controller, { type: 'done', restaurants: selected, candidates });
-
-                // 设置标志，避免重复发送
-                searchState.hasSentDone = true;
-
-                return {
-                  success: true,
-                  count: selected.length,
-                  candidateCount: candidates.length,
-                };
-              },
-            }),
-          },
-          stopWhen: stepCountIs(MAX_ROUNDS + 2),
-        });
-
-        // 等待完成
-        await result.text;
-
-        // 如果 Agent 没有调用 finish_search，手动返回结果
-        if (!searchState.hasSentDone && searchState.allFoundRestaurants.length > 0) {
-          const sorted = searchState.allFoundRestaurants
-            .sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
-          const selected = sorted.slice(0, TARGET_COUNT);
-          const candidates = sorted.slice(TARGET_COUNT);
-
-          sendEvent(controller, { type: 'done', restaurants: selected, candidates });
-        } else if (!searchState.hasSentDone) {
-          sendEvent(controller, { type: 'error', message: '未找到符合条件的餐厅' });
-        }
+        await runSearchAgent(
+          input,
+          (event) => sendEvent(controller, event),
+          async (plan: SearchPlan) => {
+            const restaurants = await amapPoiSearch(plan.keywords, input.location, plan.radiusMeters, plan.poiType);
+            return enrichRestaurantsWithAmapDetails(restaurants, 8);
+          }
+        );
 
         controller.close();
       } catch (error) {
@@ -349,10 +140,13 @@ export async function POST(request: Request) {
   });
 }
 
-// 只允许 POST
 export async function GET() {
-  return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-    status: 405,
+  return jsonResponse({ error: 'Method not allowed' }, 405);
+}
+
+function jsonResponse(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
     headers: { 'Content-Type': 'application/json' },
   });
 }

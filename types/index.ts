@@ -19,7 +19,10 @@ export interface Restaurant {
   address: string; // 详细地址
   phone?: string; // 联系电话
   openingHours?: string; // 营业时间
+  businessStatus?: 'open' | 'closed' | 'unknown'; // 营业状态（数据源可提供时）
   averagePrice?: number; // 人均消费（元）
+  recommendationReason?: string; // 推荐理由
+  recommendationWarnings?: string[]; // 不可验证或放宽匹配说明
   location: Location; // 地理位置
   source: 'amap' | 'osm'; // 数据来源
 }
@@ -158,6 +161,7 @@ export interface TurntableRecord {
   query: string; // 用户需求
   location: Location; // 位置
   restaurants: Restaurant[]; // 参与的餐厅
+  rejectedRestaurants?: Restaurant[]; // 用户手动删除的餐厅
   customOptions?: CustomOption[]; // 参与的自定义选项
   selected: Restaurant | CustomOption; // 选中的餐厅或自定义选项
   userFeedback?: 'like' | 'dislike'; // 用户反馈

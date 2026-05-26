@@ -24,6 +24,7 @@ import {
   ReverseGeocodeRequest,
   ReverseGeocodeResponse,
 } from '@/types';
+import type { UserPreferenceSummary } from '@/lib/agent/types';
 
 /**
  * 搜索结果中的简要餐厅信息
@@ -43,8 +44,29 @@ export type AgentEvent =
   | { type: 'searching'; keywords: string[]; round: number }
   | { type: 'search_result'; found: number; total: number; restaurants: SearchResultRestaurant[] }
   | { type: 'filtering'; message: string; total: number }
-  | { type: 'done'; restaurants: Restaurant[]; candidates: Restaurant[] }
-  | { type: 'error'; message: string };
+  | { type: 'done'; restaurants: Restaurant[]; candidates: Restaurant[]; explanation?: string; unmetConstraints?: string[] }
+  | { type: 'error'; message: string }
+  | { type: 'status'; message: string }
+  | { type: 'tool_start'; tool: string; args: unknown }
+  | { type: 'tool_result'; tool: string; summary: unknown }
+  | { type: 'strategy_change'; reason: string; next: unknown }
+  | { type: 'partial_results'; restaurants: Restaurant[] }
+  | {
+      type: 'question';
+      sessionId: string;
+      question: string;
+      options?: string[];
+      allowFreeText: boolean;
+    }
+  | { type: 'session_paused'; sessionId: string }
+  | { type: 'session_resumed'; sessionId: string }
+  | {
+      type: 'final';
+      restaurants: Restaurant[];
+      candidates: Restaurant[];
+      explanation: string;
+      unmetConstraints: string[];
+    };
 
 /**
  * Agent 搜索回调
@@ -54,8 +76,13 @@ export interface AgentSearchCallbacks {
   onSearching?: (keywords: string[], round: number) => void;
   onSearchResult?: (found: number, total: number, restaurants: SearchResultRestaurant[]) => void;
   onFiltering?: (message: string, total: number) => void;
-  onDone?: (restaurants: Restaurant[], candidates: Restaurant[]) => void;
+  onDone?: (restaurants: Restaurant[], candidates: Restaurant[], explanation?: string, unmetConstraints?: string[]) => void;
   onError?: (message: string) => void;
+  onStatus?: (message: string) => void;
+  onStrategyChange?: (reason: string, next: unknown) => void;
+  onQuestion?: (question: AgentQuestion) => void;
+  onSessionPaused?: (sessionId: string) => void;
+  onSessionResumed?: (sessionId: string) => void;
 }
 
 /**
@@ -347,6 +374,17 @@ export async function reverseGeocode(location: Location): Promise<string> {
 export interface AgentSearchResult {
   restaurants: Restaurant[];
   candidates: Restaurant[];
+  explanation?: string;
+  unmetConstraints?: string[];
+  paused?: boolean;
+  question?: AgentQuestion;
+}
+
+export interface AgentQuestion {
+  sessionId: string;
+  question: string;
+  options?: string[];
+  allowFreeText: boolean;
 }
 
 /**
@@ -374,7 +412,9 @@ export async function agentSearch(
   query: string,
   location: Location,
   callbacks?: AgentSearchCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  preferenceSummary?: UserPreferenceSummary,
+  groupPreferenceSummaries?: UserPreferenceSummary[]
 ): Promise<AgentSearchResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
@@ -390,7 +430,7 @@ export async function agentSearch(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ query, location }),
+      body: JSON.stringify({ query, location, preferenceSummary, groupPreferenceSummaries }),
       signal: controller.signal,
     });
 
@@ -435,6 +475,9 @@ export async function agentSearch(
               case 'thinking':
                 callbacks?.onThinking?.(event.message);
                 break;
+              case 'status':
+                callbacks?.onStatus?.(event.message);
+                break;
               case 'searching':
                 callbacks?.onSearching?.(event.keywords, event.round);
                 break;
@@ -444,6 +487,30 @@ export async function agentSearch(
               case 'filtering':
                 callbacks?.onFiltering?.(event.message, event.total);
                 break;
+              case 'strategy_change':
+                callbacks?.onStrategyChange?.(event.reason, event.next);
+                break;
+              case 'tool_start':
+              case 'tool_result':
+              case 'partial_results':
+                break;
+              case 'final':
+                if (!hasReceivedDone) {
+                  hasReceivedDone = true;
+                  result = {
+                    restaurants: event.restaurants,
+                    candidates: event.candidates || [],
+                    explanation: event.explanation,
+                    unmetConstraints: event.unmetConstraints,
+                  };
+                  callbacks?.onDone?.(
+                    event.restaurants,
+                    event.candidates || [],
+                    event.explanation,
+                    event.unmetConstraints
+                  );
+                }
+                break;
               case 'done':
                 // 只处理第一个 done 事件
                 if (!hasReceivedDone) {
@@ -451,8 +518,15 @@ export async function agentSearch(
                   result = {
                     restaurants: event.restaurants,
                     candidates: event.candidates || [],
+                    explanation: event.explanation,
+                    unmetConstraints: event.unmetConstraints,
                   };
-                  callbacks?.onDone?.(event.restaurants, event.candidates || []);
+                  callbacks?.onDone?.(
+                    event.restaurants,
+                    event.candidates || [],
+                    event.explanation,
+                    event.unmetConstraints
+                  );
                 }
                 break;
               case 'error':
@@ -488,6 +562,203 @@ export async function agentSearch(
 
     throw new APIError(
       error instanceof Error ? error.message : 'Agent 搜索失败',
+      'AGENT_ERROR'
+    );
+  }
+}
+
+export async function agentChat(
+  message: string,
+  location: Location,
+  callbacks?: AgentSearchCallbacks,
+  signal?: AbortSignal,
+  sessionId?: string,
+  preferenceSummary?: UserPreferenceSummary,
+  groupPreferenceSummaries?: UserPreferenceSummary[]
+): Promise<AgentSearchResult> {
+  return requestAgentStream(
+    '/api/agent/chat',
+    { message, location, sessionId, preferenceSummary, groupPreferenceSummaries },
+    callbacks,
+    signal
+  );
+}
+
+async function requestAgentStream(
+  endpoint: string,
+  body: unknown,
+  callbacks?: AgentSearchCallbacks,
+  signal?: AbortSignal
+): Promise<AgentSearchResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+  if (signal) {
+    signal.addEventListener('abort', () => controller.abort());
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new APIError(
+        errorData.error || `Agent 请求失败: ${response.status}`,
+        'AGENT_ERROR',
+        response.status
+      );
+    }
+
+    if (!response.body) {
+      throw new APIError('无法获取响应流', 'STREAM_ERROR');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: AgentSearchResult = { restaurants: [], candidates: [] };
+    let hasReceivedResult = false;
+    let pausedQuestion: AgentQuestion | undefined;
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) {
+          continue;
+        }
+
+        try {
+          const event: AgentEvent = JSON.parse(line.slice(6));
+
+          switch (event.type) {
+            case 'thinking':
+              callbacks?.onThinking?.(event.message);
+              break;
+            case 'status':
+              callbacks?.onStatus?.(event.message);
+              break;
+            case 'searching':
+              callbacks?.onSearching?.(event.keywords, event.round);
+              break;
+            case 'search_result':
+              callbacks?.onSearchResult?.(event.found, event.total, event.restaurants);
+              break;
+            case 'filtering':
+              callbacks?.onFiltering?.(event.message, event.total);
+              break;
+            case 'strategy_change':
+              callbacks?.onStrategyChange?.(event.reason, event.next);
+              break;
+            case 'question':
+              pausedQuestion = {
+                sessionId: event.sessionId,
+                question: event.question,
+                options: event.options,
+                allowFreeText: event.allowFreeText,
+              };
+              callbacks?.onQuestion?.(pausedQuestion);
+              break;
+            case 'session_paused':
+              callbacks?.onSessionPaused?.(event.sessionId);
+              break;
+            case 'session_resumed':
+              callbacks?.onSessionResumed?.(event.sessionId);
+              break;
+            case 'tool_start':
+            case 'tool_result':
+            case 'partial_results':
+              break;
+            case 'final':
+              if (!hasReceivedResult) {
+                hasReceivedResult = true;
+                result = {
+                  restaurants: event.restaurants,
+                  candidates: event.candidates || [],
+                  explanation: event.explanation,
+                  unmetConstraints: event.unmetConstraints,
+                };
+                callbacks?.onDone?.(
+                  event.restaurants,
+                  event.candidates || [],
+                  event.explanation,
+                  event.unmetConstraints
+                );
+              }
+              break;
+            case 'done':
+              if (!hasReceivedResult) {
+                hasReceivedResult = true;
+                result = {
+                  restaurants: event.restaurants,
+                  candidates: event.candidates || [],
+                  explanation: event.explanation,
+                  unmetConstraints: event.unmetConstraints,
+                };
+                callbacks?.onDone?.(
+                  event.restaurants,
+                  event.candidates || [],
+                  event.explanation,
+                  event.unmetConstraints
+                );
+              }
+              break;
+            case 'error':
+              callbacks?.onError?.(event.message);
+              throw new APIError(event.message, 'AGENT_ERROR');
+          }
+        } catch (error) {
+          if (error instanceof APIError) throw error;
+        }
+      }
+    }
+
+    if (pausedQuestion) {
+      return {
+        restaurants: [],
+        candidates: [],
+        paused: true,
+        question: pausedQuestion,
+      };
+    }
+
+    if (result.restaurants.length === 0) {
+      throw new APIError(
+        '未找到符合条件的餐厅，试试调整搜索条件?',
+        'NO_RESULTS'
+      );
+    }
+
+    return result;
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    if (error instanceof APIError) {
+      throw error;
+    }
+
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new APIError('搜索超时，请重试', 'TIMEOUT');
+    }
+
+    throw new APIError(
+      error instanceof Error ? error.message : 'Agent 请求失败',
       'AGENT_ERROR'
     );
   }
