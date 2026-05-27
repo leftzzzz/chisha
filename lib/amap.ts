@@ -16,6 +16,35 @@ const AMAP_TIMEOUT = 10000; // 10 秒超时
 
 // 高德 POI 类型映射（餐饮服务相关）
 const DEFAULT_POI_TYPE = '050000'; // 餐饮服务（最宽泛的餐饮大类）
+const MAX_SEARCH_KEYWORDS = 5;
+const MAX_POI_PAGES = 5;
+const MAX_SEARCH_REQUESTS_PER_CALL = 8;
+
+const FOOD_POI_TYPE_MATCHERS: Array<{ terms: string[]; poiTypes: string[] }> = [
+  { terms: ['江浙菜'], poiTypes: ['050105', '050106'] },
+  { terms: ['川菜', '川味', '麻辣'], poiTypes: ['050102'] },
+  { terms: ['粤菜', '广东菜', '茶餐厅', '烧腊', '点心'], poiTypes: ['050103'] },
+  { terms: ['湘菜', '湖南菜'], poiTypes: ['050109'] },
+  { terms: ['鲁菜', '山东菜'], poiTypes: ['050104'] },
+  { terms: ['苏菜', '江苏菜'], poiTypes: ['050105'] },
+  { terms: ['浙菜', '杭帮菜', '浙江菜'], poiTypes: ['050106'] },
+  { terms: ['闽菜', '福建菜'], poiTypes: ['050108'] },
+  { terms: ['徽菜', '安徽菜'], poiTypes: ['050107'] },
+  { terms: ['火锅', '涮锅', '牛肉火锅', '潮汕牛肉火锅', '串串'], poiTypes: ['050117'] },
+  { terms: ['日料', '日本料理', '日本菜', '寿司', '刺身', '日式拉面'], poiTypes: ['050201'] },
+  { terms: ['韩餐', '韩国料理', '韩式', '石锅拌饭', '韩式烤肉'], poiTypes: ['050202'] },
+  { terms: ['西餐', '牛排', '意面', '披萨', '比萨', '意大利菜'], poiTypes: ['050203'] },
+  { terms: ['烧烤', '烤串', '烤肉', 'bbq'], poiTypes: ['050700'] },
+  { terms: ['快餐', '汉堡', '炸鸡', '薯条', '鸡排'], poiTypes: ['050300'] },
+  { terms: ['小吃', '麻辣烫', '冒菜', '米线'], poiTypes: ['050310'] },
+  { terms: ['咖啡', '咖啡店', '咖啡厅'], poiTypes: ['050401'] },
+  { terms: ['奶茶', '果茶', '柠檬茶'], poiTypes: ['050307'] },
+  { terms: ['饮品', '喝点', '喝的'], poiTypes: ['050307', '050401'] },
+  { terms: ['甜品', '甜点', '蛋糕', '面包', '烘焙'], poiTypes: ['050600'] },
+  { terms: ['海鲜', '小龙虾', '龙虾'], poiTypes: ['050118'] },
+  { terms: ['素食', '素菜'], poiTypes: ['050119'] },
+  { terms: ['清真', '兰州拉面'], poiTypes: ['050116'] },
+];
 
 /**
  * 高德 API 响应类型
@@ -79,48 +108,139 @@ export async function amapPoiSearch(
     );
   }
 
-  // 合并关键词
-  const keyword = keywords.join('|');
-
-  // 使用 LLM 提供的 poiType，如果没有则使用默认的餐饮大类
-  const finalPoiType = poiType || DEFAULT_POI_TYPE;
+  const searchKeywords = normalizeSearchKeywords(keywords);
+  const pages = Math.max(1, Math.min(Math.round(pageCount), MAX_POI_PAGES));
+  const pagesPerKeyword = getPagesPerKeyword(searchKeywords.length, pages);
+  const searchTasks = searchKeywords.map((keyword) => ({
+    keyword,
+    poiType: resolvePoiTypesForKeyword(keyword, poiType, searchKeywords.length > 1),
+  }));
 
   logger.info('Calling Amap POI search', {
-    keywords,
-    poiType: finalPoiType,
-    poiTypeSource: poiType ? 'llm' : 'default',
+    keywords: searchKeywords,
+    tasks: searchTasks,
+    poiTypeSource: poiType ? 'llm-or-keyword' : 'keyword-or-default',
     location,
     distance,
     pageCount,
+    pagesPerKeyword,
   });
 
   try {
     const allPois: AmapPoi[] = [];
-    const pages = Math.max(1, Math.min(Math.round(pageCount), 5));
 
-    for (let page = 1; page <= pages; page++) {
-      const data = await fetchAmapPoiPage(keyword, finalPoiType, location, distance, page);
-      if (!data.pois || data.pois.length === 0) {
-        if (page === 1) {
-          logger.info('Amap search returned no results');
+    for (const task of searchTasks) {
+      for (let page = 1; page <= pagesPerKeyword; page++) {
+        const data = await fetchAmapPoiPage(task.keyword, task.poiType, location, distance, page);
+        if (!data.pois || data.pois.length === 0) {
+          if (page === 1) {
+            logger.info('Amap search returned no results', {
+              keyword: task.keyword,
+              poiType: task.poiType,
+            });
+          }
+          break;
         }
-        break;
-      }
 
-      allPois.push(...data.pois);
+        allPois.push(...data.pois);
 
-      if (data.pois.length < 20 || allPois.length >= Number(data.count || 0)) {
-        break;
+        if (data.pois.length < 20 || page * 20 >= Number(data.count || 0)) {
+          break;
+        }
       }
     }
 
-    logger.info('Amap search successful', { count: allPois.length });
+    const uniquePois = dedupeAmapPois(allPois);
 
-    return allPois.map((poi) => transformAmapPoi(poi));
+    logger.info('Amap search successful', {
+      rawCount: allPois.length,
+      count: uniquePois.length,
+    });
+
+    return uniquePois.map((poi) => transformAmapPoi(poi));
   } catch (error) {
     logger.error('Amap search failed', { error });
     throw error;
   }
+}
+
+function normalizeSearchKeywords(keywords: string[]): string[] {
+  const normalized = Array.from(new Set(
+    keywords.map((keyword) => keyword.trim()).filter(Boolean)
+  )).slice(0, MAX_SEARCH_KEYWORDS);
+
+  return normalized.length > 0 ? normalized : [''];
+}
+
+function getPagesPerKeyword(keywordCount: number, requestedPages: number): number {
+  if (keywordCount <= 1) {
+    return requestedPages;
+  }
+
+  return Math.max(
+    1,
+    Math.min(requestedPages, Math.floor(MAX_SEARCH_REQUESTS_PER_CALL / keywordCount))
+  );
+}
+
+function resolvePoiTypesForKeyword(
+  keyword: string,
+  fallbackPoiType: string | undefined,
+  hasMultipleKeywords: boolean
+): string {
+  const keywordPoiType = lookupFoodPoiTypes(keyword);
+  if (keywordPoiType) {
+    return keywordPoiType;
+  }
+
+  if (!hasMultipleKeywords && fallbackPoiType) {
+    return fallbackPoiType;
+  }
+
+  return DEFAULT_POI_TYPE;
+}
+
+function lookupFoodPoiTypes(keyword: string): string | undefined {
+  const normalizedKeyword = keyword.toLowerCase();
+  const matcher = FOOD_POI_TYPE_MATCHERS.find(({ terms }) =>
+    terms.some((term) => normalizedKeyword.includes(term.toLowerCase()))
+  );
+
+  return matcher ? matcher.poiTypes.join('|') : undefined;
+}
+
+function dedupeAmapPois(pois: AmapPoi[]): AmapPoi[] {
+  const poiMap = new Map<string, AmapPoi>();
+
+  for (const poi of pois) {
+    const key = poi.id || `${poi.name}_${poi.location}`;
+    const existing = poiMap.get(key);
+
+    if (!existing || amapPoiCompletenessScore(poi) > amapPoiCompletenessScore(existing)) {
+      poiMap.set(key, poi);
+    }
+  }
+
+  return Array.from(poiMap.values()).sort((left, right) =>
+    parsePoiDistance(left) - parsePoiDistance(right)
+  );
+}
+
+function amapPoiCompletenessScore(poi: AmapPoi): number {
+  let score = 0;
+
+  if (poi.tel) score += 1;
+  if (poi.biz_ext?.rating || poi.rating) score += 1;
+  if (poi.biz_ext?.cost || poi.cost) score += 1;
+  if (pickOpeningHours(poi)) score += 1;
+  if (poi.photos?.length) score += 1;
+
+  return score;
+}
+
+function parsePoiDistance(poi: AmapPoi): number {
+  const parsed = Number.parseInt(poi.distance ?? '', 10);
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
 async function fetchAmapPoiPage(
