@@ -133,7 +133,7 @@ export function parseUserGoal(
   const dedupedBroadenedKeywords = dedupeKeywords(broadenedKeywords);
   const acceptableCategories = dedupeGoalCategories(agentGoal.acceptableCategories ?? []);
   const alternativeGroups = dedupeAlternativeGroups(agentGoal.alternativeGroups ?? []);
-  const allowBroaden = agentGoal.allowBroaden ?? isOpenEndedQuery(query);
+  const allowBroaden = agentGoal.allowBroaden ?? (isOpenEndedQuery(query) || isBroadenPermission(query));
   const clarificationNeeded = agentGoal.clarificationNeeded?.length
     ? agentGoal.clarificationNeeded
     : buildFallbackClarificationNeeds(query, hasAgentIntentSignal);
@@ -394,6 +394,10 @@ function buildFallbackClarificationNeeds(
 
 function isOpenEndedQuery(query: string): boolean {
   return /随便|都行|推荐|附近有什么|吃点|吃什么|不知道吃啥|你决定/.test(query);
+}
+
+function isBroadenPermission(query: string): boolean {
+  return /可以放宽|放宽|扩大范围|扩大|远一点也行|稍远也行|候补也行|查看候补|看看候补/.test(query);
 }
 
 function canSafelyExpandRadius(goal: UserGoal): boolean {

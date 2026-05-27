@@ -57,7 +57,7 @@ export function verifyCandidate(
   const hardFailures: VerificationFailure[] = [];
   const warnings: string[] = [];
   const itemMatches = matchRequestedItems(restaurant, goal.requestedItems, plan);
-  const categoryMatches = matchCategories(restaurant, goal.acceptableCategories);
+  const categoryMatches = matchCategories(restaurant, goal.acceptableCategories, plan);
   const unverifiedStrictConstraints: string[] = [];
 
   for (const constraint of goal.hardConstraints) {
@@ -272,13 +272,20 @@ function itemTerms(item: RequestedItem): string[] {
   return Array.from(new Set([item.name, ...item.aliases].map((term) => term.trim()).filter(Boolean)));
 }
 
-function matchCategories(restaurant: Restaurant, categories: GoalCategory[]): string[] {
+function matchCategories(restaurant: Restaurant, categories: GoalCategory[], plan: SearchPlan): string[] {
   const text = restaurantText(restaurant);
   const matches: string[] = [];
 
   for (const category of categories) {
     const aliases = getCategoryAliases(category.name);
     if (aliases.some((alias) => textContains(text, alias))) {
+      matches.push(category.name);
+      continue;
+    }
+
+    if (plan.keywords.some((keyword) =>
+      aliases.some((alias) => textContains(keyword, alias) || textContains(alias, keyword))
+    )) {
       matches.push(category.name);
     }
   }

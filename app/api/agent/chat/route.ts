@@ -154,6 +154,34 @@ export async function POST(request: Request) {
           }
         );
 
+        if (result.restaurants.length === 0 && result.candidates.length > 0) {
+          const question = {
+            reason: '候选餐厅通过了硬约束，但没有完全满足原始目标。',
+            question: '没有找到完全匹配的餐厅，要先看看候补吗？',
+            options: ['查看候补', '继续调整需求'],
+            allowFreeText: true,
+          };
+
+          session.pendingQuestion = {
+            reason: question.reason,
+            question: question.question,
+            options: question.options,
+            allowFreeText: question.allowFreeText,
+          };
+          appendAssistantMessage(session, question.question);
+          saveAgentSession(session);
+          sendEvent(controller, {
+            type: 'question',
+            sessionId: session.id,
+            question: question.question,
+            options: question.options,
+            allowFreeText: question.allowFreeText,
+          });
+          sendEvent(controller, { type: 'session_paused', sessionId: session.id });
+          controller.close();
+          return;
+        }
+
         session.attempts = [];
         session.candidates = [];
         appendAssistantMessage(session, result.explanation);

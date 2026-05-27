@@ -147,6 +147,23 @@ describe('runSearchAgent', () => {
     expect(result.restaurants[0].name).toBe('寿司店');
   });
 
+  it('does not drop category results just because provider category text is generic', async () => {
+    const result = await runSearchAgent(
+      { query: '想吃日料', location },
+      () => undefined,
+      async () => [
+        restaurant('r1', '附近好店', '餐饮服务', 350),
+      ],
+      goalParser({
+        acceptableCategories: [{ name: '日料', confidence: 0.9 }],
+        primaryKeywords: ['日料'],
+        allowBroaden: false,
+      })
+    );
+
+    expect(result.restaurants.map((item) => item.name)).toEqual(['附近好店']);
+  });
+
   it('filters restaurants explicitly marked closed when user asks for open places', async () => {
     const result = await runSearchAgent(
       { query: '附近营业中的餐厅', location },
