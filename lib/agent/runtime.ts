@@ -273,6 +273,10 @@ function mergeRuntimeGoal(previousGoal: UserGoal | undefined, nextGoal: UserGoal
     return nextGoal;
   }
 
+  const previousHasSearchTarget = previousGoal.primaryKeywords.length > 0
+    || previousGoal.requestedItems.length > 0
+    || previousGoal.acceptableCategories.length > 0;
+
   return {
     ...nextGoal,
     requestedItems: mergeByName(previousGoal.requestedItems, nextGoal.requestedItems),
@@ -285,7 +289,9 @@ function mergeRuntimeGoal(previousGoal: UserGoal | undefined, nextGoal: UserGoal
     softPreferences: mergeByName(previousGoal.softPreferences, nextGoal.softPreferences),
     exclusions: mergeStrings(previousGoal.exclusions, nextGoal.exclusions),
     ambiguity: mergeStrings(previousGoal.ambiguity, nextGoal.ambiguity),
-    clarificationNeeded: nextGoal.clarificationNeeded,
+    clarificationNeeded: previousHasSearchTarget
+      ? []
+      : nextGoal.clarificationNeeded,
     allowBroaden: previousGoal.allowBroaden || nextGoal.allowBroaden,
   };
 }

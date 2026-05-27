@@ -38,8 +38,14 @@ export function applyClarifyingAnswer(session: AgentSession, answer: string): vo
 
   const effect = session.pendingQuestion?.optionEffects?.[normalized]
     ?? inferClarificationEffect(normalized);
-  if (effect && session.goal) {
-    applyClarificationEffect(session, effect);
+  if (session.goal) {
+    if (effect) {
+      applyClarificationEffect(session, effect);
+    } else if (hasEnoughIntentSignal(normalized)) {
+      mergeAnswerGoal(session, parseUserGoal(normalized));
+    }
+
+    session.goal.clarificationNeeded = [];
   }
 
   session.pendingQuestion = undefined;
@@ -100,6 +106,71 @@ function applyClarificationEffect(session: AgentSession, effect: ClarificationEf
   if (effect.setDistanceMaxMeters !== undefined) {
     goal.hardConstraints = replaceDistanceConstraint(goal.hardConstraints, effect.setDistanceMaxMeters);
   }
+}
+
+function mergeAnswerGoal(session: AgentSession, answerGoal: NonNullable<AgentSession['goal']>): void {
+  const goal = session.goal;
+  if (!goal) {
+    return;
+  }
+
+  for (const item of answerGoal.requestedItems) {
+    if (!goal.requestedItems.some((requested) => requested.name === item.name)) {
+      goal.requestedItems.push(item);
+    }
+  }
+
+  for (const category of answerGoal.acceptableCategories) {
+    const existing = goal.acceptableCategories.find((item) => item.name === category.name);
+    if (existing) {
+      existing.confidence = Math.max(existing.confidence, category.confidence);
+    } else {
+      goal.acceptableCategories.push(category);
+    }
+  }
+
+  goal.primaryKeywords = mergeStrings(goal.primaryKeywords, answerGoal.primaryKeywords);
+  goal.relatedKeywords = mergeStrings(goal.relatedKeywords, answerGoal.relatedKeywords);
+  goal.broadenedKeywords = mergeStrings(goal.broadenedKeywords, answerGoal.broadenedKeywords);
+  goal.hardConstraints = mergeConstraints(goal.hardConstraints, answerGoal.hardConstraints);
+  goal.softPreferences = mergePreferences(goal.softPreferences, answerGoal.softPreferences);
+  goal.exclusions = mergeStrings(goal.exclusions, answerGoal.exclusions);
+  goal.ambiguity = mergeStrings(goal.ambiguity, answerGoal.ambiguity);
+  goal.poiType ??= answerGoal.poiType;
+  goal.allowBroaden = goal.allowBroaden || answerGoal.allowBroaden;
+}
+
+function mergeConstraints(left: Constraint[], right: Constraint[]): Constraint[] {
+  const seen = new Set<string>();
+  const constraints: Constraint[] = [];
+
+  for (const constraint of [...left, ...right]) {
+    const key = `${constraint.kind}:${constraint.label}:${JSON.stringify(constraint.value ?? constraint.values ?? '')}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      constraints.push(constraint);
+    }
+  }
+
+  return constraints;
+}
+
+function mergePreferences(
+  left: NonNullable<AgentSession['goal']>['softPreferences'],
+  right: NonNullable<AgentSession['goal']>['softPreferences']
+): NonNullable<AgentSession['goal']>['softPreferences'] {
+  const byName = new Map<string, NonNullable<AgentSession['goal']>['softPreferences'][number]>();
+
+  for (const preference of [...left, ...right]) {
+    const existing = byName.get(preference.name);
+    byName.set(preference.name, {
+      ...preference,
+      weight: existing ? Math.max(existing.weight, preference.weight) : preference.weight,
+      verifiable: existing ? existing.verifiable || preference.verifiable : preference.verifiable,
+    });
+  }
+
+  return Array.from(byName.values());
 }
 
 function replaceDistanceConstraint(constraints: Constraint[], maxMeters: number): Constraint[] {

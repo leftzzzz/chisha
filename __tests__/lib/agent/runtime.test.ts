@@ -432,6 +432,47 @@ describe('runSearchAgent', () => {
     expect(second.runtimeState?.attempts.length).toBeGreaterThan(1);
   });
 
+  it('does not ask the initial clarification again after a resumed answer adds a search target', async () => {
+    const previousGoal = parseUserGoal('随便吃点');
+    previousGoal.primaryKeywords = ['中餐', '餐厅'];
+    previousGoal.acceptableCategories = [{ name: '中餐', confidence: 0.8 }];
+    previousGoal.clarificationNeeded = [];
+
+    const searchPlaces = jest.fn(async () => [
+      restaurant('r1', '家常菜馆', '中餐', 300),
+    ]);
+
+    const result = await runSearchAgent(
+      {
+        query: '随便吃点，正餐',
+        location,
+        runtimeState: {
+          goal: previousGoal,
+          attempts: [],
+          candidates: [],
+        },
+      },
+      () => undefined,
+      searchPlaces,
+      goalParser({
+        clarificationNeeded: [{
+          reason: '用户需求较开放，缺少可验证目标。',
+          question: '想吃正餐、小吃，还是喝点东西？',
+          options: [
+            { label: '正餐', value: '正餐' },
+            { label: '小吃', value: '小吃' },
+          ],
+          allowFreeText: true,
+        }],
+        allowBroaden: true,
+      })
+    );
+
+    expect(searchPlaces).toHaveBeenCalled();
+    expect(result.paused).not.toBe(true);
+    expect(result.restaurants.map((item) => item.name)).toEqual(['家常菜馆']);
+  });
+
   it('keeps alternative intents from the Agent goal', async () => {
     const result = await runSearchAgent(
       { query: '日料或韩餐', location },
