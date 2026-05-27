@@ -133,6 +133,23 @@ describe('AppReducer', () => {
       expect(newState.customOptions).toEqual([]);
       expect(newState.selectedIndex).toBe(-1);
     });
+
+    it('should keep Agent explanation and unmet constraints', () => {
+      const action = {
+        type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
+        payload: {
+          turntable: [mockRestaurant],
+          candidates: [],
+          explanation: '已按你的需求排序。',
+          unmetConstraints: ['预算无法完全验证。'],
+        },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.agentExplanation).toBe('已按你的需求排序。');
+      expect(newState.agentUnmetConstraints).toEqual(['预算无法完全验证。']);
+    });
   });
 
   describe('SET_SELECTED_INDEX', () => {

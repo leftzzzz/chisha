@@ -94,7 +94,7 @@ const SYSTEM_PROMPT = `你是餐厅搜索 Agent 的恢复决策器。你根据�
 
 export const decideNextAgentAction: AgentDecisionMaker = async (context, observation) => {
   if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
-    return { type: 'finish' };
+    return deterministicDecision(context);
   }
 
   try {
@@ -103,9 +103,84 @@ export const decideNextAgentAction: AgentDecisionMaker = async (context, observa
     logger.warn('Agent decision model unavailable, finishing with verified candidates', {
       error: error instanceof Error ? error.message : String(error),
     });
-    return { type: 'finish' };
+    return deterministicDecision(context);
   }
 };
+
+function deterministicDecision(context: AgentContext): AgentDecision {
+  const relatedKeywords = context.goal.relatedKeywords.filter((keyword) =>
+    !hasTriedKeyword(context, keyword)
+  );
+  if (relatedKeywords.length > 0) {
+    return {
+      type: 'search',
+      plan: {
+        keywords: relatedKeywords.slice(0, 5),
+        radiusMeters: nextRadius(context),
+        poiType: context.goal.poiType,
+        searchIntent: 'synonym',
+        allowedForPrimary: true,
+        reason: '原始搜索不足，继续尝试同义词和近似表达。',
+      },
+    };
+  }
+
+  const broadenedKeywords = context.goal.broadenedKeywords.filter((keyword) =>
+    !hasTriedKeyword(context, keyword)
+  );
+  if (broadenedKeywords.length > 0) {
+    return {
+      type: 'search',
+      plan: {
+        keywords: broadenedKeywords.slice(0, 5),
+        radiusMeters: nextRadius(context),
+        searchIntent: 'broadened',
+        allowedForPrimary: context.goal.allowBroaden,
+        reason: context.goal.allowBroaden
+          ? '用户允许放宽，扩展到相邻品类。'
+          : '原始目标不足，先搜索相邻品类作为候补。',
+      },
+    };
+  }
+
+  if (context.goal.allowBroaden && !hasTriedIntent(context, 'fallback')) {
+    return {
+      type: 'search',
+      plan: {
+        keywords: ['餐厅', '美食'],
+        radiusMeters: nextRadius(context),
+        searchIntent: 'fallback',
+        allowedForPrimary: true,
+        reason: '开放需求下使用通用餐饮兜底搜索。',
+      },
+    };
+  }
+
+  return { type: 'finish' };
+}
+
+function hasTriedKeyword(context: AgentContext, keyword: string): boolean {
+  return context.attempts.some((attempt) =>
+    attempt.keywords.some((attemptKeyword) => attemptKeyword === keyword)
+  );
+}
+
+function hasTriedIntent(context: AgentContext, intent: string): boolean {
+  return context.attempts.some((attempt) => attempt.searchIntent === intent);
+}
+
+function nextRadius(context: AgentContext): number {
+  const latestRadius = context.attempts.at(-1)?.radius ?? 1800;
+  const strictDistance = context.goal.hardConstraints.find((constraint) =>
+    constraint.kind === 'distance' && constraint.strict
+  );
+
+  if (strictDistance?.maxMeters) {
+    return strictDistance.maxMeters;
+  }
+
+  return Math.min(5000, Math.max(latestRadius, Math.round(latestRadius * 1.5)));
+}
 
 async function callDecisionModel(
   context: AgentContext,

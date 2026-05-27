@@ -144,8 +144,10 @@ export const HomePage: React.FC = () => {
     await search(state.userQuery, state.userLocation, (errorCode) => {
       // 获取错误信息并显示弹窗
       const isRetryable = errorCode === 'SEARCH_NO_RESULTS' ||
+                         errorCode === 'NO_RESULTS' ||
                          errorCode === 'NETWORK_ERROR' ||
                          errorCode === 'SEARCH_TIMEOUT' ||
+                         errorCode === 'AGENT_ERROR' ||
                          errorCode === 'SERVICE_BUSY' ||
                          errorCode === 'INSUFFICIENT_RESULTS' ||
                          errorCode === 'API_CALL_FAILED' ||
@@ -417,6 +419,20 @@ export const HomePage: React.FC = () => {
             onShare={() => handleShare()}
           />
         </div>
+        {(state.agentExplanation || state.agentUnmetConstraints.length > 0) && (
+          <div className="mt-4 mx-2 sm:mx-0 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-sm text-gray-600">
+            {state.agentExplanation && (
+              <p>{state.agentExplanation}</p>
+            )}
+            {state.agentUnmetConstraints.length > 0 && (
+              <div className="mt-2 space-y-1 text-xs text-gray-500">
+                {state.agentUnmetConstraints.slice(0, 3).map((item) => (
+                  <p key={item}>{item}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

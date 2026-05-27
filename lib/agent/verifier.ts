@@ -43,6 +43,10 @@ const CATEGORY_ALIASES: Record<string, string[]> = {
   甜品: ['甜品', '蛋糕', '烘焙', '面包甜点'],
   奶茶: ['奶茶', '饮品'],
   咖啡: ['咖啡', '咖啡厅'],
+  饮品: ['饮品', '奶茶', '咖啡', '果茶'],
+  中餐: ['中餐', '家常菜', '炒菜', '餐厅', '饭店'],
+  正餐: ['正餐', '中餐', '餐厅', '饭店'],
+  简餐: ['简餐', '快餐', '面馆', '小吃'],
   餐厅: ['餐厅', '美食', '酒楼', '饭店', '食堂'],
   美食: ['餐厅', '美食', '酒楼', '饭店', '食堂', '小吃', '简餐'],
 };
@@ -283,7 +287,7 @@ function matchCategories(restaurant: Restaurant, categories: GoalCategory[], pla
       continue;
     }
 
-    if (plan.keywords.some((keyword) =>
+    if (category.confidence < 0.7 && plan.searchIntent !== 'exact' && plan.keywords.some((keyword) =>
       aliases.some((alias) => textContains(keyword, alias) || textContains(alias, keyword))
     )) {
       matches.push(category.name);

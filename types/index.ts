@@ -128,6 +128,8 @@ export interface AppState {
   parsedRequirement: ParsedRequirement | null; // 解析后的需求
   restaurants: Restaurant[]; // 转盘上的餐厅
   candidateRestaurants: Restaurant[]; // 候补池餐厅
+  agentExplanation?: string; // Agent 整体推荐说明
+  agentUnmetConstraints: string[]; // 未完全满足或无法验证的约束
   removedRestaurants: Restaurant[]; // 已移除的餐厅（可恢复）
   customOptions: CustomOption[]; // 转盘上的自定义选项
   selectedIndex: number; // 选中的餐厅索引 (-1 表示未选中)
@@ -141,7 +143,15 @@ export type AppAction =
   | { type: 'SET_STEP'; payload: AppStep }
   | { type: 'SET_PARSED_REQUIREMENT'; payload: ParsedRequirement }
   | { type: 'SET_RESTAURANTS'; payload: Restaurant[] }
-  | { type: 'SET_RESTAURANTS_WITH_CANDIDATES'; payload: { turntable: Restaurant[]; candidates: Restaurant[] } }
+  | {
+      type: 'SET_RESTAURANTS_WITH_CANDIDATES';
+      payload: {
+        turntable: Restaurant[];
+        candidates: Restaurant[];
+        explanation?: string;
+        unmetConstraints?: string[];
+      };
+    }
   | { type: 'SET_SELECTED_INDEX'; payload: number }
   | { type: 'SET_ERROR'; payload: string | null }
   | { type: 'DELETE_RESTAURANT'; payload: number }

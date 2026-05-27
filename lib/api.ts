@@ -454,6 +454,7 @@ export async function agentSearch(
     let buffer = '';
     let result: AgentSearchResult = { restaurants: [], candidates: [] };
     let hasReceivedDone = false;
+    let pausedQuestion: AgentQuestion | undefined;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -489,6 +490,21 @@ export async function agentSearch(
                 break;
               case 'strategy_change':
                 callbacks?.onStrategyChange?.(event.reason, event.next);
+                break;
+              case 'question':
+                pausedQuestion = {
+                  sessionId: event.sessionId,
+                  question: event.question,
+                  options: event.options,
+                  allowFreeText: event.allowFreeText,
+                };
+                callbacks?.onQuestion?.(pausedQuestion);
+                break;
+              case 'session_paused':
+                callbacks?.onSessionPaused?.(event.sessionId);
+                break;
+              case 'session_resumed':
+                callbacks?.onSessionResumed?.(event.sessionId);
                 break;
               case 'tool_start':
               case 'tool_result':
@@ -541,7 +557,16 @@ export async function agentSearch(
       }
     }
 
-    if (result.restaurants.length === 0) {
+    if (pausedQuestion) {
+      return {
+        restaurants: [],
+        candidates: [],
+        paused: true,
+        question: pausedQuestion,
+      };
+    }
+
+    if (result.restaurants.length === 0 && !pausedQuestion) {
       throw new APIError(
         '未找到符合条件的餐厅，试试调整搜索条件?',
         'NO_RESULTS'
@@ -557,12 +582,12 @@ export async function agentSearch(
     }
 
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new APIError('搜索超时，请重试', 'TIMEOUT');
+      throw new APIError('搜索超时，请重试', 'SEARCH_TIMEOUT');
     }
 
     throw new APIError(
       error instanceof Error ? error.message : 'Agent 搜索失败',
-      'AGENT_ERROR'
+      'API_CALL_FAILED'
     );
   }
 }
@@ -738,7 +763,7 @@ async function requestAgentStream(
       };
     }
 
-    if (result.restaurants.length === 0) {
+    if (result.restaurants.length === 0 && !pausedQuestion) {
       throw new APIError(
         '未找到符合条件的餐厅，试试调整搜索条件?',
         'NO_RESULTS'
@@ -754,12 +779,12 @@ async function requestAgentStream(
     }
 
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new APIError('搜索超时，请重试', 'TIMEOUT');
+      throw new APIError('搜索超时，请重试', 'SEARCH_TIMEOUT');
     }
 
     throw new APIError(
       error instanceof Error ? error.message : 'Agent 请求失败',
-      'AGENT_ERROR'
+      'API_CALL_FAILED'
     );
   }
 }

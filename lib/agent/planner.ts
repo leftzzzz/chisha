@@ -42,17 +42,90 @@ const EXCLUDABLE_CATEGORIES = [
 
 const DEFAULT_RADIUS = 1800;
 
+const CATEGORY_DEFINITIONS: Array<{
+  name: string;
+  aliases: string[];
+  poiType?: string;
+  related?: string[];
+  broadened?: string[];
+}> = [
+  { name: '川菜', aliases: ['川菜', '麻辣', '川味'], poiType: '050102', related: ['麻辣'], broadened: ['中餐'] },
+  { name: '粤菜', aliases: ['粤菜', '广东菜', '茶餐厅', '烧腊', '点心'], poiType: '050103', related: ['广东菜', '茶餐厅'], broadened: ['中餐'] },
+  { name: '湘菜', aliases: ['湘菜', '湖南菜'], poiType: '050109', related: ['湖南菜'], broadened: ['中餐'] },
+  { name: '鲁菜', aliases: ['鲁菜', '山东菜'], poiType: '050104', broadened: ['中餐'] },
+  { name: '苏菜', aliases: ['苏菜', '江苏菜'], poiType: '050105', broadened: ['中餐'] },
+  { name: '浙菜', aliases: ['浙菜', '杭帮菜', '浙江菜'], poiType: '050106', related: ['杭帮菜'], broadened: ['中餐'] },
+  { name: '闽菜', aliases: ['闽菜', '福建菜'], poiType: '050108', broadened: ['中餐'] },
+  { name: '徽菜', aliases: ['徽菜', '安徽菜'], poiType: '050107', broadened: ['中餐'] },
+  { name: '火锅', aliases: ['火锅', '涮锅', '牛肉火锅', '潮汕牛肉火锅'], poiType: '050117', related: ['牛肉火锅', '串串'], broadened: ['中餐'] },
+  { name: '烧烤', aliases: ['烧烤', '烤串', '烤肉', 'BBQ', 'bbq'], poiType: '050700', related: ['烤肉'], broadened: ['小吃'] },
+  { name: '日料', aliases: ['日料', '日本料理', '日本菜', '寿司', '拉面'], poiType: '050201', related: ['日本料理', '寿司', '拉面'], broadened: ['亚洲料理'] },
+  { name: '韩餐', aliases: ['韩餐', '韩国料理', '韩式', '石锅拌饭', '韩式烤肉'], poiType: '050202', related: ['韩国料理', '韩式烤肉'], broadened: ['亚洲料理'] },
+  { name: '西餐', aliases: ['西餐', '牛排', '意面', '披萨', '意大利菜'], poiType: '050203', related: ['牛排', '意面', '披萨'], broadened: ['餐厅'] },
+  { name: '快餐', aliases: ['快餐', '汉堡', '炸鸡', '薯条', '鸡排'], poiType: '050300', related: ['汉堡', '炸鸡'], broadened: ['简餐'] },
+  { name: '小吃', aliases: ['小吃', '麻辣烫', '冒菜', '串串', '米线'], poiType: '050310', related: ['简餐'], broadened: ['餐厅'] },
+  { name: '咖啡', aliases: ['咖啡', '咖啡店', '咖啡厅'], poiType: '050401', related: ['咖啡厅'], broadened: ['饮品'] },
+  { name: '奶茶', aliases: ['奶茶', '饮品', '果茶', '柠檬茶'], poiType: '050307', related: ['饮品'], broadened: ['甜品'] },
+  { name: '甜品', aliases: ['甜品', '蛋糕', '面包', '烘焙'], poiType: '050600', related: ['蛋糕', '烘焙'], broadened: ['饮品'] },
+  { name: '海鲜', aliases: ['海鲜', '海鲜餐厅'], poiType: '050118', broadened: ['中餐'] },
+  { name: '素食', aliases: ['素食', '素菜'], poiType: '050119', related: ['轻食'], broadened: ['中餐'] },
+  { name: '清真', aliases: ['清真', '兰州拉面'], poiType: '050116', broadened: ['中餐'] },
+];
+
+const ITEM_DEFINITIONS: Array<{
+  name: string;
+  aliases?: string[];
+  category?: string;
+  broadened?: string[];
+}> = [
+  { name: '炸鸡', aliases: ['鸡排', '炸物', '炸鸡汉堡'], category: '快餐', broadened: ['小吃'] },
+  { name: '薯条', aliases: ['汉堡', '麦当劳', '肯德基'], category: '快餐', broadened: ['小吃'] },
+  { name: '汉堡', aliases: ['汉堡包'], category: '快餐', broadened: ['西餐'] },
+  { name: '披萨', aliases: ['比萨'], category: '西餐', broadened: ['快餐'] },
+  { name: '寿司', aliases: ['刺身'], category: '日料', broadened: ['日料'] },
+  { name: '拉面', aliases: ['日式拉面'], category: '日料', broadened: ['日料', '面馆'] },
+  { name: '牛肉面', aliases: ['兰州拉面'], category: '面馆', broadened: ['快餐'] },
+  { name: '酸菜鱼', aliases: ['烤鱼'], category: '川菜', broadened: ['中餐'] },
+  { name: '麻辣烫', aliases: ['冒菜', '串串'], category: '小吃', broadened: ['快餐'] },
+  { name: '小龙虾', aliases: ['龙虾'], category: '海鲜', broadened: ['烧烤'] },
+  { name: '烤鸭', aliases: ['北京烤鸭'], category: '中餐', broadened: ['餐厅'] },
+  { name: '蛋糕', aliases: ['甜点', '烘焙'], category: '甜品', broadened: ['咖啡'] },
+  { name: '沙拉', aliases: ['轻食'], category: '轻食', broadened: ['素食'] },
+  { name: '粥', aliases: ['养生粥'], category: '粥', broadened: ['中餐'] },
+];
+
+const TASTE_EXPANSIONS: Array<{ patterns: string[]; keywords: string[]; preference?: Preference }> = [
+  {
+    patterns: ['清淡', '不油腻'],
+    keywords: ['粤菜', '江浙菜', '日料', '轻食', '沙拉', '粥'],
+    preference: { name: '清淡', weight: 2, verifiable: false },
+  },
+  { patterns: ['健康', '养生', '低卡'], keywords: ['轻食', '沙拉', '素食', '养生粥'] },
+  { patterns: ['赶时间', '快一点', '快的', '简单'], keywords: ['快餐', '面馆', '简餐'] },
+  { patterns: ['喝点', '饮品', '喝的'], keywords: ['咖啡', '奶茶', '饮品'] },
+  { patterns: ['甜', '甜点'], keywords: ['甜品', '蛋糕', '烘焙'] },
+  { patterns: ['家常'], keywords: ['中餐', '家常菜', '炒菜'] },
+  { patterns: ['辣', '重口味', '刺激'], keywords: ['川菜', '湘菜', '火锅', '烧烤'] },
+];
+
 export function parseUserGoal(
   query: string,
   preferenceSummary?: UserPreferenceSummary,
   agentGoal: AgentGoalDraft = {}
 ): UserGoal {
+  const fallbackGoal = buildFallbackAgentGoal(query);
   const hardConstraints: Constraint[] = [];
-  const softPreferences: Preference[] = [...(agentGoal.softPreferences ?? [])];
+  const softPreferences: Preference[] = [
+    ...(agentGoal.softPreferences ?? []),
+    ...(agentGoal.softPreferences?.length ? [] : fallbackGoal.softPreferences ?? []),
+  ];
   const exclusions = parseExclusions(query);
-  const ambiguity: string[] = [...(agentGoal.ambiguity ?? [])];
+  const ambiguity: string[] = [...(agentGoal.ambiguity ?? []), ...(fallbackGoal.ambiguity ?? [])];
   const avoidSpicy = isAvoidingSpicy(query);
-  const requestedItems = dedupeRequestedItems(agentGoal.requestedItems ?? []);
+  const requestedItems = dedupeRequestedItems([
+    ...(agentGoal.requestedItems ?? []),
+    ...(fallbackGoal.requestedItems ?? []),
+  ]);
   const distanceConstraint = parseDistanceConstraint(query, preferenceSummary);
   const budgetConstraint = parseBudgetConstraint(query, preferenceSummary);
   const openNowConstraint = parseOpenNowConstraint(query);
@@ -94,12 +167,21 @@ export function parseUserGoal(
     });
   }
 
-  let primaryKeywords = dedupeKeywords(agentGoal.primaryKeywords ?? []);
-  const relatedKeywords = dedupeKeywords(agentGoal.relatedKeywords ?? []);
-  const broadenedKeywords = dedupeKeywords(agentGoal.broadenedKeywords ?? []);
+  let primaryKeywords = dedupeKeywords(
+    agentGoal.primaryKeywords?.length ? agentGoal.primaryKeywords : fallbackGoal.primaryKeywords ?? []
+  );
+  const relatedKeywords = dedupeKeywords([
+    ...(agentGoal.relatedKeywords ?? []),
+    ...(fallbackGoal.relatedKeywords ?? []),
+  ]);
+  const broadenedKeywords = dedupeKeywords([
+    ...(agentGoal.broadenedKeywords ?? []),
+    ...(fallbackGoal.broadenedKeywords ?? []),
+  ]);
   const hasAgentIntentSignal = primaryKeywords.length > 0
     || requestedItems.length > 0
-    || Boolean(agentGoal.acceptableCategories?.length);
+    || Boolean(agentGoal.acceptableCategories?.length)
+    || Boolean(fallbackGoal.acceptableCategories?.length);
 
   if (primaryKeywords.length === 0 && requestedItems.length > 0) {
     primaryKeywords = requestedItems.map((item) => item.name);
@@ -129,7 +211,10 @@ export function parseUserGoal(
   const dedupedPrimaryKeywords = dedupeKeywords(primaryKeywords);
   const dedupedRelatedKeywords = dedupeKeywords(relatedKeywords);
   const dedupedBroadenedKeywords = dedupeKeywords(broadenedKeywords);
-  const acceptableCategories = dedupeGoalCategories(agentGoal.acceptableCategories ?? []);
+  const acceptableCategories = dedupeGoalCategories([
+    ...(agentGoal.acceptableCategories ?? []),
+    ...(fallbackGoal.acceptableCategories ?? []),
+  ]);
   const alternativeGroups = dedupeAlternativeGroups(agentGoal.alternativeGroups ?? []);
   const allowBroaden = agentGoal.allowBroaden ?? (isOpenEndedQuery(query) || isBroadenPermission(query));
   const clarificationNeeded = agentGoal.clarificationNeeded?.length
@@ -139,7 +224,7 @@ export function parseUserGoal(
   return {
     intent: 'find_restaurants',
     rawQuery: query,
-    poiType: agentGoal.poiType,
+    poiType: agentGoal.poiType ?? fallbackGoal.poiType,
     requestedItems,
     acceptableCategories,
     alternativeGroups,
@@ -152,6 +237,84 @@ export function parseUserGoal(
     ambiguity: dedupeStrings(ambiguity),
     clarificationNeeded,
     allowBroaden,
+  };
+}
+
+function buildFallbackAgentGoal(query: string): AgentGoalDraft {
+  const normalizedQuery = query.trim().toLowerCase();
+  const primaryKeywords: string[] = [];
+  const relatedKeywords: string[] = [];
+  const broadenedKeywords: string[] = [];
+  const requestedItems: RequestedItem[] = [];
+  const acceptableCategories: GoalCategory[] = [];
+  const softPreferences: Preference[] = [];
+  let poiType: string | undefined;
+
+  if (!normalizedQuery || isOpenEndedQuery(query)) {
+    return {};
+  }
+
+  for (const item of ITEM_DEFINITIONS) {
+    const terms = [item.name, ...(item.aliases ?? [])];
+    if (!terms.some((term) => normalizedQuery.includes(term.toLowerCase()))) {
+      continue;
+    }
+
+    primaryKeywords.push(item.name);
+    requestedItems.push({
+      name: item.name,
+      required: true,
+      aliases: dedupeKeywords(item.aliases ?? []),
+    });
+
+    if (item.category) {
+      acceptableCategories.push({ name: item.category, confidence: 0.75 });
+      broadenedKeywords.push(item.category);
+    }
+
+    broadenedKeywords.push(...(item.broadened ?? []));
+  }
+
+  for (const definition of CATEGORY_DEFINITIONS) {
+    const matchedAlias = definition.aliases.find((alias) =>
+      normalizedQuery.includes(alias.toLowerCase())
+    );
+    if (!matchedAlias) {
+      continue;
+    }
+
+    primaryKeywords.push(definition.name);
+    acceptableCategories.push({ name: definition.name, confidence: 0.9 });
+    relatedKeywords.push(...(definition.related ?? definition.aliases.filter((alias) => alias !== definition.name)));
+    broadenedKeywords.push(...(definition.broadened ?? []));
+    poiType ??= definition.poiType;
+  }
+
+  if (primaryKeywords.length === 0) {
+    for (const expansion of TASTE_EXPANSIONS) {
+      if (!expansion.patterns.some((pattern) => normalizedQuery.includes(pattern.toLowerCase()))) {
+        continue;
+      }
+
+      primaryKeywords.push(...expansion.keywords);
+      acceptableCategories.push(...expansion.keywords.map((keyword) => ({
+        name: keyword,
+        confidence: 0.65,
+      })));
+      if (expansion.preference) {
+        softPreferences.push(expansion.preference);
+      }
+    }
+  }
+
+  return {
+    requestedItems,
+    acceptableCategories,
+    primaryKeywords,
+    relatedKeywords,
+    broadenedKeywords,
+    poiType,
+    softPreferences,
   };
 }
 

@@ -42,7 +42,12 @@ export interface UseAppStateReturn {
   setStep: (step: AppStep) => void;
   setParsedRequirement: (parsed: ParsedRequirement) => void;
   setRestaurants: (restaurants: Restaurant[]) => void;
-  setRestaurantsWithCandidates: (turntable: Restaurant[], candidates: Restaurant[]) => void;
+  setRestaurantsWithCandidates: (
+    turntable: Restaurant[],
+    candidates: Restaurant[],
+    explanation?: string,
+    unmetConstraints?: string[]
+  ) => void;
   setSelectedIndex: (index: number) => void;
   setError: (error: string | null) => void;
   deleteRestaurant: (index: number) => void;
@@ -143,8 +148,16 @@ export function useAppState(): UseAppStateReturn {
    * 设置餐厅列表（带候补池）
    */
   const setRestaurantsWithCandidates = useCallback(
-    (turntable: Restaurant[], candidates: Restaurant[]) => {
-      dispatch({ type: 'SET_RESTAURANTS_WITH_CANDIDATES', payload: { turntable, candidates } });
+    (
+      turntable: Restaurant[],
+      candidates: Restaurant[],
+      explanation?: string,
+      unmetConstraints?: string[]
+    ) => {
+      dispatch({
+        type: 'SET_RESTAURANTS_WITH_CANDIDATES',
+        payload: { turntable, candidates, explanation, unmetConstraints },
+      });
     },
     [dispatch]
   );

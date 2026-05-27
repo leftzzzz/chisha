@@ -219,7 +219,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
           return;
         }
 
-        const { restaurants, candidates } = result;
+        const { restaurants, candidates, explanation, unmetConstraints } = result;
         activeQuestionRef.current = null;
 
         // 搜索完成
@@ -231,7 +231,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         });
 
         // 直接使用后端返回的选中餐厅和候补餐厅
-        setRestaurantsWithCandidates(restaurants, candidates);
+        setRestaurantsWithCandidates(restaurants, candidates, explanation, unmetConstraints);
         setStep('READY');
 
       } catch (error) {

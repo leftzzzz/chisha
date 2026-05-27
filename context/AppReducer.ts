@@ -22,6 +22,8 @@ export const initialState: AppState = {
   parsedRequirement: null,
   restaurants: [],
   candidateRestaurants: [],
+  agentExplanation: undefined,
+  agentUnmetConstraints: [],
   removedRestaurants: [],
   customOptions: [],
   selectedIndex: -1,
@@ -97,6 +99,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         restaurants: action.payload.turntable,
         candidateRestaurants: action.payload.candidates,
+        agentExplanation: action.payload.explanation,
+        agentUnmetConstraints: action.payload.unmetConstraints ?? [],
         removedRestaurants: [], // 清空已移除
         customOptions: [], // 清空自定义选项
         selectedIndex: -1,
@@ -376,6 +380,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         userLocation: location,
         restaurants: restaurants,
         candidateRestaurants: [],
+        agentExplanation: undefined,
+        agentUnmetConstraints: [],
         removedRestaurants: [],
         customOptions: customOptions || [],
         selectedIndex: -1,

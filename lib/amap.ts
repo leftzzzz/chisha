@@ -67,7 +67,8 @@ export async function amapPoiSearch(
   keywords: string[],
   location: Location,
   distance: number = 2000,
-  poiType?: string
+  poiType?: string,
+  pageCount: number = 1
 ): Promise<Restaurant[]> {
   // 检查 API Key
   if (!AMAP_API_KEY) {
@@ -84,72 +85,90 @@ export async function amapPoiSearch(
   // 使用 LLM 提供的 poiType，如果没有则使用默认的餐饮大类
   const finalPoiType = poiType || DEFAULT_POI_TYPE;
 
-  // 构建请求参数
-  const params = new URLSearchParams({
-    key: AMAP_API_KEY,
-    keywords: keyword,
-    types: finalPoiType,
-    location: `${location.lng},${location.lat}`,
-    radius: distance.toString(),
-    sortrule: 'distance', // 按距离排序
-    offset: '20', // 每页数量
-    page: '1',
-    extensions: 'all', // 返回详细信息
-  });
-
-  // 添加安全码（如果配置了）
-  if (AMAP_SECURITY_CODE) {
-    params.append('sig', AMAP_SECURITY_CODE);
-  }
-
-  const url = `${AMAP_BASE_URL}/place/around?${params.toString()}`;
-
   logger.info('Calling Amap POI search', {
     keywords,
     poiType: finalPoiType,
     poiTypeSource: poiType ? 'llm' : 'default',
     location,
     distance,
+    pageCount,
   });
 
   try {
-    const response = await fetchWithTimeout(url, {}, AMAP_TIMEOUT);
+    const allPois: AmapPoi[] = [];
+    const pages = Math.max(1, Math.min(Math.round(pageCount), 5));
 
-    if (!response.ok) {
-      throw new ApiError(
-        ErrorCode.SEARCH_API_ERROR,
-        `Amap API error: ${response.status}`
-      );
+    for (let page = 1; page <= pages; page++) {
+      const data = await fetchAmapPoiPage(keyword, finalPoiType, location, distance, page);
+      if (!data.pois || data.pois.length === 0) {
+        if (page === 1) {
+          logger.info('Amap search returned no results');
+        }
+        break;
+      }
+
+      allPois.push(...data.pois);
+
+      if (data.pois.length < 20 || allPois.length >= Number(data.count || 0)) {
+        break;
+      }
     }
 
-    const data: AmapPoiResponse = await response.json();
+    logger.info('Amap search successful', { count: allPois.length });
 
-    // 检查响应状态
-    if (data.status !== '1') {
-      logger.warn('Amap API returned error', {
-        info: data.info,
-        infocode: data.infocode,
-      });
-      throw new ApiError(
-        ErrorCode.SEARCH_API_ERROR,
-        `Amap API error: ${data.info}`
-      );
-    }
-
-    // 检查结果
-    if (!data.pois || data.pois.length === 0) {
-      logger.info('Amap search returned no results');
-      return [];
-    }
-
-    logger.info('Amap search successful', { count: data.pois.length });
-
-    // 转换为统一格式（由 dataTransform 处理）
-    return data.pois.map((poi) => transformAmapPoi(poi));
+    return allPois.map((poi) => transformAmapPoi(poi));
   } catch (error) {
     logger.error('Amap search failed', { error });
     throw error;
   }
+}
+
+async function fetchAmapPoiPage(
+  keyword: string,
+  poiType: string,
+  location: Location,
+  distance: number,
+  page: number
+): Promise<AmapPoiResponse> {
+  const params = new URLSearchParams({
+    key: AMAP_API_KEY!,
+    keywords: keyword,
+    types: poiType,
+    location: `${location.lng},${location.lat}`,
+    radius: distance.toString(),
+    sortrule: 'distance',
+    offset: '20',
+    page: page.toString(),
+    extensions: 'all',
+  });
+
+  if (AMAP_SECURITY_CODE) {
+    params.append('sig', AMAP_SECURITY_CODE);
+  }
+
+  const url = `${AMAP_BASE_URL}/place/around?${params.toString()}`;
+  const response = await fetchWithTimeout(url, {}, AMAP_TIMEOUT);
+
+  if (!response.ok) {
+    throw new ApiError(
+      ErrorCode.SEARCH_API_ERROR,
+      `Amap API error: ${response.status}`
+    );
+  }
+
+  const data: AmapPoiResponse = await response.json();
+  if (data.status !== '1') {
+    logger.warn('Amap API returned error', {
+      info: data.info,
+      infocode: data.infocode,
+    });
+    throw new ApiError(
+      ErrorCode.SEARCH_API_ERROR,
+      `Amap API error: ${data.info}`
+    );
+  }
+
+  return data;
 }
 
 /**

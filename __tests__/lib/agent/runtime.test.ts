@@ -181,7 +181,7 @@ describe('runSearchAgent', () => {
     expect(result.restaurants[0].name).toBe('寿司店');
   });
 
-  it('does not drop category results just because provider category text is generic', async () => {
+  it('does not treat generic provider category text as a verified specific cuisine', async () => {
     const result = await runSearchAgent(
       { query: '想吃日料', location },
       () => undefined,
@@ -195,7 +195,24 @@ describe('runSearchAgent', () => {
       })
     );
 
-    expect(result.restaurants.map((item) => item.name)).toEqual(['附近好店']);
+    expect(result.restaurants).toEqual([]);
+    expect(result.candidates.map((item) => item.name)).not.toContain('附近好店');
+  });
+
+  it('extracts common cuisine keywords without an LLM draft', async () => {
+    const searchedKeywords: string[][] = [];
+    const result = await runSearchAgent(
+      { query: '想吃日料', location },
+      () => undefined,
+      async (plan) => {
+        searchedKeywords.push(plan.keywords);
+        return [restaurant('r1', '寿司店', '日本料理', 300)];
+      },
+      async (input) => parseUserGoal(input.query, input.preferenceSummary)
+    );
+
+    expect(searchedKeywords[0]).toContain('日料');
+    expect(result.restaurants.map((item) => item.name)).toEqual(['寿司店']);
   });
 
   it('filters restaurants explicitly marked closed when user asks for open places', async () => {
@@ -303,6 +320,27 @@ describe('runSearchAgent', () => {
     expect(result.restaurants).toEqual([]);
   });
 
+  it('pauses instead of emitting an empty final result when no primary recommendations pass', async () => {
+    const events: AgentEvent[] = [];
+
+    const result = await runSearchAgent(
+      { query: '想吃非常具体的菜', location },
+      (event) => events.push(event),
+      async () => [],
+      goalParser({
+        requestedItems: [{ name: '非常具体的菜', required: true, aliases: [] }],
+        primaryKeywords: ['非常具体的菜'],
+        allowBroaden: false,
+      })
+    );
+
+    expect(result.paused).toBe(true);
+    expect(result.question?.question).toContain('非常具体的菜');
+    expect(result.restaurants).toEqual([]);
+    expect(events.some((event) => event.type === 'final')).toBe(false);
+    expect(events.some((event) => event.type === 'done')).toBe(false);
+  });
+
   it('pauses before searching when the Agent goal parser asks for clarification', async () => {
     const searchPlaces = jest.fn(async () => [restaurant('r1', '默认餐厅', '餐厅', 300)]);
 
@@ -327,6 +365,71 @@ describe('runSearchAgent', () => {
     expect(searchPlaces).not.toHaveBeenCalled();
     expect(result.paused).toBe(true);
     expect(result.question?.options).toEqual(['正餐', '小吃']);
+  });
+
+  it('keeps runtime state when paused so a later answer can continue from previous attempts', async () => {
+    const question = {
+      question: '要扩大范围吗？',
+      options: ['扩大范围'],
+      allowFreeText: true,
+      optionEffects: { '扩大范围': { allowBroaden: true, setDistanceMaxMeters: 5000 } },
+    };
+
+    const first = await runSearchAgent(
+      { query: '下楼就能吃的日料', location },
+      () => undefined,
+      async () => [],
+      goalParser({
+        acceptableCategories: [{ name: '日料', confidence: 0.9 }],
+        primaryKeywords: ['日料'],
+        relatedKeywords: ['日本料理'],
+        allowBroaden: false,
+      }),
+      decisionSequence([{ type: 'ask_user', question }])
+    );
+
+    expect(first.paused).toBe(true);
+    expect(first.runtimeState?.attempts).toHaveLength(1);
+
+    const second = await runSearchAgent(
+      {
+        query: '下楼就能吃的日料，扩大范围',
+        location,
+        runtimeState: first.runtimeState,
+      },
+      () => undefined,
+      async (plan) => plan.keywords.includes('日本料理')
+        ? [restaurant('r1', '寿司店', '日本料理', 1600)]
+        : [],
+      async () => ({
+        ...first.runtimeState!.goal!,
+        allowBroaden: true,
+        hardConstraints: [
+          {
+            kind: 'distance',
+            label: '5000米内',
+            value: 5000,
+            maxMeters: 5000,
+            strict: false,
+          },
+        ],
+      }),
+      decisionSequence([
+        {
+          type: 'search',
+          plan: {
+            keywords: ['日本料理'],
+            radiusMeters: 5000,
+            searchIntent: 'synonym',
+            allowedForPrimary: true,
+            reason: '继续上一轮后尝试同义词。',
+          },
+        },
+      ])
+    );
+
+    expect(second.restaurants.map((item) => item.name)).toEqual(['寿司店']);
+    expect(second.runtimeState?.attempts.length).toBeGreaterThan(1);
   });
 
   it('keeps alternative intents from the Agent goal', async () => {

@@ -19,6 +19,7 @@ import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
 import {
   appendAssistantMessage,
   appendUserMessage,
+  createAgentSessionToken,
   createAgentSession,
   getAgentSession,
   getSessionQuery,
@@ -69,19 +70,30 @@ function sendEvent(controller: ReadableStreamDefaultController, event: AgentEven
 function pauseSessionWithQuestion(
   controller: ReadableStreamDefaultController,
   session: AgentSession,
-  question: PendingQuestion
+  question: PendingQuestion,
+  resultState?: Pick<AgentSession, 'goal' | 'attempts' | 'candidates'>
 ) {
+  if (resultState?.goal) {
+    session.goal = resultState.goal;
+  }
+  if (resultState?.attempts) {
+    session.attempts = resultState.attempts;
+  }
+  if (resultState?.candidates) {
+    session.candidates = resultState.candidates;
+  }
   session.pendingQuestion = question;
   appendAssistantMessage(session, question.question);
   saveAgentSession(session);
+  const resumableSessionId = createAgentSessionToken(session);
   sendEvent(controller, {
     type: 'question',
-    sessionId: session.id,
+    sessionId: resumableSessionId,
     question: question.question,
     options: question.options,
     allowFreeText: question.allowFreeText ?? true,
   });
-  sendEvent(controller, { type: 'session_paused', sessionId: session.id });
+  sendEvent(controller, { type: 'session_paused', sessionId: resumableSessionId });
   controller.close();
 }
 
@@ -140,6 +152,11 @@ export async function POST(request: Request) {
             requestData.preferenceSummary,
             ...(requestData.groupPreferenceSummaries ?? []),
           ].filter((summary): summary is NonNullable<typeof requestData.preferenceSummary> => Boolean(summary))),
+          runtimeState: {
+            goal: session.goal,
+            attempts: session.attempts,
+            candidates: session.candidates,
+          },
         };
 
         logger.info('Agent chat search started', {
@@ -152,18 +169,23 @@ export async function POST(request: Request) {
           input,
           (event) => sendEvent(controller, event),
           async (plan: SearchPlan) => {
-            const restaurants = await amapPoiSearch(plan.keywords, input.location, plan.radiusMeters, plan.poiType);
-            return enrichRestaurantsWithAmapDetails(restaurants, 8);
+            const restaurants = await amapPoiSearch(plan.keywords, input.location, plan.radiusMeters, plan.poiType, 3);
+            return enrichRestaurantsWithAmapDetails(restaurants, 12);
           }
         );
 
+        if (result.runtimeState?.goal) {
+          session.goal = result.runtimeState.goal;
+          session.attempts = result.runtimeState.attempts;
+          session.candidates = result.runtimeState.candidates;
+        }
+
         if (result.paused && result.question) {
-          pauseSessionWithQuestion(controller, session, result.question);
+          pauseSessionWithQuestion(controller, session, result.question, result.runtimeState);
           return;
         }
 
-        session.attempts = [];
-        session.candidates = [];
+        session.pendingQuestion = undefined;
         appendAssistantMessage(session, result.explanation);
         saveAgentSession(session);
         controller.close();

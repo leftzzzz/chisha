@@ -179,6 +179,7 @@ export interface AgentInput {
   query: string;
   location: Location;
   preferenceSummary?: UserPreferenceSummary;
+  runtimeState?: AgentRuntimeState;
 }
 
 export interface AgentContext extends AgentInput {
@@ -198,6 +199,13 @@ export interface AgentFinalResult {
   unmetConstraints: string[];
   paused?: boolean;
   question?: PendingQuestion;
+  runtimeState?: AgentRuntimeState;
+}
+
+export interface AgentRuntimeState {
+  goal?: UserGoal;
+  attempts: SearchAttempt[];
+  candidates: RestaurantCandidate[];
 }
 
 export type AgentEvent =
@@ -258,6 +266,7 @@ export interface PendingQuestion {
   question: string;
   options?: string[];
   allowFreeText?: boolean;
+  optionEffects?: Record<string, ClarificationEffect>;
 }
 
 export interface AgentSession {

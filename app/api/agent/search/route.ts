@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import type { AgentEvent, AgentInput, SearchPlan } from '@/lib/agent/types';
+import type { AgentEvent, AgentInput, PendingQuestion, SearchPlan } from '@/lib/agent/types';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
 import { runSearchAgent } from '@/lib/agent/runtime';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
@@ -66,6 +66,21 @@ function sendEvent(controller: ReadableStreamDefaultController, event: AgentEven
   controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
 }
 
+function sendQuestionEvent(
+  controller: ReadableStreamDefaultController,
+  question: PendingQuestion
+) {
+  const sessionId = `agent_search_${Date.now().toString(36)}`;
+  sendEvent(controller, {
+    type: 'question',
+    sessionId,
+    question: question.question,
+    options: question.options,
+    allowFreeText: question.allowFreeText ?? true,
+  });
+  sendEvent(controller, { type: 'session_paused', sessionId });
+}
+
 export async function POST(request: Request) {
   const ip = getClientIP(request);
   const rateLimitResult = rateLimit(ip, 3, 60 * 1000);
@@ -110,14 +125,18 @@ export async function POST(request: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        await runSearchAgent(
+        const result = await runSearchAgent(
           input,
           (event) => sendEvent(controller, event),
           async (plan: SearchPlan) => {
-            const restaurants = await amapPoiSearch(plan.keywords, input.location, plan.radiusMeters, plan.poiType);
-            return enrichRestaurantsWithAmapDetails(restaurants, 8);
+            const restaurants = await amapPoiSearch(plan.keywords, input.location, plan.radiusMeters, plan.poiType, 3);
+            return enrichRestaurantsWithAmapDetails(restaurants, 12);
           }
         );
+
+        if (result.paused && result.question) {
+          sendQuestionEvent(controller, result.question);
+        }
 
         controller.close();
       } catch (error) {
