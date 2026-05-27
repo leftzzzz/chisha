@@ -1,24 +1,28 @@
 import type { Restaurant } from '@/types';
 import { evaluateSearchResult, isGoodEnough, mergeCandidates } from './evaluator';
 import { finalizeRecommendations } from './resultAssembler';
-import { initialPlan, nextPlan, parseUserGoal } from './planner';
+import { parseAgentGoal, type AgentGoalParser } from './goalParser';
+import { initialPlan, nextPlan } from './planner';
 import type {
   AgentContext,
   AgentFinalResult,
   AgentInput,
   EmitAgentEvent,
   SearchPlan,
+  UserGoal,
 } from './types';
 
 export async function runSearchAgent(
   input: AgentInput,
   emit: EmitAgentEvent,
-  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>
+  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
+  parseGoal: AgentGoalParser = parseAgentGoal
 ): Promise<AgentFinalResult> {
   emit({ type: 'thinking', message: '正在理解你的需求...' });
   emit({ type: 'status', message: '正在解析目标和可验证约束...' });
 
-  const context = createInitialContext(input);
+  const goal = await parseGoal(input);
+  const context = createInitialContext(input, goal);
   let plan: SearchPlan | null = initialPlan(context.goal);
   let step = 0;
 
@@ -38,6 +42,7 @@ export async function runSearchAgent(
       radius: plan.radiusMeters,
       poiType: plan.poiType,
       searchIntent: plan.searchIntent,
+      allowedForPrimary: plan.allowedForPrimary,
       reason: plan.reason,
       found: observation.found,
       accepted: observation.acceptedCandidates.length,
@@ -101,10 +106,10 @@ export async function runSearchAgent(
   return finalResult;
 }
 
-function createInitialContext(input: AgentInput): AgentContext {
+function createInitialContext(input: AgentInput, goal: UserGoal): AgentContext {
   return {
     ...input,
-    goal: parseUserGoal(input.query, input.preferenceSummary),
+    goal,
     attempts: [],
     candidates: [],
     unmetConstraints: [],

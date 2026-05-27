@@ -1,73 +1,30 @@
 import type {
   AgentContext,
+  AlternativeGroup,
+  ClarificationNeed,
   Constraint,
+  GoalCategory,
   Observation,
   Preference,
+  RequestedItem,
   SearchPlan,
   UserGoal,
   UserPreferenceSummary,
 } from './types';
 
-interface KeywordRule {
-  match: RegExp;
-  primary: string[];
-  related?: string[];
-  broadened?: string[];
+export interface AgentGoalDraft {
+  requestedItems?: RequestedItem[];
+  acceptableCategories?: GoalCategory[];
+  alternativeGroups?: AlternativeGroup[];
+  primaryKeywords?: string[];
+  relatedKeywords?: string[];
+  broadenedKeywords?: string[];
   poiType?: string;
-  preference?: string;
+  softPreferences?: Preference[];
+  ambiguity?: string[];
+  clarificationNeeded?: ClarificationNeed[];
+  allowBroaden?: boolean;
 }
-
-const KEYWORD_RULES: KeywordRule[] = [
-  {
-    match: /潮汕牛肉火锅/,
-    primary: ['潮汕牛肉火锅'],
-    related: ['牛肉火锅'],
-    broadened: ['火锅'],
-    poiType: '050117',
-  },
-  {
-    match: /牛肉火锅/,
-    primary: ['牛肉火锅'],
-    related: ['潮汕牛肉火锅'],
-    broadened: ['火锅'],
-    poiType: '050117',
-  },
-  {
-    match: /火锅/,
-    primary: ['火锅'],
-    related: ['牛肉火锅', '串串'],
-    broadened: ['中餐'],
-    poiType: '050117',
-  },
-  {
-    match: /日料|日本料理|日本菜/,
-    primary: ['日料', '日本料理'],
-    related: ['寿司', '拉面'],
-    broadened: ['亚洲料理'],
-    poiType: '050201',
-  },
-  { match: /寿司/, primary: ['寿司'], related: ['日料'], broadened: ['日本料理'] },
-  { match: /拉面/, primary: ['拉面'], related: ['日料'], broadened: ['日本料理'] },
-  { match: /川菜/, primary: ['川菜'], broadened: ['中餐'], poiType: '050102' },
-  { match: /湘菜/, primary: ['湘菜'], broadened: ['中餐'], poiType: '050109' },
-  { match: /粤菜|广东菜/, primary: ['粤菜'], related: ['茶餐厅'], broadened: ['中餐'], poiType: '050103' },
-  { match: /江浙菜|杭帮菜|浙江菜/, primary: ['江浙菜'], related: ['杭帮菜'], broadened: ['中餐'], poiType: '050106' },
-  { match: /烧烤|烤串/, primary: ['烧烤'], related: ['烤肉'], broadened: ['中餐'], poiType: '050700' },
-  { match: /韩餐|韩国料理|烤肉/, primary: ['韩餐', '韩国料理'], related: ['烤肉'], broadened: ['亚洲料理'], poiType: '050202' },
-  { match: /西餐|牛排|意面|披萨/, primary: ['西餐'], related: ['牛排', '意面', '披萨'], poiType: '050203' },
-  { match: /咖啡/, primary: ['咖啡'], related: ['咖啡厅'], poiType: '050401' },
-  { match: /奶茶|饮品/, primary: ['奶茶'], related: ['饮品'], poiType: '050307' },
-  { match: /甜品|蛋糕|烘焙/, primary: ['甜品'], related: ['蛋糕', '面包甜点'], poiType: '050600' },
-  { match: /快餐|赶时间|快点|简单/, primary: ['快餐', '简餐'], related: ['面馆', '小吃'], poiType: '050300' },
-  { match: /小吃|夜宵/, primary: ['小吃'], related: ['简餐'], poiType: '050310' },
-  { match: /面馆|吃面|面条/, primary: ['面馆'], related: ['牛肉面', '拉面'], poiType: '050300' },
-  { match: /粥|养生/, primary: ['粥'], related: ['粤菜', '轻食'] },
-  { match: /素食|素菜/, primary: ['素食'], related: ['轻食'], poiType: '050119' },
-  { match: /轻食|沙拉|低卡/, primary: ['轻食', '沙拉'], related: ['健康餐'] },
-  { match: /东北菜/, primary: ['东北菜'], broadened: ['中餐'], poiType: '050113' },
-  { match: /清真/, primary: ['清真'], related: ['兰州拉面'], poiType: '050116' },
-  { match: /海鲜/, primary: ['海鲜'], broadened: ['中餐'], poiType: '050118' },
-];
 
 const EXCLUDABLE_CATEGORIES = [
   '火锅',
@@ -89,14 +46,15 @@ const DEFAULT_RADIUS = 1800;
 
 export function parseUserGoal(
   query: string,
-  preferenceSummary?: UserPreferenceSummary
+  preferenceSummary?: UserPreferenceSummary,
+  agentGoal: AgentGoalDraft = {}
 ): UserGoal {
   const hardConstraints: Constraint[] = [];
-  const softPreferences: Preference[] = [];
+  const softPreferences: Preference[] = [...(agentGoal.softPreferences ?? [])];
   const exclusions = parseExclusions(query);
-  const ambiguity: string[] = [];
+  const ambiguity: string[] = [...(agentGoal.ambiguity ?? [])];
   const avoidSpicy = isAvoidingSpicy(query);
-  const matchedRule = KEYWORD_RULES.find((rule) => rule.match.test(query));
+  const requestedItems = dedupeRequestedItems(agentGoal.requestedItems ?? []);
   const distanceConstraint = parseDistanceConstraint(query, preferenceSummary);
   const budgetConstraint = parseBudgetConstraint(query, preferenceSummary);
   const openNowConstraint = parseOpenNowConstraint(query);
@@ -109,6 +67,7 @@ export function parseUserGoal(
     hardConstraints.push({
       kind: 'avoid_spicy',
       label: '不吃辣或偏清淡',
+      strict: true,
     });
     softPreferences.push({
       name: '清淡',
@@ -132,42 +91,27 @@ export function parseUserGoal(
       kind: 'exclude_category',
       label: `排除${exclusion}`,
       value: exclusion,
+      values: [exclusion],
+      strict: true,
     });
   }
 
-  let primaryKeywords = matchedRule?.primary ?? [];
-  let relatedKeywords = matchedRule?.related ?? [];
-  let broadenedKeywords = matchedRule?.broadened ?? [];
+  let primaryKeywords = dedupeKeywords(agentGoal.primaryKeywords ?? []);
+  const relatedKeywords = dedupeKeywords(agentGoal.relatedKeywords ?? []);
+  const broadenedKeywords = dedupeKeywords(agentGoal.broadenedKeywords ?? []);
+  const hasAgentIntentSignal = primaryKeywords.length > 0
+    || requestedItems.length > 0
+    || Boolean(agentGoal.acceptableCategories?.length);
 
-  if (avoidSpicy && primaryKeywords.length === 0) {
-    primaryKeywords = ['粤菜', '江浙菜', '日料', '轻食', '粥'];
-    relatedKeywords = ['茶餐厅', '素食'];
-    broadenedKeywords = ['餐厅'];
+  if (primaryKeywords.length === 0 && requestedItems.length > 0) {
+    primaryKeywords = requestedItems.map((item) => item.name);
   }
 
-  if (/约会|情侣/.test(query)) {
-    softPreferences.push({ name: '适合约会', weight: 2, verifiable: false });
-    if (primaryKeywords.length === 0) {
-      primaryKeywords = ['西餐', '日料', '咖啡'];
-      relatedKeywords = ['甜品'];
-    }
-    ambiguity.push('环境、安静程度和氛围当前只能从餐厅类型弱推断，不能保证。');
+  if (primaryKeywords.length === 0 && agentGoal.acceptableCategories?.length) {
+    primaryKeywords = agentGoal.acceptableCategories.map((category) => category.name);
   }
 
-  if (/聚餐|朋友|多人/.test(query)) {
-    softPreferences.push({ name: '适合聚餐', weight: 2, verifiable: false });
-    if (primaryKeywords.length === 0) {
-      primaryKeywords = avoidSpicy ? ['粤菜', '江浙菜', '中餐'] : ['中餐', '粤菜', '火锅'];
-      relatedKeywords = ['海鲜'];
-    }
-  }
-
-  if (/环境|安静|聊天|氛围/.test(query)) {
-    softPreferences.push({ name: '环境或安静', weight: 1, verifiable: false });
-    ambiguity.push('环境好、安静和适合聊天目前缺少可靠外部字段，只会标注为不确定。');
-  }
-
-  if (/随便|都行|推荐|附近有什么|吃点|吃什么/.test(query) && primaryKeywords.length === 0) {
+  if (primaryKeywords.length === 0 && isOpenEndedQuery(query)) {
     const favoriteKeywords = preferenceSummary?.favoriteCuisines
       ?.filter((item) => item.weight > 0)
       .sort((a, b) => b.weight - a.weight)
@@ -176,40 +120,52 @@ export function parseUserGoal(
 
     primaryKeywords = favoriteKeywords.length > 0
       ? favoriteKeywords
-      : ['餐厅', '小吃', '简餐'];
-    relatedKeywords = ['中餐', '面馆'];
-    broadenedKeywords = ['美食'];
+      : ['餐厅', '美食'];
     softPreferences.push({ name: '默认多样性', weight: 1, verifiable: true });
   }
 
   if (primaryKeywords.length === 0) {
-    primaryKeywords = ['餐厅', '美食'];
-    relatedKeywords = ['小吃', '简餐'];
-    softPreferences.push({ name: '默认多样性', weight: 1, verifiable: true });
+    primaryKeywords = [query.trim()].filter(Boolean);
   }
+
+  const dedupedPrimaryKeywords = dedupeKeywords(primaryKeywords);
+  const dedupedRelatedKeywords = dedupeKeywords(relatedKeywords);
+  const dedupedBroadenedKeywords = dedupeKeywords(broadenedKeywords);
+  const acceptableCategories = dedupeGoalCategories(agentGoal.acceptableCategories ?? []);
+  const alternativeGroups = dedupeAlternativeGroups(agentGoal.alternativeGroups ?? []);
+  const allowBroaden = agentGoal.allowBroaden ?? isOpenEndedQuery(query);
+  const clarificationNeeded = agentGoal.clarificationNeeded?.length
+    ? agentGoal.clarificationNeeded
+    : buildFallbackClarificationNeeds(query, hasAgentIntentSignal);
 
   return {
     intent: 'find_restaurants',
     rawQuery: query,
-    primaryKeywords: dedupeKeywords(primaryKeywords),
-    relatedKeywords: dedupeKeywords(relatedKeywords),
-    broadenedKeywords: dedupeKeywords(broadenedKeywords),
+    poiType: agentGoal.poiType,
+    requestedItems,
+    acceptableCategories,
+    alternativeGroups,
+    primaryKeywords: dedupedPrimaryKeywords,
+    relatedKeywords: dedupedRelatedKeywords,
+    broadenedKeywords: dedupedBroadenedKeywords,
     hardConstraints,
     softPreferences,
     exclusions,
     ambiguity: dedupeStrings(ambiguity),
+    clarificationNeeded,
+    allowBroaden,
   };
 }
 
 export function initialPlan(goal: UserGoal): SearchPlan {
   const radiusMeters = getGoalRadius(goal);
-  const poiType = getPoiTypeForKeywords(goal.primaryKeywords);
 
   return {
     keywords: goal.primaryKeywords.slice(0, 5),
     radiusMeters,
-    poiType,
+    poiType: goal.poiType,
     searchIntent: 'exact',
+    allowedForPrimary: true,
     reason: '先搜索用户原始需求中最明确的餐饮类型。',
   };
 }
@@ -226,6 +182,7 @@ export function nextPlan(context: AgentContext, observation: Observation): Searc
 
 function buildPlanCandidates(context: AgentContext, observation: Observation): SearchPlan[] {
   const radiusMeters = getGoalRadius(context.goal);
+  const canExpandRadius = canSafelyExpandRadius(context.goal);
   const candidates: SearchPlan[] = [];
   const add = (plan: SearchPlan) => {
     const cleaned = removeExcludedKeywords(plan.keywords, context.goal);
@@ -238,8 +195,9 @@ function buildPlanCandidates(context: AgentContext, observation: Observation): S
     add({
       keywords: context.goal.relatedKeywords,
       radiusMeters,
-      poiType: getPoiTypeForKeywords(context.goal.relatedKeywords),
+      poiType: context.goal.poiType,
       searchIntent: 'synonym',
+      allowedForPrimary: true,
       reason: '原关键词结果不足，尝试同义词或相邻品类。',
     });
   }
@@ -247,14 +205,16 @@ function buildPlanCandidates(context: AgentContext, observation: Observation): S
   if (context.goal.broadenedKeywords.length > 0) {
     add({
       keywords: context.goal.broadenedKeywords,
-      radiusMeters: Math.max(radiusMeters, 2200),
-      poiType: getPoiTypeForKeywords(context.goal.broadenedKeywords),
+      radiusMeters: context.goal.allowBroaden && canExpandRadius
+        ? Math.max(radiusMeters, 2200)
+        : radiusMeters,
       searchIntent: 'broadened',
+      allowedForPrimary: context.goal.allowBroaden,
       reason: '精确结果不足，向上放宽到更大的餐饮品类。',
     });
   }
 
-  if (radiusMeters < 3000) {
+  if (canExpandRadius && radiusMeters < 3000) {
     add({
       keywords: observation.plan.searchIntent === 'exact'
         ? context.goal.primaryKeywords
@@ -264,6 +224,7 @@ function buildPlanCandidates(context: AgentContext, observation: Observation): S
       searchIntent: observation.plan.searchIntent === 'fallback'
         ? 'fallback'
         : 'broadened',
+      allowedForPrimary: context.goal.allowBroaden,
       reason: '附近结果质量或数量不足，扩大搜索半径。',
     });
   }
@@ -274,6 +235,7 @@ function buildPlanCandidates(context: AgentContext, observation: Observation): S
       keywords: ['餐厅', '小吃', '简餐'],
       radiusMeters: Math.max(radiusMeters, 2500),
       searchIntent: 'fallback',
+      allowedForPrimary: context.goal.allowBroaden,
       reason: '需求较开放，补充通用餐饮候选以保证选择面。',
     });
   }
@@ -283,8 +245,9 @@ function buildPlanCandidates(context: AgentContext, observation: Observation): S
       keywords: context.goal.broadenedKeywords.length > 0
         ? context.goal.broadenedKeywords
         : ['餐厅'],
-      radiusMeters: 3500,
+      radiusMeters: canExpandRadius ? 3500 : radiusMeters,
       searchIntent: 'fallback',
+      allowedForPrimary: context.goal.allowBroaden,
       reason: '前几轮没有可接受结果，保留硬约束后做兜底搜索。',
     });
   }
@@ -296,26 +259,48 @@ function parseDistanceConstraint(
   query: string,
   preferenceSummary?: UserPreferenceSummary
 ): Constraint | null {
-  const explicitKm = query.match(/(\d+(?:\.\d+)?)\s*公里/);
+  const explicitKm = query.match(/(\d+(?:\.\d+)?)\s*(?:公里|km)/i);
   if (explicitKm) {
+    const maxMeters = Math.round(Number(explicitKm[1]) * 1000);
     return {
       kind: 'distance',
       label: `${explicitKm[1]}公里内`,
-      value: Math.round(Number(explicitKm[1]) * 1000),
+      value: maxMeters,
+      maxMeters,
+      strict: true,
     };
   }
 
-  const explicitMeters = query.match(/(\d{3,5})\s*米/);
+  const explicitMeters = query.match(/(\d{2,5})\s*(?:米|m)/i);
   if (explicitMeters) {
+    const maxMeters = Number(explicitMeters[1]);
     return {
       kind: 'distance',
       label: `${explicitMeters[1]}米内`,
-      value: Number(explicitMeters[1]),
+      value: maxMeters,
+      maxMeters,
+      strict: true,
     };
   }
 
-  if (/附近|很近|近一点|走路/.test(query)) {
-    return { kind: 'distance', label: '附近', value: 1200 };
+  if (/下楼|楼下/.test(query)) {
+    return { kind: 'distance', label: '楼下500米内', value: 500, maxMeters: 500, strict: true };
+  }
+
+  if (/步行|走路|几分钟/.test(query)) {
+    return { kind: 'distance', label: '步行1公里内', value: 1000, maxMeters: 1000, strict: true };
+  }
+
+  if (/附近|很近|近一点/.test(query)) {
+    return { kind: 'distance', label: '附近1200米内', value: 1200, maxMeters: 1200, strict: true };
+  }
+
+  if (/周边/.test(query)) {
+    return { kind: 'distance', label: '周边2公里内', value: 2000, maxMeters: 2000, strict: false };
+  }
+
+  if (/稍远也行|远一点也行|可以远一点/.test(query)) {
+    return { kind: 'distance', label: '可接受5公里内', value: 5000, maxMeters: 5000, strict: false };
   }
 
   if (preferenceSummary?.preferredDistanceMeters) {
@@ -323,6 +308,8 @@ function parseDistanceConstraint(
       kind: 'distance',
       label: '历史偏好距离',
       value: preferenceSummary.preferredDistanceMeters,
+      maxMeters: preferenceSummary.preferredDistanceMeters,
+      strict: false,
     };
   }
 
@@ -341,6 +328,8 @@ function parseBudgetConstraint(
       kind: 'budget',
       label: `预算${budgetMatch[1]}左右`,
       value: { max: Number(budgetMatch[1]) },
+      max: Number(budgetMatch[1]),
+      strict: false,
     };
   }
 
@@ -349,6 +338,9 @@ function parseBudgetConstraint(
       kind: 'budget',
       label: '历史偏好价格',
       value: preferenceSummary.preferredPriceRange,
+      min: preferenceSummary.preferredPriceRange.min,
+      max: preferenceSummary.preferredPriceRange.max,
+      strict: false,
     };
   }
 
@@ -363,6 +355,7 @@ function parseOpenNowConstraint(query: string): Constraint | null {
   return {
     kind: 'open_now',
     label: '当前营业中',
+    strict: false,
   };
 }
 
@@ -377,6 +370,37 @@ function parseExclusions(query: string): string[] {
   });
 }
 
+function buildFallbackClarificationNeeds(
+  query: string,
+  hasAgentIntentSignal: boolean
+): ClarificationNeed[] {
+  if (!isOpenEndedQuery(query) || hasAgentIntentSignal) {
+    return [];
+  }
+
+  return [
+    {
+      reason: '用户需求较开放，缺少可验证的菜品或品类目标。',
+      question: '想吃正餐、小吃，还是喝点东西？',
+      options: [
+        { label: '正餐', value: '正餐', effect: { addCategories: ['正餐'] } },
+        { label: '小吃', value: '小吃', effect: { addCategories: ['小吃'] } },
+        { label: '喝点东西', value: '喝点东西', effect: { addCategories: ['饮品'] } },
+      ],
+      allowFreeText: true,
+    },
+  ];
+}
+
+function isOpenEndedQuery(query: string): boolean {
+  return /随便|都行|推荐|附近有什么|吃点|吃什么|不知道吃啥|你决定/.test(query);
+}
+
+function canSafelyExpandRadius(goal: UserGoal): boolean {
+  const distanceConstraint = goal.hardConstraints.find((constraint) => constraint.kind === 'distance');
+  return !distanceConstraint?.strict;
+}
+
 function getGoalRadius(goal: UserGoal): number {
   const distanceConstraint = goal.hardConstraints.find((constraint) => constraint.kind === 'distance');
   if (typeof distanceConstraint?.value === 'number') {
@@ -384,14 +408,6 @@ function getGoalRadius(goal: UserGoal): number {
   }
 
   return DEFAULT_RADIUS;
-}
-
-function getPoiTypeForKeywords(keywords: string[]): string | undefined {
-  const matchingRule = KEYWORD_RULES.find((rule) =>
-    rule.poiType && rule.primary.some((keyword) => keywords.includes(keyword))
-  );
-
-  return matchingRule?.poiType;
 }
 
 function removeExcludedKeywords(keywords: string[], goal: UserGoal): string[] {
@@ -434,6 +450,77 @@ function dedupePlans(plans: SearchPlan[]): SearchPlan[] {
 
 function dedupeKeywords(keywords: string[]): string[] {
   return dedupeStrings(keywords.map((keyword) => keyword.trim()).filter(Boolean));
+}
+
+function dedupeRequestedItems(items: RequestedItem[]): RequestedItem[] {
+  const byName = new Map<string, RequestedItem>();
+
+  for (const item of items) {
+    const name = item.name.trim();
+    if (!name) {
+      continue;
+    }
+
+    const existing = byName.get(name);
+    if (!existing) {
+      byName.set(name, {
+        name,
+        required: item.required ?? true,
+        aliases: dedupeKeywords(item.aliases ?? []),
+      });
+      continue;
+    }
+
+    existing.required = existing.required || item.required;
+    existing.aliases = dedupeKeywords([...existing.aliases, ...(item.aliases ?? [])]);
+  }
+
+  return Array.from(byName.values());
+}
+
+function dedupeGoalCategories(categories: GoalCategory[]): GoalCategory[] {
+  const byName = new Map<string, GoalCategory>();
+
+  for (const category of categories) {
+    const name = category.name.trim();
+    if (!name) {
+      continue;
+    }
+
+    const confidence = clamp(category.confidence ?? 0.7, 0, 1);
+    const existing = byName.get(name);
+    byName.set(name, {
+      name,
+      confidence: existing ? Math.max(existing.confidence, confidence) : confidence,
+    });
+  }
+
+  return Array.from(byName.values());
+}
+
+function dedupeAlternativeGroups(groups: AlternativeGroup[]): AlternativeGroup[] {
+  const result: AlternativeGroup[] = [];
+  const seen = new Set<string>();
+
+  for (const group of groups) {
+    const items = dedupeKeywords(group.items ?? []);
+    if (items.length === 0) {
+      continue;
+    }
+
+    const normalized = {
+      mode: group.mode,
+      items,
+      minPerGroup: group.minPerGroup,
+    };
+    const key = `${normalized.mode}:${normalized.items.join('|')}:${normalized.minPerGroup ?? ''}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(normalized);
+    }
+  }
+
+  return result;
 }
 
 function dedupeStrings(values: string[]): string[] {

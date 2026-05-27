@@ -22,6 +22,11 @@ export interface Constraint {
   kind: ConstraintKind;
   label: string;
   value?: string | number | string[] | { min?: number; max?: number };
+  strict?: boolean;
+  maxMeters?: number;
+  values?: string[];
+  min?: number;
+  max?: number;
 }
 
 export interface Preference {
@@ -30,9 +35,50 @@ export interface Preference {
   verifiable: boolean;
 }
 
+export interface RequestedItem {
+  name: string;
+  required: boolean;
+  aliases: string[];
+}
+
+export interface GoalCategory {
+  name: string;
+  confidence: number;
+}
+
+export interface AlternativeGroup {
+  mode: 'any_of' | 'all_of';
+  items: string[];
+  minPerGroup?: number;
+}
+
+export interface ClarificationEffect {
+  addRequestedItems?: string[];
+  addCategories?: string[];
+  setDistanceMaxMeters?: number;
+  allowBroaden?: boolean;
+}
+
+export interface ClarificationOption {
+  label: string;
+  value: string;
+  effect?: ClarificationEffect;
+}
+
+export interface ClarificationNeed {
+  reason: string;
+  question: string;
+  options?: ClarificationOption[];
+  allowFreeText: boolean;
+}
+
 export interface UserGoal {
   intent: 'find_restaurants';
   rawQuery: string;
+  poiType?: string;
+  requestedItems: RequestedItem[];
+  acceptableCategories: GoalCategory[];
+  alternativeGroups: AlternativeGroup[];
   primaryKeywords: string[];
   relatedKeywords: string[];
   broadenedKeywords: string[];
@@ -40,6 +86,8 @@ export interface UserGoal {
   softPreferences: Preference[];
   exclusions: string[];
   ambiguity: string[];
+  clarificationNeeded: ClarificationNeed[];
+  allowBroaden: boolean;
 }
 
 export interface SearchPlan {
@@ -47,6 +95,7 @@ export interface SearchPlan {
   radiusMeters: number;
   poiType?: string;
   searchIntent: SearchIntent;
+  allowedForPrimary: boolean;
   reason: string;
 }
 
@@ -55,9 +104,31 @@ export interface SearchAttempt {
   radius: number;
   poiType?: string;
   searchIntent: SearchIntent;
+  allowedForPrimary: boolean;
   reason: string;
   found: number;
   accepted: number;
+}
+
+export interface VerificationFailure {
+  kind: ConstraintKind | 'requested_item' | 'category';
+  message: string;
+}
+
+export interface ItemMatch {
+  requestedItem: string;
+  matchedBy: 'name' | 'cuisineType' | 'address' | 'search_keyword' | 'llm_semantic';
+  confidence: number;
+}
+
+export interface CandidateVerification {
+  restaurantId: string;
+  status: 'passed' | 'failed' | 'unverified';
+  hardFailures: VerificationFailure[];
+  itemMatches: ItemMatch[];
+  categoryMatches: string[];
+  warnings: string[];
+  confidence: number;
 }
 
 export interface RestaurantCandidate {
@@ -65,6 +136,7 @@ export interface RestaurantCandidate {
   score: number;
   matched: string[];
   warnings: string[];
+  verification: CandidateVerification;
   sourceAttempt: number;
 }
 
@@ -105,6 +177,8 @@ export interface AgentFinalResult {
   candidates: Restaurant[];
   explanation: string;
   unmetConstraints: string[];
+  paused?: boolean;
+  question?: PendingQuestion;
 }
 
 export type AgentEvent =
@@ -161,8 +235,10 @@ export interface AgentMessage {
 }
 
 export interface PendingQuestion {
+  reason?: string;
   question: string;
   options?: string[];
+  allowFreeText?: boolean;
 }
 
 export interface AgentSession {

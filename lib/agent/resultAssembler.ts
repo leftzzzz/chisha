@@ -11,7 +11,10 @@ export function finalizeRecommendations(
   proposed?: FinishRecommendation
 ): AgentFinalResult {
   const orderedCandidates = getOrderedCandidates(context, proposed);
-  const selectedCandidates = orderedCandidates.slice(0, context.targetCount);
+  const primaryCandidates = orderedCandidates.filter((candidate) =>
+    isPrimaryEligible(candidate, context)
+  );
+  const selectedCandidates = primaryCandidates.slice(0, context.targetCount);
   const selectedIds = new Set(selectedCandidates.map((candidate) => candidate.restaurant.id));
   const backupCandidates = orderedCandidates
     .filter((candidate) => !selectedIds.has(candidate.restaurant.id))
@@ -46,11 +49,27 @@ function getOrderedCandidates(
 }
 
 function compareCandidate(a: RestaurantCandidate, b: RestaurantCandidate): number {
+  const statusRank = verificationRank(b) - verificationRank(a);
+  if (statusRank !== 0) {
+    return statusRank;
+  }
+
   if (b.score !== a.score) {
     return b.score - a.score;
   }
 
   return (a.restaurant.distance ?? Infinity) - (b.restaurant.distance ?? Infinity);
+}
+
+function verificationRank(candidate: RestaurantCandidate): number {
+  if (candidate.verification.status === 'passed') return 3;
+  if (candidate.verification.status === 'unverified') return 2;
+  return 1;
+}
+
+function isPrimaryEligible(candidate: RestaurantCandidate, context: AgentContext): boolean {
+  const attempt = context.attempts[candidate.sourceAttempt - 1];
+  return candidate.verification.status === 'passed' && attempt?.allowedForPrimary !== false;
 }
 
 function buildUnmetConstraints(
@@ -65,6 +84,7 @@ function buildUnmetConstraints(
 
   const exactAccepted = context.candidates.filter((candidate) =>
     context.attempts[candidate.sourceAttempt - 1]?.searchIntent === 'exact'
+    && candidate.verification.status === 'passed'
   ).length;
   const hasBroadenedSelected = selectedCandidates.some((candidate) => {
     const attempt = context.attempts[candidate.sourceAttempt - 1];
@@ -76,6 +96,11 @@ function buildUnmetConstraints(
       `明确匹配「${context.goal.primaryKeywords.join('、')}」的餐厅不足 ${context.targetCount} 家，已补充相邻品类候选。`
     );
   }
+
+  const verificationFailures = selectedCandidates.flatMap((candidate) =>
+    candidate.verification.hardFailures.map((failure) => failure.message)
+  );
+  unmet.push(...verificationFailures);
 
   for (const constraint of context.goal.hardConstraints) {
     if (constraint.kind === 'avoid_spicy') {
@@ -128,11 +153,16 @@ function buildExplanation(
 }
 
 function withRecommendationDetails(candidate: RestaurantCandidate): Restaurant {
+  const verificationWarnings = [
+    ...candidate.verification.hardFailures.map((failure) => failure.message),
+    ...candidate.verification.warnings,
+  ];
+
   return {
     ...candidate.restaurant,
     recommendationReason: candidate.matched.length > 0
       ? candidate.matched.slice(0, 3).join('，')
       : '按距离和餐饮类型作为候选',
-    recommendationWarnings: candidate.warnings.slice(0, 4),
+    recommendationWarnings: Array.from(new Set([...candidate.warnings, ...verificationWarnings])).slice(0, 4),
   };
 }

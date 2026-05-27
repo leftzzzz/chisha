@@ -1,27 +1,11 @@
 import type { Restaurant } from '@/types';
 import type {
   AgentContext,
-  Constraint,
   Observation,
   RestaurantCandidate,
   SearchPlan,
 } from './types';
-
-const SPICY_RISK_TERMS = [
-  '川菜',
-  '湘菜',
-  '火锅',
-  '麻辣',
-  '香辣',
-  '串串',
-  '冒菜',
-  '烧烤',
-  '烤鱼',
-  '小龙虾',
-  '酸菜鱼',
-  '干锅',
-  '辣',
-];
+import { hasBlockingHardFailure, verificationSummary, verifyCandidate } from './verifier';
 
 const LIGHT_TERMS = ['粤菜', '江浙', '日料', '寿司', '轻食', '沙拉', '粥', '素食', '茶餐厅'];
 const FAST_TERMS = ['快餐', '简餐', '面馆', '小吃', '汉堡', '披萨'];
@@ -85,11 +69,15 @@ export function mergeCandidates(
 }
 
 export function isGoodEnough(context: AgentContext): boolean {
-  if (context.candidates.length < context.targetCount) {
+  const primaryEligibleCandidates = context.candidates.filter((candidate) =>
+    isPrimaryEligible(candidate, context)
+  );
+
+  if (primaryEligibleCandidates.length < context.targetCount) {
     return false;
   }
 
-  const strongCandidates = context.candidates.filter((candidate) => candidate.score >= 55);
+  const strongCandidates = primaryEligibleCandidates.filter((candidate) => candidate.score >= 55);
   const hasExactOrSynonymAttempt = context.attempts.some((attempt) =>
     attempt.searchIntent === 'exact' || attempt.searchIntent === 'synonym'
   );
@@ -101,18 +89,24 @@ export function isGoodEnough(context: AgentContext): boolean {
   return context.attempts.length >= 2 && strongCandidates.length >= Math.ceil(context.targetCount * 0.75);
 }
 
+function isPrimaryEligible(candidate: RestaurantCandidate, context: AgentContext): boolean {
+  const attempt = context.attempts[candidate.sourceAttempt - 1];
+  return candidate.verification.status === 'passed' && attempt?.allowedForPrimary !== false;
+}
+
 function evaluateRestaurant(
   restaurant: Restaurant,
   context: AgentContext,
   plan: SearchPlan,
   sourceAttempt: number
 ): RestaurantCandidate | null {
-  if (violatesHardConstraints(restaurant, context.goal.hardConstraints)) {
+  const verification = verifyCandidate(restaurant, context.goal, plan);
+  if (hasBlockingHardFailure(verification)) {
     return null;
   }
 
   const matched: string[] = [];
-  const warnings = [...context.goal.ambiguity];
+  const warnings = [...context.goal.ambiguity, ...verificationSummary(verification)];
   let score = plan.searchIntent === 'fallback' ? 18 : 32;
   const searchableText = restaurantText(restaurant);
   const requiresOpenNow = context.goal.hardConstraints.some((constraint) => constraint.kind === 'open_now');
@@ -147,6 +141,24 @@ function evaluateRestaurant(
     }
   }
 
+  for (const itemMatch of verification.itemMatches) {
+    score += Math.round(itemMatch.confidence * 18);
+    matched.push(`验证命中${itemMatch.requestedItem}`);
+  }
+
+  for (const category of verification.categoryMatches) {
+    score += 10;
+    matched.push(`验证品类${category}`);
+  }
+
+  if (verification.status === 'failed') {
+    score -= 24;
+  } else if (verification.status === 'unverified') {
+    score -= 8;
+  } else {
+    score += Math.round(verification.confidence * 8);
+  }
+
   if (matched.length === 0 && plan.searchIntent !== 'fallback') {
     score -= 16;
   }
@@ -173,38 +185,9 @@ function evaluateRestaurant(
     score,
     matched: mergeStrings(matched, []),
     warnings: mergeStrings(warnings, []),
+    verification,
     sourceAttempt,
   };
-}
-
-function violatesHardConstraints(restaurant: Restaurant, constraints: Constraint[]): boolean {
-  const text = restaurantText(restaurant);
-
-  return constraints.some((constraint) => {
-    if (constraint.kind === 'distance' && typeof constraint.value === 'number') {
-      return restaurant.distance !== undefined && restaurant.distance > constraint.value;
-    }
-
-    if (constraint.kind === 'avoid_spicy') {
-      return SPICY_RISK_TERMS.some((term) => textContains(text, term));
-    }
-
-    if (constraint.kind === 'exclude_category' && typeof constraint.value === 'string') {
-      return textContains(text, constraint.value);
-    }
-
-    if (constraint.kind === 'budget' && typeof constraint.value === 'object' && restaurant.averagePrice) {
-      const range = constraint.value as { min?: number; max?: number };
-      return (range.min !== undefined && restaurant.averagePrice < range.min)
-        || (range.max !== undefined && restaurant.averagePrice > range.max);
-    }
-
-    if (constraint.kind === 'open_now') {
-      return restaurant.businessStatus === 'closed';
-    }
-
-    return false;
-  });
 }
 
 function softPreferenceScore(
