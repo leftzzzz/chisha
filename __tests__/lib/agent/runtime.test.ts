@@ -1,6 +1,13 @@
 import { runSearchAgent } from '@/lib/agent/runtime';
 import { parseUserGoal, type AgentGoalDraft } from '@/lib/agent/planner';
-import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
+import type {
+  AgentDecision,
+  AgentDecisionMaker,
+  AgentEvent,
+  AgentInput,
+  SearchPlan,
+  UserGoal,
+} from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 
 const location: Location = {
@@ -28,6 +35,11 @@ function restaurant(
 
 function goalParser(draft: AgentGoalDraft): (input: AgentInput) => Promise<UserGoal> {
   return async (input) => parseUserGoal(input.query, input.preferenceSummary, draft);
+}
+
+function decisionSequence(decisions: AgentDecision[]): AgentDecisionMaker {
+  let index = 0;
+  return async () => decisions[index++] ?? { type: 'finish' };
 }
 
 describe('runSearchAgent', () => {
@@ -62,7 +74,29 @@ describe('runSearchAgent', () => {
         relatedKeywords: ['牛肉火锅'],
         broadenedKeywords: ['火锅'],
         allowBroaden: true,
-      })
+      }),
+      decisionSequence([
+        {
+          type: 'search',
+          plan: {
+            keywords: ['牛肉火锅'],
+            radiusMeters: 1800,
+            searchIntent: 'synonym',
+            allowedForPrimary: true,
+            reason: 'Agent 决定先尝试同义表达。',
+          },
+        },
+        {
+          type: 'search',
+          plan: {
+            keywords: ['火锅'],
+            radiusMeters: 1800,
+            searchIntent: 'broadened',
+            allowedForPrimary: true,
+            reason: '用户允许放宽后，Agent 决定扩展到上位品类。',
+          },
+        },
+      ])
     );
 
     expect(result.restaurants.length).toBeGreaterThan(1);
@@ -225,11 +259,74 @@ describe('runSearchAgent', () => {
         acceptableCategories: [{ name: '餐厅', confidence: 0.6 }],
         primaryKeywords: ['餐厅'],
         allowBroaden: false,
-      })
+      }),
+      decisionSequence([
+        {
+          type: 'search',
+          plan: {
+            keywords: ['餐厅'],
+            radiusMeters: 3000,
+            searchIntent: 'synonym',
+            allowedForPrimary: true,
+            reason: 'Agent 尝试重搜，但 Runtime 必须保留严格距离约束。',
+          },
+        },
+      ])
     );
 
     expect(searchedRadii.every((radius) => radius <= 500)).toBe(true);
     expect(result.restaurants.map((item) => item.name)).toEqual(['楼下简餐']);
+  });
+
+  it('lets the Agent pause and ask the user instead of using workflow fallback', async () => {
+    const question = {
+      reason: '候选不足以满足原始目标，需要用户选择是否放宽。',
+      question: '没有找到完全匹配的餐厅，要先看看候补吗？',
+      options: ['查看候补', '继续调整需求'],
+      allowFreeText: true,
+    };
+
+    const result = await runSearchAgent(
+      { query: '想吃非常具体的菜', location },
+      () => undefined,
+      async () => [],
+      goalParser({
+        requestedItems: [{ name: '非常具体的菜', required: true, aliases: [] }],
+        primaryKeywords: ['非常具体的菜'],
+        allowBroaden: false,
+      }),
+      decisionSequence([{ type: 'ask_user', question }])
+    );
+
+    expect(result.paused).toBe(true);
+    expect(result.question).toEqual(question);
+    expect(result.restaurants).toEqual([]);
+  });
+
+  it('pauses before searching when the Agent goal parser asks for clarification', async () => {
+    const searchPlaces = jest.fn(async () => [restaurant('r1', '默认餐厅', '餐厅', 300)]);
+
+    const result = await runSearchAgent(
+      { query: '随便吃点', location },
+      () => undefined,
+      searchPlaces,
+      goalParser({
+        clarificationNeeded: [{
+          reason: '用户需求较开放，缺少可验证目标。',
+          question: '想吃正餐、小吃，还是喝点东西？',
+          options: [
+            { label: '正餐', value: '正餐' },
+            { label: '小吃', value: '小吃' },
+          ],
+          allowFreeText: true,
+        }],
+        allowBroaden: true,
+      })
+    );
+
+    expect(searchPlaces).not.toHaveBeenCalled();
+    expect(result.paused).toBe(true);
+    expect(result.question?.options).toEqual(['正餐', '小吃']);
   });
 
   it('keeps alternative intents from the Agent goal', async () => {

@@ -1,13 +1,17 @@
 import type { Restaurant } from '@/types';
+import { decideNextAgentAction } from './decision';
 import { evaluateSearchResult, isGoodEnough, mergeCandidates } from './evaluator';
 import { finalizeRecommendations } from './resultAssembler';
 import { parseAgentGoal, type AgentGoalParser } from './goalParser';
-import { initialPlan, nextPlan } from './planner';
+import { initialPlan, normalizeSearchPlan, searchAttemptKey, searchPlanKey } from './planner';
 import type {
   AgentContext,
+  AgentDecisionMaker,
   AgentFinalResult,
   AgentInput,
+  ClarificationNeed,
   EmitAgentEvent,
+  PendingQuestion,
   SearchPlan,
   UserGoal,
 } from './types';
@@ -16,14 +20,20 @@ export async function runSearchAgent(
   input: AgentInput,
   emit: EmitAgentEvent,
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
-  parseGoal: AgentGoalParser = parseAgentGoal
+  parseGoal: AgentGoalParser = parseAgentGoal,
+  decideNext: AgentDecisionMaker = decideNextAgentAction
 ): Promise<AgentFinalResult> {
   emit({ type: 'thinking', message: '正在理解你的需求...' });
   emit({ type: 'status', message: '正在解析目标和可验证约束...' });
 
   const goal = await parseGoal(input);
   const context = createInitialContext(input, goal);
-  let plan: SearchPlan | null = initialPlan(context.goal);
+  const initialQuestion = getInitialClarifyingQuestion(context.goal);
+  if (initialQuestion) {
+    return buildPausedResult(context, initialQuestion);
+  }
+
+  let plan: SearchPlan | null = normalizeSearchPlan(initialPlan(context.goal), context.goal);
   let step = 0;
 
   while (plan && step < context.maxSteps && context.attempts.length < context.maxSearchCalls) {
@@ -80,14 +90,24 @@ export async function runSearchAgent(
       break;
     }
 
-    const plannedNext = nextPlan(context, observation);
-    if (!plannedNext) {
+    const decision = await decideNext(context, observation);
+
+    if (decision.type === 'ask_user') {
+      return buildPausedResult(context, decision.question);
+    }
+
+    if (decision.type === 'finish') {
+      break;
+    }
+
+    const plannedNext = normalizeSearchPlan(decision.plan, context.goal);
+    if (!plannedNext || hasTriedPlan(context, plannedNext)) {
       break;
     }
 
     emit({
       type: 'strategy_change',
-      reason: observation.reason,
+      reason: plannedNext.reason,
       next: plannedNext,
     });
     plan = plannedNext;
@@ -104,6 +124,39 @@ export async function runSearchAgent(
   emit({ type: 'done', ...finalResult });
 
   return finalResult;
+}
+
+function buildPausedResult(context: AgentContext, question: PendingQuestion): AgentFinalResult {
+  const partialResult = finalizeRecommendations(context);
+
+  return {
+    ...partialResult,
+    paused: true,
+    question,
+  };
+}
+
+function getInitialClarifyingQuestion(goal: UserGoal): PendingQuestion | null {
+  const clarificationNeed = goal.clarificationNeeded[0];
+  if (!clarificationNeed) {
+    return null;
+  }
+
+  return clarificationNeedToPendingQuestion(clarificationNeed);
+}
+
+function clarificationNeedToPendingQuestion(need: ClarificationNeed): PendingQuestion {
+  return {
+    reason: need.reason,
+    question: need.question,
+    options: need.options?.map((option) => option.label),
+    allowFreeText: need.allowFreeText,
+  };
+}
+
+function hasTriedPlan(context: AgentContext, plan: SearchPlan): boolean {
+  const tried = new Set(context.attempts.map(searchAttemptKey));
+  return tried.has(searchPlanKey(plan));
 }
 
 function createInitialContext(input: AgentInput, goal: UserGoal): AgentContext {

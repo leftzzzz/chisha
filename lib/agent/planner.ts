@@ -1,10 +1,8 @@
 import type {
-  AgentContext,
   AlternativeGroup,
   ClarificationNeed,
   Constraint,
   GoalCategory,
-  Observation,
   Preference,
   RequestedItem,
   SearchPlan,
@@ -170,89 +168,43 @@ export function initialPlan(goal: UserGoal): SearchPlan {
   };
 }
 
-export function nextPlan(context: AgentContext, observation: Observation): SearchPlan | null {
-  if (context.attempts.length >= context.maxSearchCalls) {
+export function normalizeSearchPlan(plan: SearchPlan, goal: UserGoal): SearchPlan | null {
+  const keywords = removeExcludedKeywords(plan.keywords, goal).slice(0, 5);
+  if (keywords.length === 0) {
     return null;
   }
 
-  const tried = new Set(context.attempts.map(planKeyFromAttempt));
-  const candidates = buildPlanCandidates(context, observation);
-  return candidates.find((candidate) => !tried.has(planKey(candidate))) ?? null;
+  const maxStrictRadius = getStrictDistanceMaxMeters(goal);
+  const requestedRadius = Number.isFinite(plan.radiusMeters)
+    ? plan.radiusMeters
+    : getGoalRadius(goal);
+  const radiusMeters = maxStrictRadius !== undefined
+    ? Math.min(requestedRadius, maxStrictRadius)
+    : requestedRadius;
+  const searchIntent = plan.searchIntent ?? 'exact';
+  const isBroadenedIntent = searchIntent === 'broadened' || searchIntent === 'fallback';
+
+  return {
+    keywords,
+    radiusMeters: clamp(Math.round(radiusMeters), 300, 5000),
+    poiType: plan.poiType,
+    searchIntent,
+    allowedForPrimary: Boolean(plan.allowedForPrimary) && (!isBroadenedIntent || goal.allowBroaden),
+    reason: plan.reason || 'Agent 决定继续搜索。',
+  };
 }
 
-function buildPlanCandidates(context: AgentContext, observation: Observation): SearchPlan[] {
-  const radiusMeters = getGoalRadius(context.goal);
-  const canExpandRadius = canSafelyExpandRadius(context.goal);
-  const candidates: SearchPlan[] = [];
-  const add = (plan: SearchPlan) => {
-    const cleaned = removeExcludedKeywords(plan.keywords, context.goal);
-    if (cleaned.length > 0) {
-      candidates.push({ ...plan, keywords: cleaned.slice(0, 5) });
-    }
-  };
+export function searchPlanKey(plan: SearchPlan): string {
+  return `${plan.searchIntent}:${plan.keywords.join('|')}:${plan.radiusMeters}:${plan.poiType ?? ''}`;
+}
 
-  if (context.goal.relatedKeywords.length > 0) {
-    add({
-      keywords: context.goal.relatedKeywords,
-      radiusMeters,
-      poiType: context.goal.poiType,
-      searchIntent: 'synonym',
-      allowedForPrimary: true,
-      reason: '原关键词结果不足，尝试同义词或相邻品类。',
-    });
-  }
-
-  if (context.goal.broadenedKeywords.length > 0) {
-    add({
-      keywords: context.goal.broadenedKeywords,
-      radiusMeters: context.goal.allowBroaden && canExpandRadius
-        ? Math.max(radiusMeters, 2200)
-        : radiusMeters,
-      searchIntent: 'broadened',
-      allowedForPrimary: context.goal.allowBroaden,
-      reason: '精确结果不足，向上放宽到更大的餐饮品类。',
-    });
-  }
-
-  if (canExpandRadius && radiusMeters < 3000) {
-    add({
-      keywords: observation.plan.searchIntent === 'exact'
-        ? context.goal.primaryKeywords
-        : observation.plan.keywords,
-      radiusMeters: 3000,
-      poiType: observation.plan.poiType,
-      searchIntent: observation.plan.searchIntent === 'fallback'
-        ? 'fallback'
-        : 'broadened',
-      allowedForPrimary: context.goal.allowBroaden,
-      reason: '附近结果质量或数量不足，扩大搜索半径。',
-    });
-  }
-
-  const isVague = context.goal.softPreferences.some((preference) => preference.name === '默认多样性');
-  if (isVague) {
-    add({
-      keywords: ['餐厅', '小吃', '简餐'],
-      radiusMeters: Math.max(radiusMeters, 2500),
-      searchIntent: 'fallback',
-      allowedForPrimary: context.goal.allowBroaden,
-      reason: '需求较开放，补充通用餐饮候选以保证选择面。',
-    });
-  }
-
-  if (context.candidates.length === 0) {
-    add({
-      keywords: context.goal.broadenedKeywords.length > 0
-        ? context.goal.broadenedKeywords
-        : ['餐厅'],
-      radiusMeters: canExpandRadius ? 3500 : radiusMeters,
-      searchIntent: 'fallback',
-      allowedForPrimary: context.goal.allowBroaden,
-      reason: '前几轮没有可接受结果，保留硬约束后做兜底搜索。',
-    });
-  }
-
-  return dedupePlans(candidates);
+export function searchAttemptKey(attempt: {
+  keywords: string[];
+  radius: number;
+  poiType?: string;
+  searchIntent: string;
+}): string {
+  return `${attempt.searchIntent}:${attempt.keywords.join('|')}:${attempt.radius}:${attempt.poiType ?? ''}`;
 }
 
 function parseDistanceConstraint(
@@ -400,9 +352,14 @@ function isBroadenPermission(query: string): boolean {
   return /可以放宽|放宽|扩大范围|扩大|远一点也行|稍远也行|候补也行|查看候补|看看候补/.test(query);
 }
 
-function canSafelyExpandRadius(goal: UserGoal): boolean {
+function getStrictDistanceMaxMeters(goal: UserGoal): number | undefined {
   const distanceConstraint = goal.hardConstraints.find((constraint) => constraint.kind === 'distance');
-  return !distanceConstraint?.strict;
+  if (!distanceConstraint?.strict) {
+    return undefined;
+  }
+
+  return distanceConstraint.maxMeters
+    ?? (typeof distanceConstraint.value === 'number' ? distanceConstraint.value : undefined);
 }
 
 function getGoalRadius(goal: UserGoal): number {
@@ -427,29 +384,6 @@ function removeExcludedKeywords(keywords: string[], goal: UserGoal): string[] {
 
     return true;
   });
-}
-
-function planKey(plan: SearchPlan): string {
-  return `${plan.searchIntent}:${plan.keywords.join('|')}:${plan.radiusMeters}:${plan.poiType ?? ''}`;
-}
-
-function planKeyFromAttempt(attempt: { keywords: string[]; radius: number; poiType?: string; searchIntent: string }): string {
-  return `${attempt.searchIntent}:${attempt.keywords.join('|')}:${attempt.radius}:${attempt.poiType ?? ''}`;
-}
-
-function dedupePlans(plans: SearchPlan[]): SearchPlan[] {
-  const seen = new Set<string>();
-  const result: SearchPlan[] = [];
-
-  for (const plan of plans) {
-    const key = planKey(plan);
-    if (!seen.has(key)) {
-      seen.add(key);
-      result.push(plan);
-    }
-  }
-
-  return result;
 }
 
 function dedupeKeywords(keywords: string[]): string[] {

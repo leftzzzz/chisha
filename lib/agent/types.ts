@@ -156,6 +156,25 @@ export interface FinishRecommendation {
   confidence: number;
 }
 
+export type AgentDecision =
+  | {
+      type: 'search';
+      plan: SearchPlan;
+    }
+  | {
+      type: 'ask_user';
+      question: PendingQuestion;
+    }
+  | {
+      type: 'finish';
+      explanation?: string;
+    };
+
+export type AgentDecisionMaker = (
+  context: AgentContext,
+  observation: Observation
+) => Promise<AgentDecision>;
+
 export interface AgentInput {
   query: string;
   location: Location;

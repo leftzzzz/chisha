@@ -7,8 +7,14 @@
  */
 
 import { z } from 'zod';
-import type { AgentEvent, AgentInput, SearchPlan } from '@/lib/agent/types';
-import { getClarifyingQuestion, applyClarifyingAnswer } from '@/lib/agent/conversation';
+import type {
+  AgentEvent,
+  AgentInput,
+  AgentSession,
+  PendingQuestion,
+  SearchPlan,
+} from '@/lib/agent/types';
+import { applyClarifyingAnswer } from '@/lib/agent/conversation';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
 import {
   appendAssistantMessage,
@@ -60,6 +66,25 @@ function sendEvent(controller: ReadableStreamDefaultController, event: AgentEven
   controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
 }
 
+function pauseSessionWithQuestion(
+  controller: ReadableStreamDefaultController,
+  session: AgentSession,
+  question: PendingQuestion
+) {
+  session.pendingQuestion = question;
+  appendAssistantMessage(session, question.question);
+  saveAgentSession(session);
+  sendEvent(controller, {
+    type: 'question',
+    sessionId: session.id,
+    question: question.question,
+    options: question.options,
+    allowFreeText: question.allowFreeText ?? true,
+  });
+  sendEvent(controller, { type: 'session_paused', sessionId: session.id });
+  controller.close();
+}
+
 export async function POST(request: Request) {
   const ip = getClientIP(request);
   const rateLimitResult = rateLimit(ip, 6, 60 * 1000);
@@ -108,28 +133,6 @@ export async function POST(request: Request) {
           sendEvent(controller, { type: 'session_resumed', sessionId: session.id });
         }
 
-        const question = getClarifyingQuestion(
-          requestData.message,
-          requestData.preferenceSummary,
-          session
-        );
-
-        if (question) {
-          session.pendingQuestion = question;
-          appendAssistantMessage(session, question.question);
-          saveAgentSession(session);
-          sendEvent(controller, {
-            type: 'question',
-            sessionId: session.id,
-            question: question.question,
-            options: question.options,
-            allowFreeText: true,
-          });
-          sendEvent(controller, { type: 'session_paused', sessionId: session.id });
-          controller.close();
-          return;
-        }
-
         const input: AgentInput = {
           query: getSessionQuery(session),
           location: requestData.location,
@@ -154,31 +157,8 @@ export async function POST(request: Request) {
           }
         );
 
-        if (result.restaurants.length === 0 && result.candidates.length > 0) {
-          const question = {
-            reason: '候选餐厅通过了硬约束，但没有完全满足原始目标。',
-            question: '没有找到完全匹配的餐厅，要先看看候补吗？',
-            options: ['查看候补', '继续调整需求'],
-            allowFreeText: true,
-          };
-
-          session.pendingQuestion = {
-            reason: question.reason,
-            question: question.question,
-            options: question.options,
-            allowFreeText: question.allowFreeText,
-          };
-          appendAssistantMessage(session, question.question);
-          saveAgentSession(session);
-          sendEvent(controller, {
-            type: 'question',
-            sessionId: session.id,
-            question: question.question,
-            options: question.options,
-            allowFreeText: question.allowFreeText,
-          });
-          sendEvent(controller, { type: 'session_paused', sessionId: session.id });
-          controller.close();
+        if (result.paused && result.question) {
+          pauseSessionWithQuestion(controller, session, result.question);
           return;
         }
 
