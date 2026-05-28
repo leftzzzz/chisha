@@ -53,6 +53,7 @@ export const AlternativeGroupSchema = z.object({
 export const ClarificationEffectSchema = z.object({
   addRequestedItems: z.array(z.string()).optional(),
   addCategories: z.array(z.string()).optional(),
+  addSoftPreferences: z.array(PreferenceSchema).optional(),
   setDistanceMaxMeters: z.number().optional(),
   allowBroaden: z.boolean().optional(),
 });
@@ -91,6 +92,7 @@ export const UserGoalSchema = z.object({
 export const GoalPatchSchema = z.object({
   addRequestedItems: z.array(RequestedItemSchema).optional(),
   addCategories: z.array(GoalCategorySchema).optional(),
+  addSoftPreferences: z.array(PreferenceSchema).optional(),
   addConstraints: z.array(ConstraintSchema).optional(),
   removeConstraints: z.array(z.string()).optional(),
   allowBroaden: z.boolean().optional(),

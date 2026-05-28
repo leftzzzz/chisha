@@ -55,6 +55,7 @@ export interface AlternativeGroup {
 export interface GoalPatch {
   addRequestedItems?: RequestedItem[];
   addCategories?: GoalCategory[];
+  addSoftPreferences?: Preference[];
   addConstraints?: Constraint[];
   removeConstraints?: string[];
   allowBroaden?: boolean;
@@ -64,6 +65,7 @@ export interface GoalPatch {
 export interface ClarificationEffect {
   addRequestedItems?: string[];
   addCategories?: string[];
+  addSoftPreferences?: Preference[];
   setDistanceMaxMeters?: number;
   allowBroaden?: boolean;
 }
@@ -253,6 +255,7 @@ export interface AgentRuntimeState {
   goal?: UserGoal;
   attempts: SearchAttempt[];
   candidates: RestaurantCandidate[];
+  pendingQuestion?: PendingQuestion;
 }
 
 export type AgentEvent =

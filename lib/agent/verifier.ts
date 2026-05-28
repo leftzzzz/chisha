@@ -1,4 +1,5 @@
 import type { Restaurant } from '@/types';
+import { lookupFoodPoiTypes } from './poiTaxonomy';
 import type {
   CandidateVerification,
   Constraint,
@@ -292,6 +293,11 @@ function matchCategories(restaurant: Restaurant, categories: GoalCategory[], pla
       continue;
     }
 
+    if (categoryMatchesPoiType(category.name, restaurant)) {
+      matches.push(category.name);
+      continue;
+    }
+
     if (category.confidence < 0.7 && plan.searchIntent !== 'exact' && plan.keywords.some((keyword) =>
       aliases.some((alias) => textContains(keyword, alias) || textContains(alias, keyword))
     )) {
@@ -412,6 +418,19 @@ function calculateConfidence(
 
 function getCategoryAliases(category: string): string[] {
   return Array.from(new Set([category, ...(CATEGORY_ALIASES[category] ?? [])]));
+}
+
+function categoryMatchesPoiType(category: string, restaurant: Restaurant): boolean {
+  return poiTypesForCategory(category).some((poiType) =>
+    restaurant.poiTypeCode === poiType
+  );
+}
+
+function poiTypesForCategory(category: string): string[] {
+  return (lookupFoodPoiTypes(category) ?? '')
+    .split('|')
+    .map((poiType) => poiType.trim())
+    .filter(Boolean);
 }
 
 function restaurantText(restaurant: Restaurant): string {

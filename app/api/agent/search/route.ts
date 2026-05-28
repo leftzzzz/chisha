@@ -19,7 +19,6 @@ import type {
   SearchPlan,
 } from '@/lib/agent/types';
 import { applyClarifyingAnswer } from '@/lib/agent/conversation';
-import { applySupervisorClarifyingAnswer } from '@/lib/agent/supervisor';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
 import {
   appendAssistantMessage,
@@ -194,12 +193,8 @@ export async function POST(request: Request) {
         if (shouldResumeSession) {
           appendUserMessage(session, requestData.query);
 
-          if (session.pendingQuestion) {
-            if (useSupervisorV2) {
-              applySupervisorClarifyingAnswer(session, requestData.query);
-            } else {
-              applyClarifyingAnswer(session, requestData.query);
-            }
+          if (session.pendingQuestion && !useSupervisorV2) {
+            applyClarifyingAnswer(session, requestData.query);
           }
 
           sendEvent(controller, {
@@ -220,6 +215,7 @@ export async function POST(request: Request) {
             goal: session.goal,
             attempts: session.attempts,
             candidates: session.candidates,
+            pendingQuestion: useSupervisorV2 ? session.pendingQuestion : undefined,
           },
         };
         const runAgent = useSupervisorV2

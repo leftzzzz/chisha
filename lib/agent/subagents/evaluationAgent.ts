@@ -1,7 +1,7 @@
 import type { Restaurant } from '@/types';
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
-import { getPoiTerms } from '../poiTaxonomy';
+import { getPoiTerms, lookupFoodPoiTypes } from '../poiTaxonomy';
 import { EvaluationAgentOutputSchema } from '../schemas/verdict';
 import type {
   CandidateVerdict,
@@ -35,9 +35,10 @@ const SYSTEM_PROMPT = `你是餐厅搜索系统的 EvaluationAgent。你只根�
 1. 不编造菜单、评分、人均、营业状态或距离；只能基于输入事实给 evidence。
 2. 用户明确要求的菜品必须被验证。没有证据但品类兼容时输出 unverified，不能直接当主推荐。
 3. 类别冲突或命中排除/停业/距离硬约束时输出 failed。
-4. selectedIds 只能选择 status=passed 且 primaryEligible=true 的餐厅。
-5. candidateIds 可以包含 unverified 或放宽候选，但必须解释 warnings/conflicts。
-6. 同等质量时优先距离更近，最近删除的餐厅降权。`;
+4. softPreferences 只能影响排序、evidence 或 warnings；不能让候选变成 failed，也不能要求模型编造当前事实字段没有的数据。
+5. selectedIds 只能选择 status=passed 且 primaryEligible=true 的餐厅。
+6. candidateIds 可以包含 unverified 或放宽候选，但必须解释 warnings/conflicts。
+7. 同等质量时优先距离更近，最近删除的餐厅降权。`;
 
 const EVALUATION_FUNCTION = {
   name: 'evaluateRestaurantCandidates',
@@ -140,7 +141,7 @@ function evaluateRestaurantFacts(
     .filter((item) => itemTerms(item).some((term) => textContains(text, term)))
     .map((item) => item.name);
   const matchedCategories = goal.acceptableCategories
-    .filter((category) => getPoiTerms(category.name).some((term) => textContains(text, term)))
+    .filter((category) => categoryMatchesRestaurant(category.name, restaurant, text))
     .map((category) => category.name);
   const keywordMatchedItems = matchItemsBySearchKeyword(goal, plan, matchedCategories);
   const matchedItems = Array.from(new Set([...fieldMatchedItems, ...keywordMatchedItems]));
@@ -230,6 +231,27 @@ function matchItemsBySearchKeyword(
     .map((item) => item.name);
 }
 
+function categoryMatchesRestaurant(
+  categoryName: string,
+  restaurant: Restaurant,
+  text: string
+): boolean {
+  if (getPoiTerms(categoryName).some((term) => textContains(text, term))) {
+    return true;
+  }
+
+  return poiTypesForTerm(categoryName).some((poiType) =>
+    restaurant.poiTypeCode === poiType
+  );
+}
+
+function poiTypesForTerm(term: string): string[] {
+  return (lookupFoodPoiTypes(term) ?? '')
+    .split('|')
+    .map((poiType) => poiType.trim())
+    .filter(Boolean);
+}
+
 function calculateConfidence(
   status: CandidateVerdict['status'],
   itemMatchCount: number,
@@ -314,6 +336,7 @@ async function callEvaluationModel(input: EvaluationAgentInput): Promise<Evaluat
                 cuisineType: restaurant.cuisineType,
                 address: restaurant.address,
                 distance: restaurant.distance,
+                rating: restaurant.rating,
                 averagePrice: restaurant.averagePrice,
                 businessStatus: restaurant.businessStatus,
                 poiTypeCode: restaurant.poiTypeCode,

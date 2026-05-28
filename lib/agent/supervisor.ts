@@ -48,7 +48,16 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 4. 用户明确表达的菜品必须保留在 requestedItems，不要只泛化成菜系。
 5. 用户没有明确授权时 allowBroaden=false。
 6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
-7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。`;
+7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
+
+需求归类：
+1. requestedItems 只放用户想吃的具体菜品、餐食或必须命中的食物目标；acceptableCategories 只放能满足需求的菜系/餐厅类型。
+2. hardConstraints 只放可以用餐厅事实字段稳定验证的限制：distance、budget、open_now、exclude_category、avoid_spicy。用户明确排除、明确距离、明确预算、明确营业状态才是硬约束。
+3. softPreferences 放体验、质量、氛围、人气、适用场景、排序倾向等偏好；它们不能阻塞主推荐。无法从餐厅事实字段稳定验证时，verifiable=false，并在 ambiguity 说明只能弱排序或提示。
+4. 常见不可稳定验证的软偏好包括但不限于：人多、热闹、排队、网红、热门、人气高、环境好、氛围好、安静、适合聚餐、适合约会、服务好。即使用户说“想要/希望”，也不要写入 requestedItems 或 hardConstraints。
+5. “评分高/评价好/人均低/营业中/距离近”只有在对应字段存在时才能作为可验证信息；作为用户目标时优先写入 softPreferences，明确数值预算/距离/营业中请求才写入 hardConstraints。
+6. 如果用户坚持某个当前事实字段无法验证的条件“必须满足”，优先 ask_user 说明无法验证并让用户选择是否改为软偏好或调整需求。
+7. 多轮追问回答也必须重新分类，不要把用户的普通补充文本默认塞进 requestedItems。`;
 
 const SUPERVISOR_FUNCTION = {
   name: 'superviseRestaurantSearch',
@@ -177,6 +186,7 @@ export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal
     rawQuery,
     requestedItems: mergeByName(goal.requestedItems, patch.addRequestedItems ?? []),
     acceptableCategories: mergeCategories(goal.acceptableCategories, patch.addCategories ?? []),
+    softPreferences: mergePreferences(goal.softPreferences, patch.addSoftPreferences ?? []),
     hardConstraints: mergeConstraints(
       goal.hardConstraints.filter((constraint) =>
         !(patch.removeConstraints ?? []).includes(constraint.label)
@@ -278,6 +288,7 @@ function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatc
       name: category,
       confidence: 0.8,
     })),
+    addSoftPreferences: effect.addSoftPreferences,
     addConstraints,
     removeConstraints: effect.setDistanceMaxMeters !== undefined
       ? ['楼下500米内', '步行1公里内']
@@ -453,6 +464,19 @@ function mergeCategories(left: GoalCategory[], right: GoalCategory[]): GoalCateg
   return Array.from(byName.values());
 }
 
+function mergePreferences(left: UserGoal['softPreferences'], right: UserGoal['softPreferences']): UserGoal['softPreferences'] {
+  const byName = new Map<string, UserGoal['softPreferences'][number]>();
+  for (const preference of [...left, ...right]) {
+    const existing = byName.get(preference.name);
+    byName.set(preference.name, {
+      name: preference.name,
+      weight: existing ? Math.max(existing.weight, preference.weight) : preference.weight,
+      verifiable: existing ? existing.verifiable || preference.verifiable : preference.verifiable,
+    });
+  }
+  return Array.from(byName.values());
+}
+
 function mergeConstraints(left: Constraint[], right: Constraint[]): Constraint[] {
   const seen = new Set<string>();
   const constraints: Constraint[] = [];
@@ -469,21 +493,258 @@ function mergeConstraints(left: Constraint[], right: Constraint[]): Constraint[]
 function userGoalJsonSchema() {
   return {
     type: 'object',
-    additionalProperties: true,
+    additionalProperties: false,
+    properties: {
+      intent: { type: 'string', enum: ['find_restaurants'] },
+      rawQuery: { type: 'string' },
+      poiType: {
+        type: 'string',
+        description: '只有已有上下文非常确定时才保留；Supervisor 不要自行生成新的高德 POI typecode。',
+      },
+      requestedItems: {
+        type: 'array',
+        description: '必须命中的具体菜品、餐食或食物目标；不要放体验、氛围、人气、评分、环境、场景偏好。',
+        items: requestedItemJsonSchema(),
+      },
+      acceptableCategories: {
+        type: 'array',
+        description: '能满足用户餐饮目标的菜系或餐厅类型，例如火锅、日料、西餐。',
+        items: goalCategoryJsonSchema(),
+      },
+      alternativeGroups: {
+        type: 'array',
+        description: '多意图组，例如“日料或韩餐”为 any_of。',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            mode: { type: 'string', enum: ['any_of', 'all_of'] },
+            items: { type: 'array', items: { type: 'string' } },
+            minPerGroup: { type: 'number' },
+          },
+          required: ['mode', 'items'],
+        },
+      },
+      primaryKeywords: {
+        type: 'array',
+        description: '搜索主关键词，只放菜品、菜系、餐厅类型；不要放软偏好词。',
+        items: { type: 'string' },
+      },
+      relatedKeywords: { type: 'array', items: { type: 'string' } },
+      broadenedKeywords: {
+        type: 'array',
+        description: '上位或放宽关键词；只有用户授权 allowBroaden 后才能进入主推荐。',
+        items: { type: 'string' },
+      },
+      hardConstraints: {
+        type: 'array',
+        description: '只放可由距离、预算、营业状态、排除项、不吃辣等事实字段稳定验证的硬限制。',
+        items: constraintJsonSchema(),
+      },
+      softPreferences: {
+        type: 'array',
+        description: '体验、质量、氛围、人气、场景和排序倾向。不可稳定验证时 verifiable=false，且不能阻塞主推荐。',
+        items: preferenceJsonSchema(),
+      },
+      exclusions: {
+        type: 'array',
+        description: '用户明确排除的菜系/品类。',
+        items: { type: 'string' },
+      },
+      ambiguity: {
+        type: 'array',
+        description: '记录不可验证、歧义或需要提示用户的点。',
+        items: { type: 'string' },
+      },
+      clarificationNeeded: {
+        type: 'array',
+        items: clarificationNeedJsonSchema(),
+      },
+      allowBroaden: {
+        type: 'boolean',
+        description: '只有用户明确允许放宽、候补、随便推荐等开放需求时才为 true。',
+      },
+    },
+    required: [
+      'intent',
+      'rawQuery',
+      'requestedItems',
+      'acceptableCategories',
+      'alternativeGroups',
+      'primaryKeywords',
+      'relatedKeywords',
+      'broadenedKeywords',
+      'hardConstraints',
+      'softPreferences',
+      'exclusions',
+      'ambiguity',
+      'clarificationNeeded',
+      'allowBroaden',
+    ],
   };
 }
 
 function goalPatchJsonSchema() {
   return {
     type: 'object',
-    additionalProperties: true,
+    additionalProperties: false,
+    properties: {
+      addRequestedItems: {
+        type: 'array',
+        description: '新增必须命中的具体菜品/餐食；不要用于软偏好。',
+        items: requestedItemJsonSchema(),
+      },
+      addCategories: {
+        type: 'array',
+        description: '新增可接受菜系或餐厅类型。',
+        items: goalCategoryJsonSchema(),
+      },
+      addSoftPreferences: {
+        type: 'array',
+        description: '新增软偏好；人气、氛围、环境、适合场景、评价倾向等都放这里。',
+        items: preferenceJsonSchema(),
+      },
+      addConstraints: {
+        type: 'array',
+        description: '新增可稳定验证的硬约束。',
+        items: constraintJsonSchema(),
+      },
+      removeConstraints: { type: 'array', items: { type: 'string' } },
+      allowBroaden: { type: 'boolean' },
+      reason: { type: 'string' },
+    },
+    required: ['reason'],
   };
 }
 
 function pendingQuestionJsonSchema() {
   return {
     type: 'object',
-    additionalProperties: true,
+    additionalProperties: false,
+    properties: {
+      reason: { type: 'string' },
+      question: { type: 'string' },
+      options: { type: 'array', items: { type: 'string' } },
+      allowFreeText: { type: 'boolean' },
+      optionEffects: {
+        type: 'object',
+        additionalProperties: clarificationEffectJsonSchema(),
+      },
+    },
+    required: ['question'],
+  };
+}
+
+function requestedItemJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string' },
+      required: { type: 'boolean' },
+      aliases: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['name', 'required', 'aliases'],
+  };
+}
+
+function goalCategoryJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string' },
+      confidence: { type: 'number' },
+    },
+    required: ['name', 'confidence'],
+  };
+}
+
+function preferenceJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string' },
+      weight: { type: 'number' },
+      verifiable: {
+        type: 'boolean',
+        description: '只有当前事实字段能稳定验证该偏好时为 true；人气/氛围/环境/适合场景通常为 false。',
+      },
+    },
+    required: ['name', 'weight', 'verifiable'],
+  };
+}
+
+function constraintJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      kind: { type: 'string', enum: ['distance', 'avoid_spicy', 'exclude_category', 'budget', 'open_now'] },
+      label: { type: 'string' },
+      value: {
+        oneOf: [
+          { type: 'string' },
+          { type: 'number' },
+          { type: 'array', items: { type: 'string' } },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              min: { type: 'number' },
+              max: { type: 'number' },
+            },
+          },
+        ],
+      },
+      strict: { type: 'boolean' },
+      maxMeters: { type: 'number' },
+      values: { type: 'array', items: { type: 'string' } },
+      min: { type: 'number' },
+      max: { type: 'number' },
+    },
+    required: ['kind', 'label'],
+  };
+}
+
+function clarificationNeedJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      reason: { type: 'string' },
+      question: { type: 'string' },
+      options: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            label: { type: 'string' },
+            value: { type: 'string' },
+            effect: clarificationEffectJsonSchema(),
+          },
+          required: ['label', 'value'],
+        },
+      },
+      allowFreeText: { type: 'boolean' },
+    },
+    required: ['reason', 'question', 'allowFreeText'],
+  };
+}
+
+function clarificationEffectJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      addRequestedItems: { type: 'array', items: { type: 'string' } },
+      addCategories: { type: 'array', items: { type: 'string' } },
+      addSoftPreferences: { type: 'array', items: preferenceJsonSchema() },
+      setDistanceMaxMeters: { type: 'number' },
+      allowBroaden: { type: 'boolean' },
+    },
   };
 }
 

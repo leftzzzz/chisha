@@ -37,6 +37,7 @@ export async function runSearchAgentV2(
   const supervisorOutput = await runSearchSupervisor({
     message: input.query,
     previousGoal: input.runtimeState?.goal,
+    pendingQuestion: input.runtimeState?.pendingQuestion,
     preferenceSummary: input.preferenceSummary,
   });
   const goal = resolveSupervisorGoal(input, supervisorOutput);

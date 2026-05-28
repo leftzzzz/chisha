@@ -75,6 +75,22 @@ describe('SearchSupervisorAgent', () => {
     );
   });
 
+  it('applies soft preference patches without turning them into requested items', () => {
+    const patched = applyGoalPatch(
+      goal({ primaryKeywords: ['火锅'] }),
+      {
+        addSoftPreferences: [{ name: '人气高', weight: 1, verifiable: false }],
+        reason: '用户补充了不可稳定验证的体验偏好。',
+      },
+      '想吃火锅，人多的地方'
+    );
+
+    expect(patched.requestedItems.map((item) => item.name)).not.toContain('人气高');
+    expect(patched.softPreferences).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: '人气高', verifiable: false })])
+    );
+  });
+
   it('applies pending question option effects inside Supervisor ownership', () => {
     const session: AgentSession = {
       id: 's1',

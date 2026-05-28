@@ -106,4 +106,35 @@ describe('EvaluationAgent', () => {
       matchedCategories: ['西餐'],
     }));
   });
+
+  it('uses POI type evidence to verify category matches when display fields are generic', () => {
+    const output = deterministicEvaluation({
+      goal: goal({
+        rawQuery: '想吃火锅，人多的地方',
+        requestedItems: [],
+        acceptableCategories: [{ name: '火锅', confidence: 0.9 }],
+        primaryKeywords: ['火锅'],
+        softPreferences: [{ name: '人气高', weight: 1, verifiable: false }],
+      }),
+      plan: {
+        keywords: ['火锅'],
+        radiusMeters: 1800,
+        poiType: '050117',
+        searchIntent: 'exact',
+        allowedForPrimary: true,
+        reason: 'exact',
+      },
+      restaurants: [
+        { ...restaurant('r1', '聚福楼', '中餐厅', 300), poiTypeCode: '050117' },
+      ],
+      targetCount: 8,
+    });
+
+    expect(output.selectedIds).toEqual(['r1']);
+    expect(output.verdicts[0]).toEqual(expect.objectContaining({
+      status: 'passed',
+      primaryEligible: true,
+      matchedCategories: ['火锅'],
+    }));
+  });
 });
