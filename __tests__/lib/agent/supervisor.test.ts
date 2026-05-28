@@ -120,7 +120,7 @@ describe('SearchSupervisorAgent', () => {
     );
   });
 
-  it('keeps asking when a clarification answer is still only a soft preference', () => {
+  it('accepts soft-preference clarification answers instead of asking again', () => {
     const output = deterministicSupervisor({
       message: '清淡一点',
       previousGoal: goal({ primaryKeywords: [] }),
@@ -130,9 +130,14 @@ describe('SearchSupervisorAgent', () => {
       },
     });
 
-    expect(output.nextAction).toBe('ask_user');
-    expect(output.question?.question).toContain('具体想吃什么');
-    expect(output.patch).toBeUndefined();
+    expect(output.nextAction).toBe('plan');
+    expect(output.question).toBeUndefined();
+    expect(output.patch).toEqual(expect.objectContaining({
+      allowBroaden: true,
+    }));
+    expect(output.patch?.addSoftPreferences).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: '清淡' })])
+    );
   });
 
   it('treats open clarification answers as consent for generic recommendations', () => {

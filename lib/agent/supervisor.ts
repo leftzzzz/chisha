@@ -81,10 +81,10 @@ const SUPERVISOR_FUNCTION = {
 export async function runSearchSupervisor(
   input: SearchSupervisorInput
 ): Promise<SearchSupervisorOutput> {
-  const openRecommendationPatch = buildOpenRecommendationConsentPatch(input);
-  if (openRecommendationPatch) {
+  const pendingAnswerPatch = buildPendingQuestionAnswerPatch(input);
+  if (pendingAnswerPatch) {
     return {
-      patch: openRecommendationPatch,
+      patch: pendingAnswerPatch,
       nextAction: 'plan',
     };
   }
@@ -124,10 +124,10 @@ export async function understandSearchGoal(input: AgentInput): Promise<UserGoal>
 export function deterministicSupervisor(input: SearchSupervisorInput): SearchSupervisorOutput {
   if (input.previousGoal && input.pendingQuestion) {
     const normalized = input.message.trim();
-    const openRecommendationPatch = buildOpenRecommendationConsentPatch(input);
-    if (openRecommendationPatch) {
+    const pendingAnswerPatch = buildPendingQuestionAnswerPatch(input);
+    if (pendingAnswerPatch) {
       return {
-        patch: openRecommendationPatch,
+        patch: pendingAnswerPatch,
         nextAction: 'plan',
       };
     }
@@ -135,18 +135,6 @@ export function deterministicSupervisor(input: SearchSupervisorInput): SearchSup
     const effect = normalized
       ? input.pendingQuestion.optionEffects?.[normalized]
       : undefined;
-    if (!effect && needsClarification(normalized)) {
-      const question = clarificationNeedToPendingQuestion(createClarificationNeed());
-      return {
-        goal: {
-          ...input.previousGoal,
-          rawQuery: normalized || input.previousGoal.rawQuery,
-        },
-        question,
-        nextAction: 'ask_user',
-      };
-    }
-
     const patch = effect
       ? goalPatchFromClarificationEffect(effect)
       : buildMinimalGoalPatch(input.message);
@@ -287,10 +275,15 @@ export function clarificationNeedToPendingQuestion(
   });
 }
 
-function buildMinimalGoalPatch(answer: string): GoalPatch {
+function buildMinimalGoalPatch(
+  answer: string,
+  options: { forceAllowBroaden?: boolean } = {}
+): GoalPatch {
   const trimmed = answer.trim();
   const openRecommendationConsent = isOpenRecommendationConsent(trimmed);
-  const allowsBroaden = openRecommendationConsent || /放宽|扩大|远一点|候补/.test(trimmed);
+  const allowsBroaden = Boolean(options.forceAllowBroaden)
+    || openRecommendationConsent
+    || /放宽|扩大|远一点|候补/.test(trimmed);
   const keywords = allowsBroaden || needsClarification(trimmed)
     ? []
     : normalizeSearchKeywords([trimmed]).filter((keyword) => !isGenericSearchKeyword(keyword));
@@ -315,12 +308,24 @@ function buildMinimalGoalPatch(answer: string): GoalPatch {
   });
 }
 
-function buildOpenRecommendationConsentPatch(input: SearchSupervisorInput): GoalPatch | null {
-  if (!input.previousGoal || !input.pendingQuestion || !isOpenRecommendationConsent(input.message)) {
+function buildPendingQuestionAnswerPatch(input: SearchSupervisorInput): GoalPatch | null {
+  if (!input.previousGoal || !input.pendingQuestion) {
     return null;
   }
 
-  return buildMinimalGoalPatch(input.message);
+  const normalized = input.message.trim();
+  const effect = normalized
+    ? input.pendingQuestion.optionEffects?.[normalized]
+    : undefined;
+  if (effect) {
+    return goalPatchFromClarificationEffect(effect);
+  }
+
+  if (isOpenRecommendationConsent(normalized) || needsClarification(normalized)) {
+    return buildMinimalGoalPatch(normalized, { forceAllowBroaden: true });
+  }
+
+  return null;
 }
 
 function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatch {

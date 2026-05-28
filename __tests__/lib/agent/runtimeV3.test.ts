@@ -223,6 +223,47 @@ describe('runSearchAgentV3', () => {
     ]));
   });
 
+  it('continues with fallback search when clarification answer is still a soft preference', async () => {
+    const first = await runSearchAgentV3(
+      {
+        query: '随便推荐个附近好吃的',
+        location,
+        runtimeState: {
+          attempts: [],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      async () => []
+    );
+
+    expect(first.paused).toBe(true);
+
+    const searchedPlans: SearchPlan[] = [];
+    const second = await runSearchAgentV3(
+      {
+        query: '清淡一点',
+        location,
+        runtimeState: first.runtimeState,
+      },
+      () => undefined,
+      async (plan) => {
+        searchedPlans.push(plan);
+        return [
+          restaurant('r1', '清粥小菜', '粥', 300),
+          restaurant('r2', '社区餐厅', '餐饮', 400),
+          restaurant('r3', '轻食沙拉', '轻食', 500),
+        ];
+      }
+    );
+
+    expect(second.paused).not.toBe(true);
+    expect(searchedPlans.some((plan) => plan.searchIntent === 'fallback')).toBe(true);
+    expect(second.restaurants.length).toBeGreaterThan(0);
+  });
+
   it('normalizes sentence keywords before executing search tools', async () => {
     const plans: SearchPlan[] = [];
     await runSearchAgentV3(
