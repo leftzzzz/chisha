@@ -40,6 +40,8 @@ interface AgentV3Context extends AgentContext {
   maxActions: number;
 }
 
+const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 3);
+
 interface GuardedAction {
   action: AgentAction;
   guardrails: string[];
@@ -204,9 +206,14 @@ function createInitialContext(input: AgentInput, goal: UserGoal, resetSearchStat
     unmetConstraints: [],
     maxSteps: 8,
     maxActions: (resetSearchState ? 0 : (input.runtimeState?.actions?.length ?? 0)) + 8,
-    maxSearchCalls: previousAttempts.length + 5,
+    maxSearchCalls: previousAttempts.length + DEFAULT_AGENT_MAX_SEARCH_CALLS,
     targetCount: 8,
   };
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function patchedRawQuery(goal: UserGoal, patch: GoalPatch, message: string): string {

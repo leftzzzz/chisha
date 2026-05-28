@@ -28,6 +28,9 @@ import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
 import { getClientIP, rateLimit } from '@/lib/rateLimit';
 
+const AGENT_POI_PAGES_PER_SEARCH = parsePositiveInt(process.env.AGENT_POI_PAGES_PER_SEARCH, 2);
+const AGENT_DETAIL_ENRICH_LIMIT = parsePositiveInt(process.env.AGENT_DETAIL_ENRICH_LIMIT, 6);
+
 const LocationSchema = z.object({
   lat: z.number(),
   lng: z.number(),
@@ -198,10 +201,10 @@ export async function POST(request: Request) {
               input.location,
               plan.radiusMeters,
               plan.poiType,
-              3,
+              AGENT_POI_PAGES_PER_SEARCH,
               { preferProvidedPoiType: Boolean(plan.poiType) }
             );
-            return enrichRestaurantsWithAmapDetails(restaurants, 12);
+            return enrichRestaurantsWithAmapDetails(restaurants, AGENT_DETAIL_ENRICH_LIMIT);
           }
         );
 
@@ -248,4 +251,9 @@ function jsonResponse(body: unknown, status: number): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
