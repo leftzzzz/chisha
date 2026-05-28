@@ -10,7 +10,8 @@ import { applyHardConstraintGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import { SearchPlanSchema } from './schemas/plan';
 import { finalizeRecommendations } from './resultAssembler';
-import { normalizeSearchKeywords } from './poiTaxonomy';
+import { lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
+import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
 import {
   createActionRecord,
   decideSearchSupervisorAction,
@@ -57,7 +58,19 @@ export async function runSearchAgentV3(
     preferenceSummary: input.preferenceSummary,
     attempts: input.runtimeState?.attempts,
   });
-  const goal = resolveSupervisorGoal(input, supervisorOutput);
+  const baseGoal = resolveSupervisorGoal(input, supervisorOutput);
+  let goal = baseGoal;
+  if (!supervisorOutput.question && baseGoal.clarificationNeeded.length === 0) {
+    emit({ type: 'status', message: 'KeywordExpansionAgent 正在生成搜索联想词...' });
+    goal = applyKeywordExpansion(
+      baseGoal,
+      await runKeywordExpansionAgent({
+        goal: baseGoal,
+        attempts: input.runtimeState?.attempts ?? [],
+        preferenceSummary: input.preferenceSummary,
+      })
+    );
+  }
   const context = createInitialContext(input, goal);
   const clarifyingQuestion = supervisorOutput.question
     ?? getInitialClarifyingQuestion(goal);
@@ -300,6 +313,14 @@ function guardFinishAction(
   action: Extract<AgentAction, { type: 'finish' }>,
   context: AgentV3Context
 ): GuardedAction {
+  const expansionSearch = buildExpansionSearchBeforeFinish(context);
+  if (expansionSearch) {
+    return {
+      action: expansionSearch,
+      guardrails: ['模型请求结束，但仍有未尝试的 Agent 联想关键词，已继续搜索以提高召回。'],
+    };
+  }
+
   const observedIds = new Set(context.candidates.map((candidate) => candidate.restaurant.id));
   const selectedIds = (action.selectedIds ?? []).filter((id) => observedIds.has(id));
   const candidateIds = (action.candidateIds ?? []).filter((id) => observedIds.has(id));
@@ -316,6 +337,47 @@ function guardFinishAction(
       ? ['finish 动作包含未观察到的候选 id，已移除。']
       : [],
   };
+}
+
+function buildExpansionSearchBeforeFinish(context: AgentV3Context): AgentAction | null {
+  if (context.attempts.length >= context.maxSearchCalls) {
+    return null;
+  }
+
+  const primaryCandidates = context.candidates.filter((candidate) =>
+    isPrimaryRecommendationAllowed(candidate, context)
+  );
+  if (primaryCandidates.length >= context.targetCount) {
+    return null;
+  }
+
+  const relatedKeywords = untriedGoalKeywords(context, context.goal.relatedKeywords);
+  if (relatedKeywords.length > 0) {
+    return {
+      type: 'search',
+      plan: buildRuntimePlan(context, relatedKeywords, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
+    };
+  }
+
+  const broadenedKeywords = primaryCandidates.length === 0
+    ? untriedGoalKeywords(context, context.goal.broadenedKeywords)
+    : [];
+  if (broadenedKeywords.length > 0) {
+    return {
+      type: 'search',
+      plan: buildRuntimePlan(
+        context,
+        broadenedKeywords,
+        'broadened',
+        context.goal.allowBroaden,
+        context.goal.allowBroaden
+          ? '用户允许放宽，继续尝试 Agent 联想到的相邻品类。'
+          : '没有主推荐，搜索 Agent 联想到的相邻品类作为候补。'
+      ),
+    };
+  }
+
+  return null;
 }
 
 async function executeSearchAction(
@@ -514,6 +576,51 @@ function hasTriedPlan(context: AgentV3Context, plan: SearchPlan): boolean {
   return context.attempts.some((attempt) =>
     `${attempt.searchIntent}:${attempt.keywords.join('|')}:${attempt.radius}:${attempt.poiType ?? ''}` === key
   );
+}
+
+function untriedGoalKeywords(context: AgentV3Context, keywords: string[]): string[] {
+  return keywords.filter((keyword) =>
+    !hasTriedKeyword(context, keyword)
+  );
+}
+
+function hasTriedKeyword(context: AgentV3Context, keyword: string): boolean {
+  const normalizedKeywords = normalizeSearchKeywords([keyword]);
+  return context.attempts.some((attempt) =>
+    attempt.keywords.some((attemptKeyword) => normalizedKeywords.includes(attemptKeyword))
+  );
+}
+
+function buildRuntimePlan(
+  context: AgentV3Context,
+  keywords: string[],
+  searchIntent: SearchPlan['searchIntent'],
+  allowedForPrimary: boolean,
+  reason: string
+): SearchPlan {
+  const normalizedKeywords = normalizeSearchKeywords(keywords);
+  const poiType = normalizedKeywords.length === 1
+    ? lookupFoodPoiTypes(normalizedKeywords[0]) ?? context.goal.poiType
+    : undefined;
+
+  return SearchPlanSchema.parse({
+    keywords: normalizedKeywords,
+    radiusMeters: nextRuntimeRadius(context),
+    poiType,
+    searchIntent,
+    allowedForPrimary,
+    reason,
+  });
+}
+
+function nextRuntimeRadius(context: AgentV3Context): number {
+  const strictMax = getStrictDistanceMaxMeters(context.goal);
+  if (strictMax !== undefined) {
+    return Math.max(300, Math.min(5000, strictMax));
+  }
+
+  const latestRadius = context.attempts.at(-1)?.radius ?? 1800;
+  return Math.min(5000, Math.max(300, Math.round(latestRadius * 1.25)));
 }
 
 function searchPlanKey(plan: SearchPlan): string {

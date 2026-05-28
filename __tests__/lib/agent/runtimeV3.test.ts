@@ -282,6 +282,38 @@ describe('runSearchAgentV3', () => {
     expect(plans[0].keywords).toEqual(['牛排']);
   });
 
+  it('continues with related keywords when exact cuisine search returns too few results', async () => {
+    const plans: SearchPlan[] = [];
+    const result = await runSearchAgentV3(
+      input(goal({
+        relatedKeywords: ['日本料理', '寿司', '刺身', '拉面'],
+      })),
+      () => undefined,
+      async (plan) => {
+        plans.push(plan);
+        if (plan.searchIntent === 'exact') {
+          return [
+            restaurant('r1', '日料小馆', '日本料理', 300),
+            restaurant('r2', '街角寿司', '寿司', 500),
+            restaurant('r3', '拉面屋', '日本料理', 700),
+          ];
+        }
+
+        return [
+          restaurant('r4', '刺身居酒屋', '日本料理', 450),
+          restaurant('r5', '深夜拉面', '日式拉面', 650),
+          restaurant('r6', '寿司专门店', '寿司', 800),
+        ];
+      }
+    );
+
+    expect(plans.map((plan) => plan.searchIntent)).toEqual(expect.arrayContaining(['exact', 'synonym']));
+    expect(plans.find((plan) => plan.searchIntent === 'synonym')?.keywords).toEqual(
+      expect.arrayContaining(['日本料理', '寿司'])
+    );
+    expect(result.restaurants.length).toBeGreaterThan(3);
+  });
+
   it('applies pending question option effects when resuming through the Supervisor', async () => {
     const first = await runSearchAgentV3(
       input(goal({

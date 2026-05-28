@@ -1,0 +1,237 @@
+import { logger } from '@/lib/logger';
+import { fetchWithTimeout } from '@/lib/withTimeout';
+import { expandPoiSearchKeywords, isGenericSearchKeyword, normalizeSearchKeywords } from '../poiTaxonomy';
+import { KeywordExpansionOutputSchema } from '../schemas/keywordExpansion';
+import type { SearchAttempt, UserGoal, UserPreferenceSummary } from '../types';
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
+const KEYWORD_EXPANSION_TIMEOUT = 12000;
+
+export interface KeywordExpansionAgentInput {
+  goal: UserGoal;
+  attempts: SearchAttempt[];
+  preferenceSummary?: UserPreferenceSummary;
+}
+
+export interface KeywordExpansionOutput {
+  relatedKeywords: string[];
+  broadenedKeywords: string[];
+  rationale: string;
+}
+
+const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你只负责为已结构化的 UserGoal 生成高德 POI keywords 搜索联想词，不调用外部工具。
+
+规则：
+1. relatedKeywords 是同一用户目标下的同义词、常见叫法、代表菜品或更容易命中 POI 的单个餐饮意图词。
+2. broadenedKeywords 是结果不足时才尝试的相邻大类或兼容品类。
+3. 每个关键词必须能单独作为高德 keywords 使用，例如“寿司”“刺身”“居酒屋”；不要输出整句，不要用“|”“、”“或者”合并多个意图。
+4. 不要重复 primaryKeywords、已尝试 keywords、排除项，也不要输出非餐饮词、体验偏好或无法用于 POI 搜索的形容词。
+5. 用户没有 allowBroaden 时仍可输出 broadenedKeywords，但它们只能作为候补搜索，不能自动进入主推荐。
+6. 结合用户具体上下文生成，不要机械套用固定词表。`;
+
+const KEYWORD_EXPANSION_FUNCTION = {
+  name: 'expandRestaurantSearchKeywords',
+  description: 'Generate dynamic restaurant-search keyword expansions for a structured UserGoal.',
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      relatedKeywords: {
+        type: 'array',
+        description: '同义词、常见叫法、代表菜品或更容易命中 POI 的单意图搜索词。',
+        items: { type: 'string' },
+      },
+      broadenedKeywords: {
+        type: 'array',
+        description: '结果不足时才尝试的相邻品类或更宽泛目标。',
+        items: { type: 'string' },
+      },
+      rationale: { type: 'string' },
+    },
+    required: ['relatedKeywords', 'broadenedKeywords', 'rationale'],
+  },
+};
+
+export async function runKeywordExpansionAgent(
+  input: KeywordExpansionAgentInput
+): Promise<KeywordExpansionOutput> {
+  if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
+    return deterministicKeywordExpansion(input.goal, input.attempts);
+  }
+
+  try {
+    return sanitizeExpansion(await callKeywordExpansionModel(input), input.goal, input.attempts);
+  } catch (error) {
+    logger.warn('KeywordExpansionAgent unavailable, using taxonomy fallback', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return deterministicKeywordExpansion(input.goal, input.attempts);
+  }
+}
+
+export function deterministicKeywordExpansion(
+  goal: UserGoal,
+  attempts: SearchAttempt[] = []
+): KeywordExpansionOutput {
+  const seeds = goalKeywords(goal);
+  const expansion = expandPoiSearchKeywords(seeds);
+  return {
+    ...sanitizeExpansion(expansion, goal, attempts),
+    rationale: 'KeywordExpansionAgent 降级为本地餐饮 taxonomy 生成搜索联想词。',
+  };
+}
+
+export function applyKeywordExpansion(goal: UserGoal, expansion: KeywordExpansionOutput): UserGoal {
+  return {
+    ...goal,
+    relatedKeywords: mergeKeywords(goal.relatedKeywords, expansion.relatedKeywords)
+      .filter((keyword) => !goal.primaryKeywords.includes(keyword)),
+    broadenedKeywords: mergeKeywords(goal.broadenedKeywords, expansion.broadenedKeywords)
+      .filter((keyword) => !goal.primaryKeywords.includes(keyword)),
+  };
+}
+
+async function callKeywordExpansionModel(
+  input: KeywordExpansionAgentInput
+): Promise<KeywordExpansionOutput> {
+  const response = await fetchWithTimeout(
+    `${OPENAI_BASE_URL}/chat/completions`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        messages: [
+          {
+            role: 'user',
+            content: `${SYSTEM_PROMPT}\n\n${JSON.stringify(buildModelInput(input))}`,
+          },
+        ],
+        functions: [KEYWORD_EXPANSION_FUNCTION],
+        function_call: { name: 'expandRestaurantSearchKeywords' },
+        temperature: 0.2,
+        max_tokens: 700,
+      }),
+    },
+    KEYWORD_EXPANSION_TIMEOUT
+  );
+
+  if (!response.ok) {
+    throw new Error(`KeywordExpansionAgent API failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const args = extractFunctionArguments(data);
+  if (!args) {
+    throw new Error('KeywordExpansionAgent returned no function arguments');
+  }
+
+  const parsed = KeywordExpansionOutputSchema.safeParse(JSON.parse(args));
+  if (!parsed.success) {
+    throw new Error(`KeywordExpansionAgent returned invalid schema: ${parsed.error.message}`);
+  }
+
+  return parsed.data;
+}
+
+function buildModelInput(input: KeywordExpansionAgentInput) {
+  return {
+    goal: input.goal,
+    primarySearchTargets: goalKeywords(input.goal),
+    attemptedKeywords: input.attempts.flatMap((attempt) => attempt.keywords),
+    preferenceSummary: input.preferenceSummary,
+  };
+}
+
+function sanitizeExpansion(
+  expansion: Partial<KeywordExpansionOutput>,
+  goal: UserGoal,
+  attempts: SearchAttempt[]
+): KeywordExpansionOutput {
+  const blockedKeywords = new Set([
+    ...goal.primaryKeywords,
+    ...goal.exclusions,
+    ...attempts.flatMap((attempt) => attempt.keywords),
+  ].map((keyword) => keyword.trim()).filter(Boolean));
+  const relatedKeywords = sanitizeKeywords(expansion.relatedKeywords ?? [], blockedKeywords).slice(0, 5);
+  const broadenedKeywords = sanitizeKeywords(expansion.broadenedKeywords ?? [], blockedKeywords).slice(0, 5);
+
+  return KeywordExpansionOutputSchema.parse({
+    relatedKeywords,
+    broadenedKeywords,
+    rationale: expansion.rationale || '根据用户目标生成搜索联想词。',
+  });
+}
+
+function sanitizeKeywords(keywords: string[], blockedKeywords: Set<string>): string[] {
+  return normalizeSearchKeywords(keywords)
+    .filter((keyword) =>
+      !blockedKeywords.has(keyword)
+      && !isGenericSearchKeyword(keyword)
+      && !/[|｜、,，;；/／]|或者|还是|以及/.test(keyword)
+    );
+}
+
+function goalKeywords(goal: UserGoal): string[] {
+  return [
+    ...goal.primaryKeywords,
+    ...goal.requestedItems.map((item) => item.name),
+    ...goal.acceptableCategories.map((category) => category.name),
+  ].filter(Boolean);
+}
+
+function mergeKeywords(left: string[], right: string[]): string[] {
+  return Array.from(new Set([...left, ...right].map((keyword) => keyword.trim()).filter(Boolean)));
+}
+
+function extractFunctionArguments(data: {
+  choices?: Array<{
+    message?: {
+      content?: string;
+      function_call?: { name: string; arguments: string };
+      tool_calls?: Array<{
+        type: string;
+        function: { name: string; arguments: string };
+      }>;
+    };
+  }>;
+}): string | null {
+  const message = data.choices?.[0]?.message;
+  if (message?.function_call?.arguments) {
+    return message.function_call.arguments;
+  }
+
+  const toolCall = message?.tool_calls?.find((item) => item.type === 'function');
+  if (toolCall?.function.arguments) {
+    return toolCall.function.arguments;
+  }
+
+  return extractJsonObjectFromText(message?.content ?? '');
+}
+
+function extractJsonObjectFromText(content: string): string | null {
+  const start = content.indexOf('{');
+  if (start === -1) {
+    return null;
+  }
+
+  let depth = 0;
+  for (let index = start; index < content.length; index++) {
+    const char = content[index];
+    if (char === '{') {
+      depth++;
+    } else if (char === '}') {
+      depth--;
+      if (depth === 0) {
+        return content.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
+}

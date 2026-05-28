@@ -19,6 +19,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const SUPERVISOR_ACTION_TIMEOUT = 15000;
+const MIN_PRIMARY_BEFORE_OPTIONAL_EXPANSION = 6;
 
 export interface SearchSupervisorActionInput {
   message: string;
@@ -48,7 +49,8 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，也是餐厅搜索唯一 l
 - SearchPlan.keywords 必须是单个餐饮意图词数组，例如 ["牛排"] 或 ["川菜","咖啡"]；不要输出整句，也不要用 "|" 拼接多个关键词。
 - strict 距离、明确排除项、不吃辣等硬约束不能被自动放宽。
 - 用户没有 allowBroaden 时，broadened/fallback 搜索的 allowedForPrimary 必须为 false。
-- selectedIds 只能来自候选摘要中的 id；未验证或 failed 候选不能作为主推荐。`;
+- selectedIds 只能来自候选摘要中的 id；未验证或 failed 候选不能作为主推荐。
+- relatedKeywords 还有未尝试词且主推荐少于目标数时，优先继续 search，不要过早 finish。`;
 
 const ACTION_FUNCTION = {
   name: 'decideRestaurantSearchAction',
@@ -133,7 +135,16 @@ function deterministicSupervisorAction(
     isPrimaryRecommendationAllowed(candidate, context)
   );
 
-  if (primaryCandidates.length >= Math.min(3, context.targetCount)) {
+  const shouldTryRelatedKeywords = hasUntriedRelatedKeywords(context)
+    && primaryCandidates.length < Math.min(MIN_PRIMARY_BEFORE_OPTIONAL_EXPANSION, context.targetCount);
+  const shouldTryBroadenedKeywords = hasUntriedBroadenedKeywords(context)
+    && primaryCandidates.length === 0;
+
+  if (
+    primaryCandidates.length >= Math.min(3, context.targetCount)
+    && !shouldTryRelatedKeywords
+    && !shouldTryBroadenedKeywords
+  ) {
     return {
       type: 'finish',
       selectedIds: primaryCandidates.slice(0, context.targetCount).map((candidate) => candidate.restaurant.id),
@@ -165,9 +176,7 @@ function deterministicSupervisorAction(
     };
   }
 
-  const relatedKeywords = context.goal.relatedKeywords.filter((keyword) =>
-    !hasTriedKeyword(context, keyword)
-  );
+  const relatedKeywords = untriedRelatedKeywords(context);
   if (relatedKeywords.length > 0) {
     return {
       type: 'search',
@@ -175,9 +184,7 @@ function deterministicSupervisorAction(
     };
   }
 
-  const broadenedKeywords = context.goal.broadenedKeywords.filter((keyword) =>
-    !hasTriedKeyword(context, keyword)
-  );
+  const broadenedKeywords = untriedBroadenedKeywords(context);
   if (broadenedKeywords.length > 0) {
     return {
       type: 'search',
@@ -280,6 +287,26 @@ function initialKeywords(context: AgentContext): string[] {
     ...context.goal.requestedItems.map((item) => item.name),
     ...context.goal.acceptableCategories.map((category) => category.name),
   ].filter(Boolean);
+}
+
+function hasUntriedRelatedKeywords(context: AgentContext): boolean {
+  return untriedRelatedKeywords(context).length > 0;
+}
+
+function untriedRelatedKeywords(context: AgentContext): string[] {
+  return context.goal.relatedKeywords.filter((keyword) =>
+    !hasTriedKeyword(context, keyword)
+  );
+}
+
+function hasUntriedBroadenedKeywords(context: AgentContext): boolean {
+  return untriedBroadenedKeywords(context).length > 0;
+}
+
+function untriedBroadenedKeywords(context: AgentContext): string[] {
+  return context.goal.broadenedKeywords.filter((keyword) =>
+    !hasTriedKeyword(context, keyword)
+  );
 }
 
 function hasTriedKeyword(context: AgentContext, keyword: string): boolean {

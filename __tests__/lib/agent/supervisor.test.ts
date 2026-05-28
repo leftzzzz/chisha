@@ -38,6 +38,14 @@ describe('SearchSupervisorAgent', () => {
     }));
   });
 
+  it('keeps parsed food targets focused for the expansion agent', () => {
+    const output = deterministicSupervisor({ message: '想吃日料' });
+
+    expect(output.goal?.primaryKeywords).toEqual(['日料']);
+    expect(output.goal?.relatedKeywords).toEqual([]);
+    expect(output.goal?.broadenedKeywords).toEqual([]);
+  });
+
   it('asks a generic clarification for vague requests without fixed category options', () => {
     const output = deterministicSupervisor({ message: '随便吃点' });
 

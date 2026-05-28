@@ -17,27 +17,29 @@ const GENERIC_KEYWORDS = new Set(['餐厅', '美食']);
 interface PoiTaxonomyEntry {
   canonical: string;
   terms: string[];
+  relatedTerms?: string[];
+  broadenedTerms?: string[];
   poiTypes: string[];
   targetKinds: SearchTarget['kind'][];
 }
 
 export const POI_TAXONOMY: PoiTaxonomyEntry[] = [
-  { canonical: '江浙菜', terms: ['江浙菜'], poiTypes: ['050105', '050106'], targetKinds: ['cuisine'] },
-  { canonical: '川菜', terms: ['川菜', '川味', '麻辣'], poiTypes: ['050102'], targetKinds: ['cuisine'] },
-  { canonical: '粤菜', terms: ['粤菜', '广东菜', '茶餐厅', '烧腊', '点心'], poiTypes: ['050103'], targetKinds: ['cuisine'] },
-  { canonical: '湘菜', terms: ['湘菜', '湖南菜'], poiTypes: ['050109'], targetKinds: ['cuisine'] },
+  { canonical: '江浙菜', terms: ['江浙菜'], relatedTerms: ['杭帮菜', '苏菜', '浙菜'], poiTypes: ['050105', '050106'], targetKinds: ['cuisine'] },
+  { canonical: '川菜', terms: ['川菜', '川味', '麻辣'], relatedTerms: ['酸菜鱼', '冒菜', '串串'], poiTypes: ['050102'], targetKinds: ['cuisine'] },
+  { canonical: '粤菜', terms: ['粤菜', '广东菜', '茶餐厅', '烧腊', '点心'], relatedTerms: ['早茶', '港式茶餐厅'], poiTypes: ['050103'], targetKinds: ['cuisine'] },
+  { canonical: '湘菜', terms: ['湘菜', '湖南菜'], relatedTerms: ['辣椒炒肉'], poiTypes: ['050109'], targetKinds: ['cuisine'] },
   { canonical: '鲁菜', terms: ['鲁菜', '山东菜'], poiTypes: ['050104'], targetKinds: ['cuisine'] },
-  { canonical: '苏菜', terms: ['苏菜', '江苏菜'], poiTypes: ['050105'], targetKinds: ['cuisine'] },
-  { canonical: '浙菜', terms: ['浙菜', '杭帮菜', '浙江菜'], poiTypes: ['050106'], targetKinds: ['cuisine'] },
+  { canonical: '苏菜', terms: ['苏菜', '江苏菜'], relatedTerms: ['江浙菜'], poiTypes: ['050105'], targetKinds: ['cuisine'] },
+  { canonical: '浙菜', terms: ['浙菜', '杭帮菜', '浙江菜'], relatedTerms: ['江浙菜'], poiTypes: ['050106'], targetKinds: ['cuisine'] },
   { canonical: '闽菜', terms: ['闽菜', '福建菜'], poiTypes: ['050108'], targetKinds: ['cuisine'] },
   { canonical: '徽菜', terms: ['徽菜', '安徽菜'], poiTypes: ['050107'], targetKinds: ['cuisine'] },
-  { canonical: '火锅', terms: ['火锅', '涮锅', '牛肉火锅', '潮汕牛肉火锅', '串串'], poiTypes: ['050117'], targetKinds: ['dish', 'cuisine', 'restaurant_type'] },
-  { canonical: '日本料理', terms: ['日料', '日本料理', '日本菜', '寿司', '刺身', '日式拉面', '拉面'], poiTypes: ['050201'], targetKinds: ['dish', 'cuisine'] },
-  { canonical: '韩国料理', terms: ['韩餐', '韩国料理', '韩式', '石锅拌饭', '韩式烤肉'], poiTypes: ['050202'], targetKinds: ['dish', 'cuisine'] },
-  { canonical: '西餐', terms: ['西餐', '牛排', '意面', '披萨', '比萨', '意大利菜'], poiTypes: ['050203'], targetKinds: ['dish', 'cuisine'] },
-  { canonical: '烧烤', terms: ['烧烤', '烤串', '烤肉', 'bbq'], poiTypes: ['050700'], targetKinds: ['dish', 'restaurant_type'] },
-  { canonical: '快餐', terms: ['快餐', '汉堡', '炸鸡', '薯条', '鸡排'], poiTypes: ['050300'], targetKinds: ['dish', 'restaurant_type'] },
-  { canonical: '小吃', terms: ['小吃', '麻辣烫', '冒菜', '米线'], poiTypes: ['050310'], targetKinds: ['dish', 'restaurant_type'] },
+  { canonical: '火锅', terms: ['火锅', '涮锅', '牛肉火锅', '潮汕牛肉火锅', '串串'], relatedTerms: ['重庆火锅', '海底捞'], broadenedTerms: ['中餐'], poiTypes: ['050117'], targetKinds: ['dish', 'cuisine', 'restaurant_type'] },
+  { canonical: '日本料理', terms: ['日料', '日本料理', '寿司', '刺身', '拉面', '日式拉面', '日本菜'], relatedTerms: ['居酒屋', '鳗鱼饭', '丼饭'], broadenedTerms: ['亚洲料理'], poiTypes: ['050201'], targetKinds: ['dish', 'cuisine'] },
+  { canonical: '韩国料理', terms: ['韩餐', '韩国料理', '韩式', '石锅拌饭', '韩式烤肉'], relatedTerms: ['部队锅', '烤肉'], broadenedTerms: ['亚洲料理'], poiTypes: ['050202'], targetKinds: ['dish', 'cuisine'] },
+  { canonical: '西餐', terms: ['西餐', '牛排', '意面', '披萨', '比萨', '意大利菜'], relatedTerms: ['汉堡', 'brunch'], broadenedTerms: ['餐厅'], poiTypes: ['050203'], targetKinds: ['dish', 'cuisine'] },
+  { canonical: '烧烤', terms: ['烧烤', '烤串', '烤肉', 'bbq'], relatedTerms: ['烤鱼'], broadenedTerms: ['小吃'], poiTypes: ['050700'], targetKinds: ['dish', 'restaurant_type'] },
+  { canonical: '快餐', terms: ['快餐', '汉堡', '炸鸡', '薯条', '鸡排'], relatedTerms: ['简餐'], broadenedTerms: ['小吃'], poiTypes: ['050300'], targetKinds: ['dish', 'restaurant_type'] },
+  { canonical: '小吃', terms: ['小吃', '麻辣烫', '冒菜', '米线'], relatedTerms: ['面馆', '简餐'], broadenedTerms: ['快餐'], poiTypes: ['050310'], targetKinds: ['dish', 'restaurant_type'] },
   { canonical: '咖啡', terms: ['咖啡', '咖啡店', '咖啡厅'], poiTypes: ['050401'], targetKinds: ['restaurant_type'] },
   { canonical: '奶茶', terms: ['奶茶', '果茶', '柠檬茶'], poiTypes: ['050307'], targetKinds: ['dish', 'restaurant_type'] },
   { canonical: '饮品', terms: ['饮品', '喝点', '喝的'], poiTypes: ['050307', '050401'], targetKinds: ['restaurant_type'] },
@@ -48,11 +50,15 @@ export const POI_TAXONOMY: PoiTaxonomyEntry[] = [
 ];
 
 export function normalizeSearchKeywords(keywords: string[]): string[] {
-  const normalized = Array.from(new Set(
-    keywords.flatMap(normalizeKeywordText).filter(Boolean)
-  )).slice(0, MAX_SEARCH_KEYWORDS);
+  const normalized = normalizeOptionalSearchKeywords(keywords).slice(0, MAX_SEARCH_KEYWORDS);
 
   return normalized.length > 0 ? normalized : ['餐厅'];
+}
+
+function normalizeOptionalSearchKeywords(keywords: string[]): string[] {
+  return Array.from(new Set(
+    keywords.flatMap(normalizeKeywordText).filter(Boolean)
+  ));
 }
 
 export function extractKnownFoodTerms(text: string): string[] {
@@ -167,12 +173,55 @@ export function resolvePoiTypesForKeyword(
 }
 
 export function lookupFoodPoiTypes(keyword: string): string | undefined {
-  const normalizedKeyword = keyword.toLowerCase();
-  const matcher = POI_TAXONOMY.find(({ terms }) =>
-    terms.some((term) => normalizedKeyword.includes(term.toLowerCase()))
-  );
+  const matcher = findPoiEntry(keyword);
 
   return matcher ? matcher.poiTypes.join('|') : undefined;
+}
+
+export function expandPoiSearchKeywords(keywords: string[]): {
+  relatedKeywords: string[];
+  broadenedKeywords: string[];
+} {
+  const seeds = normalizeOptionalSearchKeywords(keywords)
+    .filter((keyword) => !isGenericSearchKeyword(keyword));
+  const seedSet = new Set(seeds);
+  const related: string[] = [];
+  const broadened: string[] = [];
+
+  for (const seed of seeds) {
+    const entry = findPoiEntry(seed);
+    if (!entry) {
+      continue;
+    }
+
+    related.push(
+      entry.canonical,
+      ...entry.terms,
+      ...(entry.relatedTerms ?? [])
+    );
+    broadened.push(...(entry.broadenedTerms ?? []));
+  }
+
+  return {
+    relatedKeywords: normalizeOptionalSearchKeywords(related)
+      .filter((keyword) => !seedSet.has(keyword) && !isGenericSearchKeyword(keyword))
+      .slice(0, MAX_SEARCH_KEYWORDS),
+    broadenedKeywords: normalizeOptionalSearchKeywords(broadened)
+      .filter((keyword) => !seedSet.has(keyword))
+      .slice(0, MAX_SEARCH_KEYWORDS),
+  };
+}
+
+function findPoiEntry(keyword: string): PoiTaxonomyEntry | undefined {
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  if (!normalizedKeyword) {
+    return undefined;
+  }
+
+  return POI_TAXONOMY.find(({ canonical, terms }) =>
+    canonical.toLowerCase() === normalizedKeyword
+    || terms.some((term) => normalizedKeyword.includes(term.toLowerCase()))
+  );
 }
 
 export function canonicalizePoiTerm(term: string): string {

@@ -1,5 +1,6 @@
 import {
   DEFAULT_POI_TYPE,
+  expandPoiSearchKeywords,
   extractKnownFoodTerms,
   getPoiTerms,
   normalizeSearchKeywords,
@@ -57,6 +58,19 @@ describe('poiTaxonomy', () => {
 
   it('exposes canonical terms for semantic agents without duplicating tables', () => {
     expect(getPoiTerms('日料')).toEqual(expect.arrayContaining(['日本料理', '寿司']));
+  });
+
+  it('expands cuisine keywords into related single-intent Amap keywords', () => {
+    const expansion = expandPoiSearchKeywords(['日料']);
+
+    expect(expansion.relatedKeywords).toEqual(expect.arrayContaining([
+      '日本料理',
+      '寿司',
+      '刺身',
+      '拉面',
+    ]));
+    expect(expansion.relatedKeywords).not.toContain('日料');
+    expect(expansion.broadenedKeywords).toEqual(expect.arrayContaining(['亚洲料理']));
   });
 
   it('normalizes sentence-like or grouped keywords for Amap single-intent requests', () => {
