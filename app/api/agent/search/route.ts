@@ -164,8 +164,22 @@ export async function POST(request: Request) {
     async start(controller) {
       try {
         const useSupervisorV2 = isSupervisorV2Enabled();
-        const session = requestData.sessionId
+        const resumableSession = requestData.sessionId
           ? getAgentSession(requestData.sessionId)
+          : null;
+
+        if (requestData.sessionId && !resumableSession) {
+          sendEvent(controller, {
+            type: 'error',
+            message: '会话已过期，请重新发起搜索',
+          });
+          controller.close();
+          return;
+        }
+
+        const shouldResumeSession = Boolean(resumableSession?.pendingQuestion);
+        const session = shouldResumeSession && resumableSession
+          ? resumableSession
           : createAgentSession(requestData.query, requestData.location);
 
         if (!session) {
@@ -177,7 +191,7 @@ export async function POST(request: Request) {
           return;
         }
 
-        if (requestData.sessionId) {
+        if (shouldResumeSession) {
           appendUserMessage(session, requestData.query);
 
           if (session.pendingQuestion) {

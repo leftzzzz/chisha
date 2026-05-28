@@ -136,20 +136,26 @@ function evaluateRestaurantFacts(
   const evidence: string[] = [];
   const warnings: string[] = [];
   const conflicts: string[] = [];
-  const matchedItems = goal.requestedItems
+  const fieldMatchedItems = goal.requestedItems
     .filter((item) => itemTerms(item).some((term) => textContains(text, term)))
     .map((item) => item.name);
   const matchedCategories = goal.acceptableCategories
     .filter((category) => getPoiTerms(category.name).some((term) => textContains(text, term)))
     .map((category) => category.name);
+  const keywordMatchedItems = matchItemsBySearchKeyword(goal, plan, matchedCategories);
+  const matchedItems = Array.from(new Set([...fieldMatchedItems, ...keywordMatchedItems]));
   const requiredItems = goal.requestedItems.filter((item) => item.required);
 
-  if (matchedItems.length > 0) {
-    evidence.push(`事实字段命中菜品：${matchedItems.join('、')}`);
+  if (fieldMatchedItems.length > 0) {
+    evidence.push(`事实字段命中菜品：${fieldMatchedItems.join('、')}`);
   }
 
   if (matchedCategories.length > 0) {
     evidence.push(`事实字段命中品类：${matchedCategories.join('、')}`);
+  }
+
+  if (keywordMatchedItems.length > 0) {
+    evidence.push(`精确搜索词和兼容品类支持菜品：${keywordMatchedItems.join('、')}`);
   }
 
   if (restaurant.businessStatus === 'closed') {
@@ -200,6 +206,28 @@ function evaluateRestaurantFacts(
 
 function itemTerms(item: UserGoal['requestedItems'][number]): string[] {
   return Array.from(new Set([item.name, ...item.aliases].map((term) => term.trim()).filter(Boolean)));
+}
+
+function matchItemsBySearchKeyword(
+  goal: UserGoal,
+  plan: SearchPlan,
+  matchedCategories: string[]
+): string[] {
+  if (!plan.allowedForPrimary || (plan.searchIntent !== 'exact' && plan.searchIntent !== 'synonym')) {
+    return [];
+  }
+
+  const hasCategorySupport = matchedCategories.length > 0
+    || goal.acceptableCategories.every((category) => category.confidence < 0.7);
+  if (!hasCategorySupport) {
+    return [];
+  }
+
+  return goal.requestedItems
+    .filter((item) => itemTerms(item).some((term) =>
+      plan.keywords.some((keyword) => textContains(keyword, term) || textContains(term, keyword))
+    ))
+    .map((item) => item.name);
 }
 
 function calculateConfidence(

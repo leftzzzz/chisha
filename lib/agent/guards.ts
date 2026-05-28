@@ -6,6 +6,7 @@ import type {
   SearchPlan,
   UserGoal,
 } from './types';
+import { deterministicEvaluation } from './subagents/evaluationAgent';
 
 export interface HardConstraintGuardResult {
   passed: Restaurant[];
@@ -50,8 +51,17 @@ export function applyVerdictGuard(
   targetCount: number
 ): RuntimeVerdictGuardResult {
   const restaurantsById = new Map(restaurants.map((restaurant) => [restaurant.id, restaurant]));
+  const deterministicVerdictById = new Map(
+    deterministicEvaluation({
+      goal,
+      plan,
+      restaurants,
+      targetCount,
+    }).verdicts.map((verdict) => [verdict.restaurantId, verdict])
+  );
   const rejectedVerdicts: CandidateVerdict[] = [];
-  const guardedVerdicts = evaluation.verdicts
+  const hardRejectedIds = new Set<string>();
+  const guardedVerdictsFromModel = evaluation.verdicts
     .filter((verdict) => restaurantsById.has(verdict.restaurantId))
     .map((verdict) => {
       const restaurant = restaurantsById.get(verdict.restaurantId)!;
@@ -74,8 +84,50 @@ export function applyVerdictGuard(
         warnings: mergeStrings(verdict.warnings, hardFailures),
       };
       rejectedVerdicts.push(failedVerdict);
+      hardRejectedIds.add(failedVerdict.restaurantId);
       return failedVerdict;
+    })
+    .map((verdict) => {
+      if (hardRejectedIds.has(verdict.restaurantId)) {
+        return verdict;
+      }
+
+      return reconcileWithDeterministicVerdict(
+        verdict,
+        deterministicVerdictById.get(verdict.restaurantId),
+        plan
+      );
     });
+  const guardedVerdictIds = new Set(guardedVerdictsFromModel.map((verdict) => verdict.restaurantId));
+  const missingDeterministicVerdicts = Array.from(deterministicVerdictById.values())
+    .filter((verdict) => !guardedVerdictIds.has(verdict.restaurantId))
+    .map((verdict) => {
+      const restaurant = restaurantsById.get(verdict.restaurantId)!;
+      const hardFailures = goal.hardConstraints.flatMap((constraint) =>
+        evaluateHardConstraint(restaurant, constraint)
+      );
+      if (hardFailures.length > 0) {
+        const failedVerdict: CandidateVerdict = {
+          ...verdict,
+          status: 'failed',
+          primaryEligible: false,
+          confidence: Math.min(verdict.confidence, 0.2),
+          conflicts: mergeStrings(verdict.conflicts, hardFailures),
+          warnings: mergeStrings(verdict.warnings, hardFailures),
+        };
+        rejectedVerdicts.push(failedVerdict);
+        return failedVerdict;
+      }
+
+      return {
+        ...verdict,
+        primaryEligible: verdict.primaryEligible && plan.allowedForPrimary,
+      };
+    });
+  const guardedVerdicts = [
+    ...guardedVerdictsFromModel,
+    ...missingDeterministicVerdicts,
+  ];
   const verdictById = new Map(guardedVerdicts.map((verdict) => [verdict.restaurantId, verdict]));
   const selectedIds = orderAllowedIds(
     evaluation.selectedIds,
@@ -105,6 +157,70 @@ export function applyVerdictGuard(
       ),
     },
     rejectedVerdicts,
+  };
+}
+
+function reconcileWithDeterministicVerdict(
+  verdict: CandidateVerdict,
+  deterministicVerdict: CandidateVerdict | undefined,
+  plan: SearchPlan
+): CandidateVerdict {
+  if (!deterministicVerdict) {
+    return {
+      ...verdict,
+      primaryEligible: verdict.primaryEligible && plan.allowedForPrimary,
+    };
+  }
+
+  if (deterministicVerdict.status === 'failed') {
+    return {
+      ...verdict,
+      status: 'failed',
+      primaryEligible: false,
+      confidence: Math.min(verdict.confidence, deterministicVerdict.confidence),
+      matchedItems: mergeStrings(verdict.matchedItems, deterministicVerdict.matchedItems),
+      matchedCategories: mergeStrings(verdict.matchedCategories, deterministicVerdict.matchedCategories),
+      conflicts: mergeStrings(verdict.conflicts, deterministicVerdict.conflicts),
+      warnings: mergeStrings(verdict.warnings, deterministicVerdict.warnings),
+    };
+  }
+
+  if (verdict.status === 'failed' && deterministicVerdict.status === 'passed') {
+    return {
+      ...verdict,
+      status: 'passed',
+      primaryEligible: deterministicVerdict.primaryEligible && plan.allowedForPrimary,
+      confidence: Math.max(verdict.confidence, deterministicVerdict.confidence),
+      matchedItems: mergeStrings(verdict.matchedItems, deterministicVerdict.matchedItems),
+      matchedCategories: mergeStrings(verdict.matchedCategories, deterministicVerdict.matchedCategories),
+      conflicts: [],
+      evidence: mergeStrings(verdict.evidence, deterministicVerdict.evidence),
+      warnings: mergeStrings(
+        verdict.warnings,
+        [
+          ...deterministicVerdict.warnings,
+          '已由 Runtime guard 根据可验证字段纠正语义判定。',
+        ]
+      ),
+    };
+  }
+
+  const status = verdict.status === 'passed' || deterministicVerdict.status === 'passed'
+    ? 'passed'
+    : 'unverified';
+
+  return {
+    ...verdict,
+    status,
+    primaryEligible: status === 'passed'
+      && plan.allowedForPrimary
+      && (verdict.primaryEligible || deterministicVerdict.primaryEligible),
+    confidence: Math.max(verdict.confidence, deterministicVerdict.confidence),
+    matchedItems: mergeStrings(verdict.matchedItems, deterministicVerdict.matchedItems),
+    matchedCategories: mergeStrings(verdict.matchedCategories, deterministicVerdict.matchedCategories),
+    conflicts: mergeStrings(verdict.conflicts, deterministicVerdict.conflicts),
+    evidence: mergeStrings(verdict.evidence, deterministicVerdict.evidence),
+    warnings: mergeStrings(verdict.warnings, deterministicVerdict.warnings),
   };
 }
 

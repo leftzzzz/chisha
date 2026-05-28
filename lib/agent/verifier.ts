@@ -81,12 +81,17 @@ export function verifyCandidate(
 
   const requiredItems = goal.requestedItems.filter((item) => item.required);
   const hasStrongItemMatch = itemMatches.some((match) => match.confidence >= PRIMARY_MATCH_CONFIDENCE);
+  const hasSupportedSearchKeywordMatch = hasSearchKeywordItemMatch(itemMatches)
+    && isPrimaryKeywordPlan(plan)
+    && hasCategorySupportForKeywordEvidence(goal, categoryMatches);
 
-  if (requiredItems.length > 0 && !hasStrongItemMatch && !goal.allowBroaden) {
+  if (requiredItems.length > 0 && !hasStrongItemMatch && !hasSupportedSearchKeywordMatch && !goal.allowBroaden) {
     hardFailures.push({
       kind: 'requested_item',
       message: `未验证到明确菜品「${requiredItems.map((item) => item.name).join('、')}」。`,
     });
+  } else if (requiredItems.length > 0 && !hasStrongItemMatch && hasSupportedSearchKeywordMatch) {
+    warnings.push(`菜品「${requiredItems.map((item) => item.name).join('、')}」由精确搜索词和餐厅品类共同验证。`);
   } else if (requiredItems.length > 0 && !hasStrongItemMatch) {
     warnings.push(`只弱关联到「${requiredItems.map((item) => item.name).join('、')}」，已按放宽需求处理。`);
   }
@@ -338,6 +343,26 @@ function hasAcceptableCategoryMatch(categories: GoalCategory[], categoryMatches:
   }
 
   return categories.every((category) => category.confidence < 0.7);
+}
+
+function hasSearchKeywordItemMatch(itemMatches: ItemMatch[]): boolean {
+  return itemMatches.some((match) => match.matchedBy === 'search_keyword');
+}
+
+function isPrimaryKeywordPlan(plan: SearchPlan): boolean {
+  return plan.allowedForPrimary
+    && (plan.searchIntent === 'exact' || plan.searchIntent === 'synonym');
+}
+
+function hasCategorySupportForKeywordEvidence(
+  goal: UserGoal,
+  categoryMatches: string[]
+): boolean {
+  if (categoryMatches.length > 0) {
+    return true;
+  }
+
+  return goal.acceptableCategories.every((category) => category.confidence < 0.7);
 }
 
 function hasDefaultDiversity(goal: UserGoal): boolean {

@@ -287,15 +287,8 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
   const search = useCallback(
     async (query: string, location: Location, onError?: (errorCode: string) => void) => {
       activeQuestionRef.current = null;
-      const sessionId = isSameSearchLocation(activeLocationRef.current, location)
-        ? activeSessionIdRef.current ?? undefined
-        : undefined;
-
-      if (!sessionId) {
-        activeSessionIdRef.current = null;
-      }
-
-      await runChatSearch(query, location, onError, sessionId);
+      activeSessionIdRef.current = null;
+      await runChatSearch(query, location, onError);
     },
     [runChatSearch]
   );
@@ -321,13 +314,4 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
     search,
     answerQuestion,
   };
-}
-
-function isSameSearchLocation(left: Location | null, right: Location): boolean {
-  if (!left) {
-    return false;
-  }
-
-  return Math.abs(left.lat - right.lat) < 0.000001
-    && Math.abs(left.lng - right.lng) < 0.000001;
 }

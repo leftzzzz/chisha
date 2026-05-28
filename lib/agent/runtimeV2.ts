@@ -137,12 +137,12 @@ export async function runSearchAgentV2(
           .map((candidate) => candidate.restaurant),
       });
 
-      if (hasEnoughPassedCandidates(context)) {
+      if (hasEnoughPassedCandidates(context) || shouldStopWithCurrentPrimaryCandidates(context)) {
         break;
       }
     }
 
-    if (hasEnoughPassedCandidates(context)) {
+    if (hasEnoughPassedCandidates(context) || shouldStopWithCurrentPrimaryCandidates(context)) {
       break;
     }
   }
@@ -283,6 +283,25 @@ function searchPlanKey(plan: SearchPlan): string {
 
 function hasEnoughPassedCandidates(context: AgentContext): boolean {
   return context.candidates.filter((candidate) => isPrimaryEligible(candidate, context)).length >= context.targetCount;
+}
+
+function shouldStopWithCurrentPrimaryCandidates(context: AgentContext): boolean {
+  const primaryEligibleCandidates = context.candidates.filter((candidate) => isPrimaryEligible(candidate, context));
+  if (primaryEligibleCandidates.length === 0) {
+    return false;
+  }
+
+  const latestAttempt = context.attempts.at(-1);
+  if (!latestAttempt?.allowedForPrimary) {
+    return false;
+  }
+
+  if (latestAttempt.accepted >= context.targetCount) {
+    return true;
+  }
+
+  return (latestAttempt.searchIntent === 'exact' || latestAttempt.searchIntent === 'synonym')
+    && latestAttempt.accepted > 0;
 }
 
 function isPrimaryEligible(candidate: RestaurantCandidate, context: AgentContext): boolean {

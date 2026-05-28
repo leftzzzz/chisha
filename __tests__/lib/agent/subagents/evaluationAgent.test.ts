@@ -87,4 +87,23 @@ describe('EvaluationAgent', () => {
       primaryEligible: false,
     }));
   });
+
+  it('accepts exact dish search results when the provider category is compatible', () => {
+    const output = deterministicEvaluation({
+      goal: goal(),
+      plan: exactPlan,
+      restaurants: [
+        restaurant('r1', '社区西餐厅', '西餐厅', 300),
+      ],
+      targetCount: 8,
+    });
+
+    expect(output.selectedIds).toEqual(['r1']);
+    expect(output.verdicts[0]).toEqual(expect.objectContaining({
+      status: 'passed',
+      primaryEligible: true,
+      matchedItems: ['牛排'],
+      matchedCategories: ['西餐'],
+    }));
+  });
 });

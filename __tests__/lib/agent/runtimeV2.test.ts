@@ -94,4 +94,32 @@ describe('runSearchAgentV2', () => {
 
     expect(radii.every((radius) => radius <= 500)).toBe(true);
   });
+
+  it('stops after exact search returns usable primary recommendations', async () => {
+    const searchedPlans: SearchPlan[] = [];
+    const input: AgentInput = {
+      query: '想吃牛排',
+      location,
+      runtimeState: {
+        goal: goal({
+          relatedKeywords: ['西餐'],
+          broadenedKeywords: ['餐厅'],
+        }),
+        attempts: [],
+        candidates: [],
+      },
+    };
+
+    const result = await runSearchAgentV2(
+      input,
+      () => undefined,
+      async (plan: SearchPlan) => {
+        searchedPlans.push(plan);
+        return [restaurant('r1', '社区西餐厅', '西餐厅', 300)];
+      }
+    );
+
+    expect(searchedPlans.map((plan) => plan.searchIntent)).toEqual(['exact']);
+    expect(result.restaurants.map((item) => item.name)).toEqual(['社区西餐厅']);
+  });
 });
