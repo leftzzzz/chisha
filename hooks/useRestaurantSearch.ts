@@ -311,9 +311,10 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
           message: errorMessage,
         });
 
+        activeQuestionRef.current = null;
+        activeSessionIdRef.current = null;
         setError(errorMessage);
         onError?.(errorCode);
-        setStep('INPUT');
 
       } finally {
         setIsSearching(false);

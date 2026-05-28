@@ -272,6 +272,10 @@ export const HomePage: React.FC = () => {
     reset();
   }, [reset]);
 
+  const handleErrorBack = useCallback(() => {
+    setStep('INPUT');
+  }, [setStep]);
+
   // 选中的餐厅
   const selectedRestaurant = selectedIndex >= 0 ? state.restaurants[selectedIndex] : null;
 
@@ -300,7 +304,7 @@ export const HomePage: React.FC = () => {
         <div className="max-w-md mx-auto mt-12">
           <ErrorMessage
             error={searchError || '搜索失败，请重试'}
-            onAction={handleClose}
+            onAction={handleErrorBack}
             actionLabel="返回"
           />
         </div>
