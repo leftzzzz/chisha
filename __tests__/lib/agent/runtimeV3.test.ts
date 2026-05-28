@@ -156,6 +156,46 @@ describe('runSearchAgentV3', () => {
     expect(result.restaurants).toEqual([]);
   });
 
+  it('clarifies vague initial requests before searching', async () => {
+    const searchPlaces = jest.fn(async () => [restaurant('r1', '测试餐厅', '餐饮')]);
+    const result = await runSearchAgentV3(
+      {
+        query: '随便推荐个附近好吃的',
+        location,
+        runtimeState: {
+          attempts: [],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      searchPlaces
+    );
+
+    expect(result.paused).toBe(true);
+    expect(result.question?.question).toContain('具体想吃什么');
+    expect(searchPlaces).not.toHaveBeenCalled();
+  });
+
+  it('normalizes sentence keywords before executing search tools', async () => {
+    const plans: SearchPlan[] = [];
+    await runSearchAgentV3(
+      input(goal({
+        rawQuery: '想吃牛排',
+        acceptableCategories: [],
+        primaryKeywords: ['想吃牛排'],
+      })),
+      () => undefined,
+      async (plan) => {
+        plans.push(plan);
+        return [restaurant('r1', '牛排馆', '西餐', 300)];
+      }
+    );
+
+    expect(plans[0].keywords).toEqual(['牛排']);
+  });
+
   it('applies pending question option effects when resuming through the Supervisor', async () => {
     const first = await runSearchAgentV3(
       input(goal({

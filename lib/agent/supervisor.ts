@@ -2,6 +2,7 @@ import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
 import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
 import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
+import { extractKnownFoodTerms, isGenericSearchKeyword, normalizeSearchKeywords } from './poiTaxonomy';
 import type {
   AgentInput,
   AgentSession,
@@ -11,6 +12,7 @@ import type {
   GoalCategory,
   GoalPatch,
   PendingQuestion,
+  Preference,
   RequestedItem,
   SearchAttempt,
   UserGoal,
@@ -49,6 +51,8 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 5. 用户没有明确授权时 allowBroaden=false。
 6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
 7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
+8. 用户只说“随便/推荐/附近有什么/吃点/不知道/清淡点/健康点/便宜点/环境好/人气高”等开放或软偏好、但没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
+9. primaryKeywords 只能放适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
 
 需求归类：
 1. requestedItems 只放用户想吃的具体菜品、餐食或必须命中的食物目标；acceptableCategories 只放能满足需求的菜系/餐厅类型。
@@ -114,6 +118,18 @@ export function deterministicSupervisor(input: SearchSupervisorInput): SearchSup
     const effect = normalized
       ? input.pendingQuestion.optionEffects?.[normalized]
       : undefined;
+    if (!effect && needsClarification(normalized)) {
+      const question = clarificationNeedToPendingQuestion(createClarificationNeed());
+      return {
+        goal: {
+          ...input.previousGoal,
+          rawQuery: normalized || input.previousGoal.rawQuery,
+        },
+        question,
+        nextAction: 'ask_user',
+      };
+    }
+
     const patch = effect
       ? goalPatchFromClarificationEffect(effect)
       : buildMinimalGoalPatch(input.message);
@@ -150,19 +166,20 @@ export function buildMinimalFallbackGoal(
   preferenceSummary?: UserPreferenceSummary
 ): UserGoal {
   const trimmedQuery = query.trim();
+  const clarificationNeeded = needsClarification(trimmedQuery)
+    ? [createClarificationNeed()]
+    : [];
+  const primaryKeywords = clarificationNeeded.length > 0
+    ? []
+    : normalizeSearchKeywords([trimmedQuery]).filter((keyword) =>
+        !isGenericSearchKeyword(keyword) || isGenericAllowedQuery(trimmedQuery)
+      );
   const hardConstraints = [
     parseDistanceConstraint(trimmedQuery, preferenceSummary),
     parseBudgetConstraint(trimmedQuery, preferenceSummary),
     parseOpenNowConstraint(trimmedQuery),
     ...parseExplicitExclusions(trimmedQuery),
   ].filter((constraint): constraint is Constraint => Boolean(constraint));
-  const clarificationNeeded = needsClarification(trimmedQuery)
-    ? [{
-        reason: '用户需求缺少可验证的菜品或品类目标。',
-        question: '你想找哪类餐厅，或具体想吃什么？',
-        allowFreeText: true,
-      }]
-    : [];
 
   return {
     intent: 'find_restaurants',
@@ -170,7 +187,7 @@ export function buildMinimalFallbackGoal(
     requestedItems: [],
     acceptableCategories: [],
     alternativeGroups: [],
-    primaryKeywords: trimmedQuery ? [trimmedQuery] : [],
+    primaryKeywords,
     relatedKeywords: [],
     broadenedKeywords: [],
     hardConstraints,
@@ -256,15 +273,20 @@ export function clarificationNeedToPendingQuestion(
 function buildMinimalGoalPatch(answer: string): GoalPatch {
   const trimmed = answer.trim();
   const allowsBroaden = /放宽|扩大|远一点|候补/.test(trimmed);
+  const keywords = allowsBroaden || needsClarification(trimmed)
+    ? []
+    : normalizeSearchKeywords([trimmed]).filter((keyword) => !isGenericSearchKeyword(keyword));
   const constraints = [
     parseDistanceConstraint(trimmed),
     parseBudgetConstraint(trimmed),
     parseOpenNowConstraint(trimmed),
     ...parseExplicitExclusions(trimmed),
   ].filter((constraint): constraint is Constraint => Boolean(constraint));
+  const softPreference = inferSoftPreference(trimmed);
 
   return GoalPatchSchema.parse({
-    addRequestedItems: trimmed && !allowsBroaden ? [{ name: trimmed, required: true, aliases: [] }] : [],
+    addRequestedItems: keywords.map((keyword) => ({ name: keyword, required: true, aliases: [] })),
+    addSoftPreferences: softPreference ? [softPreference] : undefined,
     addConstraints: constraints,
     allowBroaden: allowsBroaden ? true : undefined,
     reason: '根据用户追问回复更新目标。',
@@ -443,7 +465,60 @@ function parseExplicitExclusions(query: string): Constraint[] {
 }
 
 function needsClarification(query: string): boolean {
-  return !query.trim() || /随便|都行|吃点|吃什么|不知道吃啥|你决定/.test(query);
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return true;
+  }
+
+  if (extractKnownFoodTerms(trimmed).length > 0) {
+    return false;
+  }
+
+  if (/随便|都行|推荐|附近有什么|吃点|吃什么|不知道吃啥|不知道|你决定|清淡|健康|养生|低卡|便宜|实惠|近一点|附近|环境|人气|热门|评分|好吃/.test(trimmed)) {
+    return true;
+  }
+
+  if (normalizeSearchKeywords([trimmed]).some((keyword) => !isGenericSearchKeyword(keyword)) && !inferSoftPreference(trimmed)) {
+    return false;
+  }
+
+  return false;
+}
+
+function createClarificationNeed() {
+  return {
+    reason: '用户需求缺少可验证的菜品或品类目标。',
+    question: '你想找哪类餐厅，或具体想吃什么？',
+    allowFreeText: true,
+  };
+}
+
+function isGenericAllowedQuery(query: string): boolean {
+  return /餐厅|美食/.test(query) && !needsClarification(query);
+}
+
+function inferSoftPreference(query: string): Preference | null {
+  if (/清淡|不油腻/.test(query)) {
+    return { name: '清淡', weight: 2, verifiable: false };
+  }
+
+  if (/健康|养生|低卡/.test(query)) {
+    return { name: '健康', weight: 2, verifiable: false };
+  }
+
+  if (/便宜|实惠|人均低/.test(query)) {
+    return { name: '价格友好', weight: 1, verifiable: false };
+  }
+
+  if (/环境|氛围/.test(query)) {
+    return { name: '环境氛围', weight: 1, verifiable: false };
+  }
+
+  if (/人气|热门|评分|评价|好吃/.test(query)) {
+    return { name: '口碑优先', weight: 1, verifiable: false };
+  }
+
+  return null;
 }
 
 function mergeStrings(left: string[], right: string[]): string[] {
@@ -533,7 +608,7 @@ function userGoalJsonSchema() {
       },
       primaryKeywords: {
         type: 'array',
-        description: '搜索主关键词，只放菜品、菜系、餐厅类型；不要放软偏好词。',
+        description: '搜索主关键词，只放适合高德 keywords 的单个菜品、菜系、餐厅类型；不要放整句、组合词或软偏好词。',
         items: { type: 'string' },
       },
       relatedKeywords: { type: 'array', items: { type: 'string' } },

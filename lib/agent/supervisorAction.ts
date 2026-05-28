@@ -1,7 +1,7 @@
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
 import { AgentActionSchema } from './schemas/action';
-import { DEFAULT_POI_TYPE, lookupFoodPoiTypes } from './poiTaxonomy';
+import { DEFAULT_POI_TYPE, lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import type {
   AgentAction,
@@ -45,6 +45,7 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，也是餐厅搜索唯一 l
 硬规则：
 - 不要编造餐厅事实、距离、营业状态、评分、菜单或排队情况。
 - 不要生成高德 typecode；poiType 只能为空或沿用输入中已有值。
+- SearchPlan.keywords 必须是单个餐饮意图词数组，例如 ["牛排"] 或 ["川菜","咖啡"]；不要输出整句，也不要用 "|" 拼接多个关键词。
 - strict 距离、明确排除项、不吃辣等硬约束不能被自动放宽。
 - 用户没有 allowBroaden 时，broadened/fallback 搜索的 allowedForPrimary 必须为 false。
 - selectedIds 只能来自候选摘要中的 id；未验证或 failed 候选不能作为主推荐。`;
@@ -258,8 +259,7 @@ function buildPlan(
   allowedForPrimary: boolean,
   reason: string
 ): SearchPlan {
-  const normalizedKeywords = Array.from(new Set(keywords.map((keyword) => keyword.trim()).filter(Boolean)))
-    .slice(0, 5);
+  const normalizedKeywords = normalizeSearchKeywords(keywords);
   const poiType = normalizedKeywords.length === 1
     ? lookupFoodPoiTypes(normalizedKeywords[0]) ?? context.goal.poiType
     : undefined;
@@ -283,8 +283,9 @@ function initialKeywords(context: AgentContext): string[] {
 }
 
 function hasTriedKeyword(context: AgentContext, keyword: string): boolean {
+  const normalizedKeywords = normalizeSearchKeywords([keyword]);
   return context.attempts.some((attempt) =>
-    attempt.keywords.some((attemptKeyword) => attemptKeyword === keyword)
+    attempt.keywords.some((attemptKeyword) => normalizedKeywords.includes(attemptKeyword))
   );
 }
 

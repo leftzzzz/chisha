@@ -165,14 +165,20 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({
           <h3 className="text-lg font-semibold text-gray-800">
             {getStatusLabel(status)}
           </h3>
-          <p className="text-sm text-gray-600 mt-1">
-            {message}
-          </p>
+          {status !== 'question' && message && (
+            <p className="text-sm text-gray-600 mt-1">
+              {message}
+            </p>
+          )}
         </div>
       </div>
 
       {status === 'question' && question && (
         <div className="space-y-4">
+          <p className="text-sm text-gray-700">
+            {question.question}
+          </p>
+
           {question.options && question.options.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {question.options.map((option) => (

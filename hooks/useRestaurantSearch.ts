@@ -47,6 +47,17 @@ export interface UseRestaurantSearchReturn {
   answerQuestion: (answer: string, onError?: (errorCode: string) => void) => Promise<void>;
 }
 
+function isSameQuestion(left?: AgentQuestion | null, right?: AgentQuestion | null): boolean {
+  if (!left || !right) {
+    return false;
+  }
+
+  return left.sessionId === right.sessionId
+    && left.question === right.question
+    && left.allowFreeText === right.allowFreeText
+    && (left.options ?? []).join('\u0000') === (right.options ?? []).join('\u0000');
+}
+
 /**
  * useRestaurantSearch Hook
  *
@@ -90,6 +101,22 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
   const activeLocationRef = useRef<Location | null>(null);
   const activeQuestionRef = useRef<AgentQuestion | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
+
+  const setQuestionProgress = useCallback((question: AgentQuestion) => {
+    activeQuestionRef.current = question;
+    activeSessionIdRef.current = question.sessionId;
+    setProgress(prev => {
+      if (prev.status === 'question' && isSameQuestion(prev.question, question)) {
+        return prev;
+      }
+
+      return {
+        status: 'question',
+        message: question.question,
+        question,
+      };
+    });
+  }, []);
 
   /**
    * 执行 Agent 搜索或会话续跑
@@ -214,13 +241,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
           },
 
           onQuestion: (question) => {
-            activeQuestionRef.current = question;
-            activeSessionIdRef.current = question.sessionId;
-            setProgress({
-              status: 'question',
-              message: question.question,
-              question,
-            });
+            setQuestionProgress(question);
           },
 
           onSessionPaused: (sessionId) => {
@@ -248,12 +269,9 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         }, abortController.signal, sessionId, preferenceSummary);
 
         if (result.paused && result.question) {
-          activeQuestionRef.current = result.question;
-          activeSessionIdRef.current = result.sessionId ?? result.question.sessionId;
-          setProgress({
-            status: 'question',
-            message: result.question.question,
-            question: result.question,
+          setQuestionProgress({
+            ...result.question,
+            sessionId: result.sessionId ?? result.question.sessionId,
           });
           return;
         }
@@ -305,7 +323,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         }
       }
     },
-    [setStep, setRestaurantsWithCandidates, setError]
+    [setStep, setRestaurantsWithCandidates, setError, setQuestionProgress]
   );
 
   const search = useCallback(

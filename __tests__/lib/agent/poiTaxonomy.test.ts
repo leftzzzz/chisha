@@ -1,6 +1,8 @@
 import {
   DEFAULT_POI_TYPE,
+  extractKnownFoodTerms,
   getPoiTerms,
+  normalizeSearchKeywords,
   resolvePlansWithPoiTaxonomy,
   resolvePoiTypesForKeyword,
 } from '@/lib/agent/poiTaxonomy';
@@ -55,5 +57,16 @@ describe('poiTaxonomy', () => {
 
   it('exposes canonical terms for semantic agents without duplicating tables', () => {
     expect(getPoiTerms('日料')).toEqual(expect.arrayContaining(['日本料理', '寿司']));
+  });
+
+  it('normalizes sentence-like or grouped keywords for Amap single-intent requests', () => {
+    expect(normalizeSearchKeywords(['想吃牛排'])).toEqual(['牛排']);
+    expect(normalizeSearchKeywords(['川菜|咖啡'])).toEqual(['川菜', '咖啡']);
+    expect(normalizeSearchKeywords(['附近有什么吃的'])).toEqual(['餐厅']);
+  });
+
+  it('extracts known food terms without turning soft preferences into food targets', () => {
+    expect(extractKnownFoodTerms('想吃日料或者韩餐')).toEqual(['日料', '韩餐']);
+    expect(extractKnownFoodTerms('清淡一点')).toEqual([]);
   });
 });

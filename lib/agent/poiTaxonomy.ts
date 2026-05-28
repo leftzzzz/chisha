@@ -11,6 +11,9 @@ export const MAX_SEARCH_KEYWORDS = 5;
 export const MAX_POI_PAGES = 5;
 export const MAX_SEARCH_REQUESTS_PER_CALL = 8;
 
+const KEYWORD_SPLIT_PATTERN = /[|｜、,，;；/／]|\s+(?:or|and)\s+|(?:或者|还是|以及|跟|或)/i;
+const GENERIC_KEYWORDS = new Set(['餐厅', '美食']);
+
 interface PoiTaxonomyEntry {
   canonical: string;
   terms: string[];
@@ -46,10 +49,93 @@ export const POI_TAXONOMY: PoiTaxonomyEntry[] = [
 
 export function normalizeSearchKeywords(keywords: string[]): string[] {
   const normalized = Array.from(new Set(
-    keywords.map((keyword) => keyword.trim()).filter(Boolean)
+    keywords.flatMap(normalizeKeywordText).filter(Boolean)
   )).slice(0, MAX_SEARCH_KEYWORDS);
 
-  return normalized.length > 0 ? normalized : [''];
+  return normalized.length > 0 ? normalized : ['餐厅'];
+}
+
+export function extractKnownFoodTerms(text: string): string[] {
+  const normalizedText = text.trim().toLowerCase();
+  if (!normalizedText) {
+    return [];
+  }
+
+  const candidates = POI_TAXONOMY.flatMap((entry) =>
+    entry.terms.map((term) => ({
+      term,
+      start: normalizedText.indexOf(term.toLowerCase()),
+    }))
+  )
+    .filter((match) => match.start >= 0)
+    .sort((left, right) =>
+      left.start - right.start || right.term.length - left.term.length
+    );
+
+  const selected: Array<{ term: string; start: number; end: number }> = [];
+  for (const candidate of candidates) {
+    const end = candidate.start + candidate.term.length;
+    const overlaps = selected.some((item) =>
+      candidate.start < item.end && end > item.start
+    );
+    if (!overlaps) {
+      selected.push({ ...candidate, end });
+    }
+  }
+
+  return Array.from(new Set(selected.map((item) => normalizeKnownTerm(item.term))));
+}
+
+export function isGenericSearchKeyword(keyword: string): boolean {
+  return GENERIC_KEYWORDS.has(keyword.trim());
+}
+
+function normalizeKeywordText(keyword: string): string[] {
+  const trimmedKeyword = keyword.trim();
+  if (!trimmedKeyword) {
+    return [];
+  }
+
+  const segments = trimmedKeyword
+    .split(KEYWORD_SPLIT_PATTERN)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const searchSegments = segments.length > 0 ? segments : [trimmedKeyword];
+  const normalized: string[] = [];
+
+  for (const segment of searchSegments) {
+    const knownTerms = extractKnownFoodTerms(segment);
+    if (knownTerms.length > 0) {
+      normalized.push(...knownTerms);
+      continue;
+    }
+
+    const stripped = stripSearchIntentWords(segment);
+    if (!stripped) {
+      continue;
+    }
+
+    const strippedTerms = extractKnownFoodTerms(stripped);
+    normalized.push(...(strippedTerms.length > 0 ? strippedTerms : [stripped]));
+  }
+
+  return normalized;
+}
+
+function stripSearchIntentWords(text: string): string {
+  return text
+    .trim()
+    .replace(/^(我|我们|一个|一家|个|附近|周边|今天|今晚|中午|晚上|午餐|晚餐|夜宵|现在|随便|都行|想要|想|要|找|搜|搜索|推荐|来点|吃点|吃|喝点|喝|有没有|有啥|有什么)+/u, '')
+    .replace(/(附近|周边|好吃的|吃的|喝的|一点|一些|吧|吗|呢|呀|啊|的)+$/u, '')
+    .trim();
+}
+
+function normalizeKnownTerm(term: string): string {
+  if (term === '喝点' || term === '喝的') {
+    return '饮品';
+  }
+
+  return term;
 }
 
 export function getPagesPerKeyword(keywordCount: number, requestedPages: number): number {

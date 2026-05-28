@@ -10,6 +10,7 @@ import { applyHardConstraintGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import { SearchPlanSchema } from './schemas/plan';
 import { finalizeRecommendations } from './resultAssembler';
+import { extractKnownFoodTerms, isGenericSearchKeyword, normalizeSearchKeywords } from './poiTaxonomy';
 import {
   createActionRecord,
   decideSearchSupervisorAction,
@@ -60,11 +61,13 @@ export async function runSearchAgentV3(
   const context = createInitialContext(input, goal);
   const initialQuestion = supervisorOutput.question
     ?? getInitialClarifyingQuestion(goal);
+  const clarifyingQuestion = initialQuestion
+    ?? getImplicitClarifyingQuestion(input, goal);
 
-  if (initialQuestion) {
-    const action: AgentAction = { type: 'ask_user', question: initialQuestion };
+  if (clarifyingQuestion) {
+    const action: AgentAction = { type: 'ask_user', question: clarifyingQuestion };
     appendAction(context, action, emit);
-    return buildPausedResult(context, initialQuestion);
+    return buildPausedResult(context, clarifyingQuestion);
   }
 
   while (context.actions.length < context.maxActions) {
@@ -192,6 +195,55 @@ function getInitialClarifyingQuestion(goal: UserGoal): PendingQuestion | null {
   return clarificationNeed ? clarificationNeedToPendingQuestion(clarificationNeed) : null;
 }
 
+function getImplicitClarifyingQuestion(input: AgentInput, goal: UserGoal): PendingQuestion | null {
+  const isFreshGoal = !input.runtimeState?.goal;
+  const isClarifyingAnswer = Boolean(input.runtimeState?.pendingQuestion);
+  if (!isFreshGoal && !isClarifyingAnswer) {
+    return null;
+  }
+
+  if (hasConcreteSearchTarget(goal)) {
+    return null;
+  }
+
+  if (!isAmbiguousOrPreferenceOnly(input.query) && normalizeSearchKeywords([input.query]).some((keyword) => !isGenericSearchKeyword(keyword))) {
+    return null;
+  }
+
+  return {
+    reason: '需求还不够具体，缺少可验证的菜品、菜系或餐厅类型。',
+    question: '你具体想吃什么菜、菜系或餐厅类型？',
+    allowFreeText: true,
+  };
+}
+
+function hasConcreteSearchTarget(goal: UserGoal): boolean {
+  const terms = [
+    ...goal.requestedItems.map((item) => item.name),
+    ...goal.acceptableCategories.map((category) => category.name),
+    ...goal.primaryKeywords,
+  ]
+    .map((term) => term.trim())
+    .filter(Boolean);
+
+  return terms.some((term) =>
+    !isGenericSearchKeyword(term) && !isAmbiguousOrPreferenceOnly(term)
+  );
+}
+
+function isAmbiguousOrPreferenceOnly(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return true;
+  }
+
+  if (extractKnownFoodTerms(trimmed).length > 0) {
+    return false;
+  }
+
+  return /随便|都行|推荐|附近有什么|吃点|吃什么|不知道|你决定|清淡|健康|养生|低卡|便宜|实惠|近一点|附近|环境|人气|热门|评分|好吃/.test(trimmed);
+}
+
 function guardAction(action: AgentAction, context: AgentV3Context): GuardedAction {
   if (action.type === 'search') {
     return guardSearchAction(action, context);
@@ -226,7 +278,7 @@ function guardSearchAction(
     };
   }
 
-  const keywords = Array.from(new Set(action.plan.keywords.map((keyword) => keyword.trim()).filter(Boolean)))
+  const keywords = normalizeSearchKeywords(action.plan.keywords)
     .filter((keyword) => !context.goal.exclusions.some((exclusion) => keyword.includes(exclusion)))
     .slice(0, 5);
   if (keywords.length !== action.plan.keywords.length) {

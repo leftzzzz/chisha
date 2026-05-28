@@ -31,7 +31,7 @@ describe('SearchSupervisorAgent', () => {
     const output = deterministicSupervisor({ message: '想吃牛排' });
 
     expect(output.goal).toEqual(expect.objectContaining({
-      primaryKeywords: ['想吃牛排'],
+      primaryKeywords: ['牛排'],
       requestedItems: [],
       acceptableCategories: [],
       allowBroaden: false,
@@ -118,5 +118,20 @@ describe('SearchSupervisorAgent', () => {
     expect(session.goal?.hardConstraints).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: 'distance', maxMeters: 5000 })])
     );
+  });
+
+  it('keeps asking when a clarification answer is still only a soft preference', () => {
+    const output = deterministicSupervisor({
+      message: '清淡一点',
+      previousGoal: goal({ primaryKeywords: [] }),
+      pendingQuestion: {
+        question: '你想找哪类餐厅，或具体想吃什么？',
+        allowFreeText: true,
+      },
+    });
+
+    expect(output.nextAction).toBe('ask_user');
+    expect(output.question?.question).toContain('具体想吃什么');
+    expect(output.patch).toBeUndefined();
   });
 });

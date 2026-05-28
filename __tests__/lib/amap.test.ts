@@ -118,6 +118,41 @@ describe('amapPoiSearch', () => {
     expect(params.get('types')).toBe('050100');
   });
 
+  it('normalizes sentence-like keywords before calling Amap', async () => {
+    process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
+    const requestUrls: string[] = [];
+
+    jest.doMock('@/lib/withTimeout', () => ({
+      fetchWithTimeout: jest.fn(async (url: string) => {
+        requestUrls.push(url);
+
+        return {
+          ok: true,
+          json: async () => ({
+            status: '1',
+            count: '1',
+            info: 'OK',
+            infocode: '10000',
+            pois: [amapPoi({
+              id: 'steak',
+              name: '牛排馆',
+              type: '餐饮服务;外国餐厅;西餐厅',
+              typecode: '050203',
+            })],
+          }),
+        };
+      }),
+    }));
+
+    const { amapPoiSearch } = await import('@/lib/amap');
+    await amapPoiSearch(['想吃牛排'], location, 1800, undefined, 1);
+
+    const params = new URL(requestUrls[0]).searchParams;
+    expect(params.get('keywords')).toBe('牛排');
+    expect(params.get('types')).toBe('050203');
+  });
+
   it('caches successful Amap POI pages to avoid duplicate quota usage', async () => {
     process.env.AMAP_API_KEY = 'test-key';
     process.env.AMAP_MAX_QPS = '1000';

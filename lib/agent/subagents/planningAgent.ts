@@ -1,5 +1,6 @@
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
+import { normalizeSearchKeywords } from '../poiTaxonomy';
 import { PlanningAgentOutputSchema } from '../schemas/plan';
 import type {
   PlanningAgentOutput,
@@ -27,7 +28,8 @@ const SYSTEM_PROMPT = `你是餐厅搜索系统的 PlanningAgent。你只负责�
 2. 用户没有 allowBroaden 时，broadened/fallback 计划不能进入主推荐，allowedForPrimary 必须为 false。
 3. strict 距离、预算、排除项等硬约束不能被你放宽。
 4. 同一轮可包含多个并列目标，例如“日料或韩餐”需要同时保留。
-5. 输出为什么继续搜，以及本轮目标是 exact、synonym、broadened 还是 fallback。`;
+5. target.label 必须是单个餐饮意图词，例如“牛排”“川菜”“咖啡”，不要输出整句或用“|”合并多个关键词。
+6. 输出为什么继续搜，以及本轮目标是 exact、synonym、broadened 还是 fallback。`;
 
 const PLANNING_FUNCTION = {
   name: 'planRestaurantSearchTargets',
@@ -143,8 +145,11 @@ function buildTargets(
   goal: UserGoal,
   strictness: SearchTarget['strictness']
 ): SearchTarget[] {
-  return Array.from(new Set(keywords.map((keyword) => keyword.trim()).filter(Boolean)))
-    .slice(0, 5)
+  if (!keywords.some((keyword) => keyword.trim())) {
+    return [];
+  }
+
+  return normalizeSearchKeywords(keywords)
     .map((label) => ({
       label,
       kind: inferTargetKind(label, goal),
