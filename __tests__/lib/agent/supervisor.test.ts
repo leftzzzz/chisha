@@ -231,4 +231,19 @@ describe('SearchSupervisorAgent', () => {
       parsed.goal?.clarificationNeeded[0].options?.[0].effect?.addCategories
     ).toEqual(['川菜']);
   });
+
+  it('defaults omitted goal arrays from model output', () => {
+    const parsed = SearchSupervisorOutputSchema.parse({
+      goal: {
+        intent: 'find_restaurants',
+        rawQuery: '想吃日料',
+      },
+      nextAction: 'plan',
+    });
+
+    expect(parsed.goal?.alternativeGroups).toEqual([]);
+    expect(parsed.goal?.primaryKeywords).toEqual([]);
+    expect(parsed.goal?.clarificationNeeded).toEqual([]);
+    expect(parsed.goal?.allowBroaden).toBe(false);
+  });
 });
