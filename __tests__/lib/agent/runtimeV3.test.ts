@@ -178,6 +178,51 @@ describe('runSearchAgentV3', () => {
     expect(searchPlaces).not.toHaveBeenCalled();
   });
 
+  it('continues with fallback search when clarification answer allows any recommendation', async () => {
+    const first = await runSearchAgentV3(
+      {
+        query: '随便推荐个附近好吃的',
+        location,
+        runtimeState: {
+          attempts: [],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      async () => []
+    );
+
+    expect(first.paused).toBe(true);
+
+    const searchedPlans: SearchPlan[] = [];
+    const second = await runSearchAgentV3(
+      {
+        query: '都行',
+        location,
+        runtimeState: first.runtimeState,
+      },
+      () => undefined,
+      async (plan) => {
+        searchedPlans.push(plan);
+        return [
+          restaurant('r1', '社区餐厅', '餐饮', 300),
+          restaurant('r2', '附近美食广场', '美食', 400),
+          restaurant('r3', '家常饭店', '餐厅', 500),
+        ];
+      }
+    );
+
+    expect(second.paused).not.toBe(true);
+    expect(searchedPlans.some((plan) => plan.searchIntent === 'fallback')).toBe(true);
+    expect(second.restaurants.map((item) => item.name)).toEqual(expect.arrayContaining([
+      '社区餐厅',
+      '附近美食广场',
+      '家常饭店',
+    ]));
+  });
+
   it('normalizes sentence keywords before executing search tools', async () => {
     const plans: SearchPlan[] = [];
     await runSearchAgentV3(

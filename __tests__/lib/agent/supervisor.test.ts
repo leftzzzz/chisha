@@ -134,4 +134,25 @@ describe('SearchSupervisorAgent', () => {
     expect(output.question?.question).toContain('具体想吃什么');
     expect(output.patch).toBeUndefined();
   });
+
+  it('treats open clarification answers as consent for generic recommendations', () => {
+    const output = deterministicSupervisor({
+      message: '都行',
+      previousGoal: goal({ primaryKeywords: [], clarificationNeeded: [] }),
+      pendingQuestion: {
+        question: '你想找哪类餐厅，或具体想吃什么？',
+        allowFreeText: true,
+      },
+    });
+
+    expect(output.nextAction).toBe('plan');
+    expect(output.question).toBeUndefined();
+    expect(output.patch).toEqual(expect.objectContaining({
+      allowBroaden: true,
+    }));
+    expect(output.patch?.addRequestedItems).toEqual([]);
+    expect(output.patch?.addSoftPreferences).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: '默认多样性' })])
+    );
+  });
 });

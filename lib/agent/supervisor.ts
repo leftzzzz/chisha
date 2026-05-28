@@ -52,7 +52,8 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
 7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
 8. 用户只说“随便/推荐/附近有什么/吃点/不知道/清淡点/健康点/便宜点/环境好/人气高”等开放或软偏好、但没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
-9. primaryKeywords 只能放适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
+9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true 并进入 plan，不要再次 ask_user。
+10. primaryKeywords 只能放适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
 
 需求归类：
 1. requestedItems 只放用户想吃的具体菜品、餐食或必须命中的食物目标；acceptableCategories 只放能满足需求的菜系/餐厅类型。
@@ -80,6 +81,14 @@ const SUPERVISOR_FUNCTION = {
 export async function runSearchSupervisor(
   input: SearchSupervisorInput
 ): Promise<SearchSupervisorOutput> {
+  const openRecommendationPatch = buildOpenRecommendationConsentPatch(input);
+  if (openRecommendationPatch) {
+    return {
+      patch: openRecommendationPatch,
+      nextAction: 'plan',
+    };
+  }
+
   if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
     return deterministicSupervisor(input);
   }
@@ -115,6 +124,14 @@ export async function understandSearchGoal(input: AgentInput): Promise<UserGoal>
 export function deterministicSupervisor(input: SearchSupervisorInput): SearchSupervisorOutput {
   if (input.previousGoal && input.pendingQuestion) {
     const normalized = input.message.trim();
+    const openRecommendationPatch = buildOpenRecommendationConsentPatch(input);
+    if (openRecommendationPatch) {
+      return {
+        patch: openRecommendationPatch,
+        nextAction: 'plan',
+      };
+    }
+
     const effect = normalized
       ? input.pendingQuestion.optionEffects?.[normalized]
       : undefined;
@@ -272,7 +289,8 @@ export function clarificationNeedToPendingQuestion(
 
 function buildMinimalGoalPatch(answer: string): GoalPatch {
   const trimmed = answer.trim();
-  const allowsBroaden = /放宽|扩大|远一点|候补/.test(trimmed);
+  const openRecommendationConsent = isOpenRecommendationConsent(trimmed);
+  const allowsBroaden = openRecommendationConsent || /放宽|扩大|远一点|候补/.test(trimmed);
   const keywords = allowsBroaden || needsClarification(trimmed)
     ? []
     : normalizeSearchKeywords([trimmed]).filter((keyword) => !isGenericSearchKeyword(keyword));
@@ -283,14 +301,26 @@ function buildMinimalGoalPatch(answer: string): GoalPatch {
     ...parseExplicitExclusions(trimmed),
   ].filter((constraint): constraint is Constraint => Boolean(constraint));
   const softPreference = inferSoftPreference(trimmed);
+  const softPreferences = [
+    ...(openRecommendationConsent ? [{ name: '默认多样性', weight: 1, verifiable: true }] : []),
+    ...(softPreference ? [softPreference] : []),
+  ];
 
   return GoalPatchSchema.parse({
     addRequestedItems: keywords.map((keyword) => ({ name: keyword, required: true, aliases: [] })),
-    addSoftPreferences: softPreference ? [softPreference] : undefined,
+    addSoftPreferences: softPreferences.length > 0 ? softPreferences : undefined,
     addConstraints: constraints,
     allowBroaden: allowsBroaden ? true : undefined,
     reason: '根据用户追问回复更新目标。',
   });
+}
+
+function buildOpenRecommendationConsentPatch(input: SearchSupervisorInput): GoalPatch | null {
+  if (!input.previousGoal || !input.pendingQuestion || !isOpenRecommendationConsent(input.message)) {
+    return null;
+  }
+
+  return buildMinimalGoalPatch(input.message);
 }
 
 function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatch {
@@ -483,6 +513,19 @@ function needsClarification(query: string): boolean {
   }
 
   return false;
+}
+
+function isOpenRecommendationConsent(query: string): boolean {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (extractKnownFoodTerms(trimmed).length > 0) {
+    return false;
+  }
+
+  return /都行|都可以|均可|什么都行|吃啥都行|随便|随意|不知道|你决定|你来定|你看着办|你安排|直接推荐|帮我推荐|按你推荐|默认推荐/.test(trimmed);
 }
 
 function createClarificationNeed() {
