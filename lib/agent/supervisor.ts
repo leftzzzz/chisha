@@ -2,11 +2,6 @@ import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
 import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
 import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
-import {
-  extractKnownFoodTerms,
-  isGenericSearchKeyword,
-  normalizeSearchKeywords,
-} from './poiTaxonomy';
 import type {
   AgentMessage,
   AgentInput,
@@ -17,7 +12,6 @@ import type {
   GoalCategory,
   GoalPatch,
   PendingQuestion,
-  Preference,
   RequestedItem,
   SearchAttempt,
   UserGoal,
@@ -61,10 +55,11 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 8. 用户只说“随便/推荐/附近有什么/吃点/不知道/清淡点/健康点/便宜点/环境好/人气高”等开放或软偏好、但没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
 9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true 并进入 plan，不要再次 ask_user。
 10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
-11. primaryKeywords 只能放适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
+11. primaryKeywords 只能放用户正向想吃的、适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
 12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords 和 broadenedKeywords 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
 13. 处理 pendingQuestion 的用户回复时，必须结合 previousGoal.rawQuery、pendingQuestion 和历史 messages 重新总结完整需求；当前 message 不是独立新需求。
 14. 如果用户回复命中的是上轮澄清问题的选项标签或分类说明，不要把该标签本身作为搜索词；优先通过 pendingQuestion.optionEffects 或历史上下文恢复被澄清的原始目标。
+15. 否定条件、口味限制、排除项、开放授权和软偏好都不是搜索目标，不能进入 primaryKeywords、requestedItems 或 acceptableCategories。类似“不要辣的，其他都可以”应表达为硬约束/开放授权，并在缺少正向餐饮目标时追问，不要输出“不辣”“都可以”作为关键词。
 
 需求归类：
 1. requestedItems 只放用户想吃的具体菜品、餐食或必须命中的食物目标；acceptableCategories 只放能满足需求的菜系/餐厅类型。
@@ -92,17 +87,17 @@ const SUPERVISOR_FUNCTION = {
 export async function runSearchSupervisor(
   input: SearchSupervisorInput
 ): Promise<SearchSupervisorOutput> {
-  if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
-    return deterministicSupervisor(input);
+  if (!OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is required for SearchSupervisorAgent');
   }
 
   try {
     return normalizeSupervisorOutput(input, await callSupervisorModel(input));
   } catch (error) {
-    logger.warn('SearchSupervisorAgent unavailable, using minimal fallback', {
+    logger.warn('SearchSupervisorAgent unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
-    return deterministicSupervisor(input);
+    throw error;
   }
 }
 
@@ -131,10 +126,10 @@ function normalizeSupervisorOutput(
     };
   }
 
-  logger.warn('SearchSupervisorAgent returned no goal patch for a pending clarification answer, using deterministic parser', {
+  logger.warn('SearchSupervisorAgent returned no goal patch for a pending clarification answer', {
     question: input.pendingQuestion.question,
   });
-  return deterministicSupervisor(input);
+  throw new Error('SearchSupervisorAgent returned no goal patch for a pending clarification answer');
 }
 
 function normalizePendingAnswerPatch(previousGoal: UserGoal, patch: GoalPatch): GoalPatch {
@@ -176,94 +171,7 @@ export async function understandSearchGoal(input: AgentInput): Promise<UserGoal>
     return applyGoalPatch(input.runtimeState.goal, output.patch, input.query);
   }
 
-  return buildMinimalFallbackGoal(input.query, input.preferenceSummary);
-}
-
-export function deterministicSupervisor(input: SearchSupervisorInput): SearchSupervisorOutput {
-  if (input.previousGoal && input.pendingQuestion) {
-    const normalized = input.message.trim();
-    const pendingAnswerPatch = buildPendingQuestionAnswerPatch(input);
-    if (pendingAnswerPatch) {
-      return {
-        patch: pendingAnswerPatch,
-        nextAction: 'plan',
-      };
-    }
-
-    const effect = normalized
-      ? input.pendingQuestion.optionEffects?.[normalized]
-      : undefined;
-    const patch = effect
-      ? goalPatchFromClarificationEffect(effect)
-      : buildMinimalGoalPatch(input.message);
-    return {
-      patch,
-      nextAction: 'plan',
-    };
-  }
-
-  if (input.previousGoal) {
-    return {
-      goal: {
-        ...input.previousGoal,
-        rawQuery: input.message,
-      },
-      nextAction: 'plan',
-    };
-  }
-
-  const goal = buildMinimalFallbackGoal(input.message, input.preferenceSummary);
-  const question = goal.clarificationNeeded.length > 0
-    ? clarificationNeedToPendingQuestion(goal.clarificationNeeded[0])
-    : undefined;
-
-  return {
-    goal,
-    question,
-    nextAction: question ? 'ask_user' : 'plan',
-  };
-}
-
-export function buildMinimalFallbackGoal(
-  query: string,
-  preferenceSummary?: UserPreferenceSummary
-): UserGoal {
-  const trimmedQuery = query.trim();
-  const clarificationNeeded = needsClarification(trimmedQuery)
-    ? [createClarificationNeed()]
-    : [];
-  const primaryKeywords = clarificationNeeded.length > 0
-    ? []
-    : normalizeSearchKeywords([trimmedQuery]).filter((keyword) =>
-        !isGenericSearchKeyword(keyword) || isGenericAllowedQuery(trimmedQuery)
-      );
-  const hardConstraints = [
-    parseDistanceConstraint(trimmedQuery, preferenceSummary),
-    parseBudgetConstraint(trimmedQuery, preferenceSummary),
-    parseOpenNowConstraint(trimmedQuery),
-    ...parseExplicitExclusions(trimmedQuery),
-  ].filter((constraint): constraint is Constraint => Boolean(constraint));
-
-  return {
-    intent: 'find_restaurants',
-    rawQuery: query,
-    requestedItems: [],
-    acceptableCategories: [],
-    alternativeGroups: [],
-    primaryKeywords,
-    relatedKeywords: [],
-    broadenedKeywords: [],
-    hardConstraints,
-    softPreferences: [],
-    exclusions: hardConstraints
-      .filter((constraint) => constraint.kind === 'exclude_category')
-      .flatMap((constraint) => constraint.values ?? []),
-    ambiguity: OPENAI_API_KEY
-      ? []
-      : ['Agent 目标解析不可用，已使用最小降级目标，不做菜品/菜系语义扩展。'],
-    clarificationNeeded,
-    allowBroaden: false,
-  };
+  throw new Error('SearchSupervisorAgent returned no goal or patch');
 }
 
 export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal.rawQuery): UserGoal {
@@ -321,13 +229,19 @@ export function applySupervisorClarifyingAnswer(session: AgentSession, answer: s
   }
 
   const normalized = answer.trim();
-  const patch = buildPendingQuestionAnswerPatch({
-    message: normalized,
-    previousGoal: goal,
-    pendingQuestion: session.pendingQuestion,
-  }) ?? buildMinimalGoalPatch(normalized);
+  const effect = normalized
+    ? session.pendingQuestion?.optionEffects?.[normalized]
+    : undefined;
+  if (!effect) {
+    session.pendingQuestion = undefined;
+    return;
+  }
 
-  session.goal = applyGoalPatch(goal, patch, patchedRawQuery(goal, patch, normalized));
+  const patch = goalPatchFromClarificationEffect(effect);
+  const rawQuery = normalized && !goal.rawQuery.includes(normalized)
+    ? `${goal.rawQuery}，${normalized}`
+    : goal.rawQuery;
+  session.goal = applyGoalPatch(goal, patch, rawQuery);
   session.pendingQuestion = undefined;
 }
 
@@ -345,108 +259,6 @@ export function clarificationNeedToPendingQuestion(
         .map((option) => [option.label, option.effect!])
     ),
   });
-}
-
-function buildMinimalGoalPatch(
-  answer: string,
-  options: { forceAllowBroaden?: boolean; replaceTargets?: boolean } = {}
-): GoalPatch {
-  const trimmed = answer.trim();
-  const openRecommendationConsent = isOpenRecommendationConsent(trimmed);
-  const allowsBroaden = Boolean(options.forceAllowBroaden)
-    || openRecommendationConsent
-    || /放宽|扩大|远一点|候补/.test(trimmed);
-  const constraints = [
-    parseDistanceConstraint(trimmed),
-    parseBudgetConstraint(trimmed),
-    parseOpenNowConstraint(trimmed),
-    ...parseExplicitExclusions(trimmed),
-  ].filter((constraint): constraint is Constraint => Boolean(constraint));
-  const softPreference = inferSoftPreference(trimmed);
-  const knownFoodTerms = extractKnownFoodTerms(trimmed);
-  const shouldSuppressKeywords = allowsBroaden
-    || needsClarification(trimmed)
-    || (knownFoodTerms.length === 0 && (constraints.length > 0 || Boolean(softPreference)));
-  const keywords = shouldSuppressKeywords
-    ? []
-    : normalizeSearchKeywords([trimmed]).filter((keyword) => !isGenericSearchKeyword(keyword));
-  const softPreferences = [
-    ...(openRecommendationConsent ? [{ name: '默认多样性', weight: 1, verifiable: true }] : []),
-    ...(softPreference ? [softPreference] : []),
-  ];
-  const requestedItems = keywords.map((keyword) => ({ name: keyword, required: true, aliases: [] }));
-  const replaceTargets = Boolean(options.replaceTargets && requestedItems.length > 0);
-
-  return GoalPatchSchema.parse({
-    replaceRequestedItems: replaceTargets ? requestedItems : undefined,
-    replaceCategories: replaceTargets ? [] : undefined,
-    replacePrimaryKeywords: replaceTargets ? keywords : undefined,
-    addRequestedItems: replaceTargets ? undefined : requestedItems,
-    addSoftPreferences: softPreferences.length > 0 ? softPreferences : undefined,
-    addConstraints: constraints,
-    allowBroaden: allowsBroaden ? true : undefined,
-    reason: '根据用户追问回复更新目标。',
-  });
-}
-
-function buildPendingQuestionAnswerPatch(input: SearchSupervisorInput): GoalPatch | null {
-  if (!input.previousGoal || !input.pendingQuestion) {
-    return null;
-  }
-
-  const normalized = input.message.trim();
-  if (!normalized) {
-    return null;
-  }
-
-  const effect = normalized
-    ? input.pendingQuestion.optionEffects?.[normalized]
-    : undefined;
-  if (effect) {
-    return goalPatchFromClarificationEffect(effect);
-  }
-
-  if (isOpenRecommendationConsent(normalized) || needsClarification(normalized)) {
-    return buildMinimalGoalPatch(normalized, { forceAllowBroaden: true });
-  }
-
-  return buildMinimalGoalPatch(normalized, {
-    replaceTargets: hasPrimaryTargets(input.previousGoal),
-  });
-}
-
-function patchedRawQuery(goal: UserGoal, patch: GoalPatch, answer: string): string {
-  const trimmed = answer.trim();
-  if (!trimmed) {
-    return goal.rawQuery;
-  }
-
-  if (
-    (patch.replacePrimaryKeywords || patch.replaceRequestedItems || patch.replaceCategories)
-    && replacementTargetsComeFromAnswer(patch, trimmed)
-  ) {
-    return trimmed;
-  }
-
-  return goal.rawQuery.includes(trimmed) ? goal.rawQuery : `${goal.rawQuery}，${trimmed}`;
-}
-
-function replacementTargetsComeFromAnswer(patch: GoalPatch, answer: string): boolean {
-  const replacementTargets = [
-    ...(patch.replacePrimaryKeywords ?? []),
-    ...(patch.replaceRequestedItems ?? []).map((item) => item.name),
-    ...(patch.replaceCategories ?? []).map((category) => category.name),
-  ].filter(Boolean);
-
-  if (replacementTargets.length === 0) {
-    return true;
-  }
-
-  const normalizedAnswerTargets = normalizeSearchKeywords([answer])
-    .filter((keyword) => !isGenericSearchKeyword(keyword));
-  const answerTargetSet = new Set([answer.trim(), ...normalizedAnswerTargets]);
-
-  return replacementTargets.every((target) => answerTargetSet.has(target));
 }
 
 function hasPrimaryTargets(goal: UserGoal): boolean {
@@ -564,162 +376,6 @@ async function callSupervisorModel(input: SearchSupervisorInput): Promise<Search
   }
 
   return parsed.data as SearchSupervisorOutput;
-}
-
-function parseDistanceConstraint(
-  query: string,
-  preferenceSummary?: UserPreferenceSummary
-): Constraint | null {
-  const explicitKm = query.match(/(\d+(?:\.\d+)?)\s*(?:公里|km)/i);
-  if (explicitKm) {
-    const maxMeters = Math.round(Number(explicitKm[1]) * 1000);
-    return { kind: 'distance', label: `${explicitKm[1]}公里内`, value: maxMeters, maxMeters, strict: true };
-  }
-
-  const explicitMeters = query.match(/(\d{2,5})\s*(?:米|m)/i);
-  if (explicitMeters) {
-    const maxMeters = Number(explicitMeters[1]);
-    return { kind: 'distance', label: `${explicitMeters[1]}米内`, value: maxMeters, maxMeters, strict: true };
-  }
-
-  if (/下楼|楼下/.test(query)) {
-    return { kind: 'distance', label: '楼下500米内', value: 500, maxMeters: 500, strict: true };
-  }
-
-  if (/步行|走路|几分钟/.test(query)) {
-    return { kind: 'distance', label: '步行1公里内', value: 1000, maxMeters: 1000, strict: true };
-  }
-
-  if (preferenceSummary?.preferredDistanceMeters) {
-    return {
-      kind: 'distance',
-      label: '历史偏好距离',
-      value: preferenceSummary.preferredDistanceMeters,
-      maxMeters: preferenceSummary.preferredDistanceMeters,
-      strict: false,
-    };
-  }
-
-  return null;
-}
-
-function parseBudgetConstraint(
-  query: string,
-  preferenceSummary?: UserPreferenceSummary
-): Constraint | null {
-  const budgetMatch = query.match(/(?:预算|人均|每人|一人|每位)?\s*(\d{2,4})\s*(?:元|块|左右|以内)/);
-  if (budgetMatch) {
-    return {
-      kind: 'budget',
-      label: `预算${budgetMatch[1]}左右`,
-      value: { max: Number(budgetMatch[1]) },
-      max: Number(budgetMatch[1]),
-      strict: false,
-    };
-  }
-
-  if (preferenceSummary?.preferredPriceRange) {
-    return {
-      kind: 'budget',
-      label: '历史偏好价格',
-      value: preferenceSummary.preferredPriceRange,
-      min: preferenceSummary.preferredPriceRange.min,
-      max: preferenceSummary.preferredPriceRange.max,
-      strict: false,
-    };
-  }
-
-  return null;
-}
-
-function parseOpenNowConstraint(query: string): Constraint | null {
-  return /营业中|还开|开门|现在开|没打烊|正在营业/.test(query)
-    ? { kind: 'open_now', label: '当前营业中', strict: false }
-    : null;
-}
-
-function parseExplicitExclusions(query: string): Constraint[] {
-  const matches = Array.from(query.matchAll(/(?:不吃|不要|别吃|不想吃|排除|避开)([\p{Script=Han}A-Za-z0-9]{1,12})/gu));
-  return matches
-    .map((match) => match[1]?.trim())
-    .filter((value): value is string => Boolean(value))
-    .map((value) => ({
-      kind: 'exclude_category',
-      label: `排除${value}`,
-      value,
-      values: [value],
-      strict: true,
-    }));
-}
-
-function needsClarification(query: string): boolean {
-  const trimmed = query.trim();
-  if (!trimmed) {
-    return true;
-  }
-
-  if (extractKnownFoodTerms(trimmed).length > 0) {
-    return false;
-  }
-
-  if (/随便|都行|推荐|附近有什么|吃点|吃什么|不知道吃啥|不知道|你决定|清淡|健康|养生|低卡|便宜|实惠|近一点|附近|环境|人气|热门|评分|好吃/.test(trimmed)) {
-    return true;
-  }
-
-  if (normalizeSearchKeywords([trimmed]).some((keyword) => !isGenericSearchKeyword(keyword)) && !inferSoftPreference(trimmed)) {
-    return false;
-  }
-
-  return false;
-}
-
-function isOpenRecommendationConsent(query: string): boolean {
-  const trimmed = query.trim();
-  if (!trimmed) {
-    return false;
-  }
-
-  if (extractKnownFoodTerms(trimmed).length > 0) {
-    return false;
-  }
-
-  return /都行|都可以|均可|什么都行|吃啥都行|随便|随意|不知道|你决定|你来定|你看着办|你安排|直接推荐|帮我推荐|按你推荐|默认推荐/.test(trimmed);
-}
-
-function createClarificationNeed() {
-  return {
-    reason: '用户需求缺少可验证的菜品或品类目标。',
-    question: '你想找哪类餐厅，或具体想吃什么？',
-    allowFreeText: true,
-  };
-}
-
-function isGenericAllowedQuery(query: string): boolean {
-  return /餐厅|美食/.test(query) && !needsClarification(query);
-}
-
-function inferSoftPreference(query: string): Preference | null {
-  if (/清淡|不油腻/.test(query)) {
-    return { name: '清淡', weight: 2, verifiable: false };
-  }
-
-  if (/健康|养生|低卡/.test(query)) {
-    return { name: '健康', weight: 2, verifiable: false };
-  }
-
-  if (/便宜|实惠|人均低/.test(query)) {
-    return { name: '价格友好', weight: 1, verifiable: false };
-  }
-
-  if (/环境|氛围/.test(query)) {
-    return { name: '环境氛围', weight: 1, verifiable: false };
-  }
-
-  if (/人气|热门|评分|评价|好吃/.test(query)) {
-    return { name: '口碑优先', weight: 1, verifiable: false };
-  }
-
-  return null;
 }
 
 function mergeStrings(left: string[], right: string[]): string[] {

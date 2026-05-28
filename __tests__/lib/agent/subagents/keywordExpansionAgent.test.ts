@@ -55,6 +55,37 @@ describe('KeywordExpansionAgent', () => {
     expect(expandedGoal.broadenedKeywords).toEqual(['亚洲料理']);
   });
 
+  it('does not generate expansions when there is no positive food target', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.NODE_ENV = 'production';
+    process.env.OPENAI_API_KEY = 'test-key';
+    jest.resetModules();
+
+    const fetchWithTimeout = jest.fn();
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    try {
+      const { runKeywordExpansionAgent } = await import('@/lib/agent/subagents/keywordExpansionAgent');
+      const expansion = await runKeywordExpansionAgent({
+        goal: goal({
+          rawQuery: '不要辣的，其他都可以',
+          primaryKeywords: [],
+          hardConstraints: [{ kind: 'avoid_spicy', label: '不要辣', strict: true }],
+          allowBroaden: true,
+        }),
+        attempts: [],
+      });
+
+      expect(fetchWithTimeout).not.toHaveBeenCalled();
+      expect(expansion.relatedKeywords).toEqual([]);
+      expect(expansion.broadenedKeywords).toEqual([]);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
   it('uses model-generated expansions when the Agent is available', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     const originalApiKey = process.env.OPENAI_API_KEY;

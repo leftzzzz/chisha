@@ -1,8 +1,6 @@
 import {
   applyGoalPatch,
   applySupervisorClarifyingAnswer,
-  buildMinimalFallbackGoal,
-  deterministicSupervisor,
 } from '@/lib/agent/supervisor';
 import type { AgentSession, UserGoal } from '@/lib/agent/types';
 
@@ -27,42 +25,21 @@ function goal(overrides: Partial<UserGoal> = {}): UserGoal {
 }
 
 describe('SearchSupervisorAgent', () => {
-  it('uses a minimal rule-free fallback when model parsing is unavailable', () => {
-    const output = deterministicSupervisor({ message: '想吃牛排' });
+  it('requires the model instead of falling back to local parsing', async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    jest.resetModules();
 
-    expect(output.goal).toEqual(expect.objectContaining({
-      primaryKeywords: ['牛排'],
-      requestedItems: [],
-      acceptableCategories: [],
-      allowBroaden: false,
-    }));
-  });
-
-  it('keeps parsed food targets focused for the expansion agent', () => {
-    const output = deterministicSupervisor({ message: '想吃日料' });
-
-    expect(output.goal?.primaryKeywords).toEqual(['日料']);
-    expect(output.goal?.relatedKeywords).toEqual([]);
-    expect(output.goal?.broadenedKeywords).toEqual([]);
-  });
-
-  it('asks a generic clarification for vague requests without fixed category options', () => {
-    const output = deterministicSupervisor({ message: '随便吃点' });
-
-    expect(output.nextAction).toBe('ask_user');
-    expect(output.question?.question).toContain('具体想吃什么');
-    expect(output.question?.options).toBeUndefined();
-  });
-
-  it('keeps explicit hard constraints in the fallback goal', () => {
-    const fallbackGoal = buildMinimalFallbackGoal('下楼500米内还开门的餐厅');
-
-    expect(fallbackGoal.hardConstraints).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: 'distance', maxMeters: 500, strict: true }),
-        expect.objectContaining({ kind: 'open_now' }),
-      ])
-    );
+    try {
+      const { runSearchSupervisor } = await import('@/lib/agent/supervisor');
+      await expect(runSearchSupervisor({ message: '想吃牛排' })).rejects.toThrow('OPENAI_API_KEY');
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
   });
 
   it('applies goal patches without overwriting existing hard constraints', () => {
@@ -84,35 +61,17 @@ describe('SearchSupervisorAgent', () => {
   });
 
   it('replaces stale primary targets when a clarification answer names a new target', () => {
-    const output = deterministicSupervisor({
-      message: '火锅',
-      previousGoal: goal({
-        rawQuery: '想吃日料',
-        requestedItems: [{ name: '日料', required: true, aliases: [] }],
-        primaryKeywords: ['日料'],
-        relatedKeywords: ['寿司'],
-      }),
-      pendingQuestion: {
-        question: '没有找到符合「日料」的餐厅，要调整需求或允许放宽吗？',
-        options: ['允许放宽', '换个类型'],
-        allowFreeText: true,
-      },
-    });
-
-    expect(output.nextAction).toBe('plan');
-    expect(output.question).toBeUndefined();
-    expect(output.patch).toEqual(expect.objectContaining({
-      replacePrimaryKeywords: ['火锅'],
-      replaceRequestedItems: [{ name: '火锅', required: true, aliases: [] }],
-    }));
-
     const patched = applyGoalPatch(
       goal({
         requestedItems: [{ name: '日料', required: true, aliases: [] }],
         primaryKeywords: ['日料'],
         relatedKeywords: ['寿司'],
       }),
-      output.patch!,
+      {
+        replacePrimaryKeywords: ['火锅'],
+        replaceRequestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        reason: '用户补充了新的主目标。',
+      },
       '火锅'
     );
 
@@ -218,44 +177,28 @@ describe('SearchSupervisorAgent', () => {
     expect(session.goal?.primaryKeywords).not.toContain('菜品');
   });
 
-  it('accepts soft-preference clarification answers instead of asking again', () => {
-    const output = deterministicSupervisor({
-      message: '清淡一点',
-      previousGoal: goal({ primaryKeywords: [] }),
+  it('does not parse free-text clarification answers without structured option effects', () => {
+    const session: AgentSession = {
+      id: 's3',
+      version: 3,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + 1000,
+      location: { lat: 31.2, lng: 121.4 },
+      messages: [],
+      attempts: [],
+      candidates: [],
+      goal: goal({ primaryKeywords: [] }),
       pendingQuestion: {
         question: '你想找哪类餐厅，或具体想吃什么？',
         allowFreeText: true,
       },
-    });
+    };
 
-    expect(output.nextAction).toBe('plan');
-    expect(output.question).toBeUndefined();
-    expect(output.patch).toEqual(expect.objectContaining({
-      allowBroaden: true,
-    }));
-    expect(output.patch?.addSoftPreferences).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: '清淡' })])
-    );
-  });
+    applySupervisorClarifyingAnswer(session, '都行');
 
-  it('treats open clarification answers as consent for generic recommendations', () => {
-    const output = deterministicSupervisor({
-      message: '都行',
-      previousGoal: goal({ primaryKeywords: [], clarificationNeeded: [] }),
-      pendingQuestion: {
-        question: '你想找哪类餐厅，或具体想吃什么？',
-        allowFreeText: true,
-      },
-    });
-
-    expect(output.nextAction).toBe('plan');
-    expect(output.question).toBeUndefined();
-    expect(output.patch).toEqual(expect.objectContaining({
-      allowBroaden: true,
-    }));
-    expect(output.patch?.addRequestedItems).toEqual([]);
-    expect(output.patch?.addSoftPreferences).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: '默认多样性' })])
-    );
+    expect(session.pendingQuestion).toBeUndefined();
+    expect(session.goal?.primaryKeywords).toEqual([]);
+    expect(session.goal?.requestedItems).toEqual([]);
   });
 });

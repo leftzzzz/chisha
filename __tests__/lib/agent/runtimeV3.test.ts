@@ -1,3 +1,85 @@
+jest.mock('@/lib/agent/supervisor', () => {
+  const actual = jest.requireActual('@/lib/agent/supervisor');
+  return {
+    ...actual,
+    runSearchSupervisor: jest.fn(async (input: {
+      message: string;
+      previousGoal?: import('@/lib/agent/types').UserGoal;
+      pendingQuestion?: import('@/lib/agent/types').PendingQuestion;
+    }) => {
+      if (input.previousGoal && input.pendingQuestion) {
+        if (input.message === '扩大范围') {
+          return {
+            patch: {
+              addConstraints: [{
+                kind: 'distance',
+                label: '5000米内',
+                value: 5000,
+                maxMeters: 5000,
+                strict: false,
+              }],
+              removeConstraints: ['楼下500米内', '步行1公里内'],
+              allowBroaden: true,
+              reason: '根据用户追问选项更新目标。',
+            },
+            nextAction: 'plan',
+          };
+        }
+
+        if (input.message === '火锅') {
+          return {
+            patch: {
+              replacePrimaryKeywords: ['火锅'],
+              replaceRequestedItems: [{ name: '火锅', required: true, aliases: [] }],
+              reason: '用户补充了新的主目标。',
+            },
+            nextAction: 'plan',
+          };
+        }
+
+        return {
+          patch: {
+            allowBroaden: true,
+            addSoftPreferences: input.message.includes('清淡')
+              ? [{ name: '清淡', weight: 2, verifiable: false }]
+              : [{ name: '默认多样性', weight: 1, verifiable: true }],
+            reason: '用户授权开放推荐。',
+          },
+          nextAction: 'plan',
+        };
+      }
+
+      if (input.previousGoal) {
+        return { goal: input.previousGoal, nextAction: 'plan' };
+      }
+
+      return {
+        goal: {
+          intent: 'find_restaurants',
+          rawQuery: input.message,
+          requestedItems: [],
+          acceptableCategories: [],
+          alternativeGroups: [],
+          primaryKeywords: [],
+          relatedKeywords: [],
+          broadenedKeywords: [],
+          hardConstraints: [],
+          softPreferences: [],
+          exclusions: [],
+          ambiguity: [],
+          clarificationNeeded: [{
+            reason: '用户需求缺少可验证的菜品或品类目标。',
+            question: '你想找哪类餐厅，或具体想吃什么？',
+            allowFreeText: true,
+          }],
+          allowBroaden: false,
+        },
+        nextAction: 'ask_user',
+      };
+    }),
+  };
+});
+
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';

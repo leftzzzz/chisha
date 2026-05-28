@@ -1,7 +1,6 @@
 import type { Restaurant } from '@/types';
 import {
   applyGoalPatch,
-  buildMinimalFallbackGoal,
   clarificationNeedToPendingQuestion,
   runSearchSupervisor,
 } from './supervisor';
@@ -190,7 +189,7 @@ function resolveSupervisorGoal(
     );
   }
 
-  return buildMinimalFallbackGoal(input.query, input.preferenceSummary);
+  throw new Error('SearchSupervisorAgent returned no goal or patch');
 }
 
 function createInitialContext(input: AgentInput, goal: UserGoal, resetSearchState = false): AgentV3Context {

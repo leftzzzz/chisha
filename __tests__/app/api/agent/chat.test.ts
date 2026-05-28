@@ -1,3 +1,21 @@
+jest.mock('@/lib/agent/runtimeV3', () => ({
+  runSearchAgentV3: jest.fn(async (
+    input: { runtimeState?: unknown },
+    emit: (event: Record<string, unknown>) => void
+  ) => {
+    const result = {
+      restaurants: [],
+      candidates: [],
+      explanation: '测试结果',
+      unmetConstraints: [],
+      runtimeState: input.runtimeState,
+    };
+    emit({ type: 'final', ...result });
+    emit({ type: 'done', ...result });
+    return result;
+  }),
+}));
+
 import { POST } from '@/app/api/agent/chat/route';
 import { createAgentSession, saveAgentSession } from '@/lib/agent/session';
 import type { UserGoal } from '@/lib/agent/types';

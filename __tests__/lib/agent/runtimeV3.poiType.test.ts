@@ -62,11 +62,19 @@ function input(searchGoal: UserGoal): AgentInput {
 
 describe('runSearchAgentV3 POI type selection', () => {
   afterEach(() => {
+    jest.dontMock('@/lib/agent/supervisor');
     jest.dontMock('@/lib/agent/subagents/poiTypeSelectionAgent');
     jest.resetModules();
   });
 
   it('uses selected Amap POI type and rejects unrelated exact-keyword retrievals', async () => {
+    jest.doMock('@/lib/agent/supervisor', () => ({
+      ...jest.requireActual('@/lib/agent/supervisor'),
+      runSearchSupervisor: jest.fn(async (supervisorInput: { previousGoal?: UserGoal }) => ({
+        goal: supervisorInput.previousGoal,
+        nextAction: 'plan',
+      })),
+    }));
     jest.doMock('@/lib/agent/subagents/poiTypeSelectionAgent', () => ({
       runPoiTypeSelectionAgent: jest.fn(async () => ({
         typeCodes: ['050700'],

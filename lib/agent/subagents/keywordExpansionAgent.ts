@@ -24,12 +24,16 @@ export interface KeywordExpansionOutput {
 const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你只负责为已结构化的 UserGoal 生成高德 POI keywords 搜索联想词，不调用外部工具。
 
 规则：
-1. relatedKeywords 是同一用户目标下的同义词、常见叫法、代表菜品或更容易命中 POI 的单个餐饮意图词。
-2. broadenedKeywords 是结果不足时才尝试的相邻大类或兼容品类。
-3. 每个关键词必须能单独作为高德 keywords 使用，例如“寿司”“刺身”“居酒屋”；不要输出整句，不要用“|”“、”“或者”合并多个意图。
-4. 不要重复 primaryKeywords、已尝试 keywords、排除项，也不要输出非餐饮词、体验偏好或无法用于 POI 搜索的形容词。
-5. 用户没有 allowBroaden 时仍可输出 broadenedKeywords，但它们只能作为候补搜索，不能自动进入主推荐。
-6. 结合用户具体上下文生成，不要机械套用固定词表。`;
+1. 只能从 primarySearchTargets 中的正向餐饮目标生成联想词。primarySearchTargets 为空时，relatedKeywords 和 broadenedKeywords 必须都为空。
+2. relatedKeywords 是同一用户目标下的同义词、常见叫法、代表菜品或更容易命中 POI 的单个餐饮意图词。
+3. broadenedKeywords 是结果不足时才尝试的相邻大类或兼容品类。
+4. rawQuery、hardConstraints、softPreferences、exclusions、allowBroaden 只能作为边界和排除依据，不能作为生成关键词的来源。
+5. 否定条件、口味限制、开放授权、体验偏好不能转写成搜索词；不要把“不辣/少辣/清淡/都可以/随便”等非餐饮目标当成高德 keywords。
+6. 如果用户只有排除项或开放推荐授权、没有正向餐饮目标，不要猜测餐饮品类，输出空数组。
+7. 每个关键词必须能单独作为高德 keywords 使用，例如“寿司”“刺身”“居酒屋”；不要输出整句，不要用“|”“、”“或者”合并多个意图。
+8. 不要重复 primaryKeywords、已尝试 keywords、排除项，也不要输出非餐饮词、体验偏好或无法用于 POI 搜索的形容词。
+9. 用户没有 allowBroaden 时仍可输出 broadenedKeywords，但它们只能作为候补搜索，不能自动进入主推荐。
+10. 结合用户具体上下文生成，不要机械套用固定词表。`;
 
 const KEYWORD_EXPANSION_FUNCTION = {
   name: 'expandRestaurantSearchKeywords',
@@ -57,6 +61,14 @@ const KEYWORD_EXPANSION_FUNCTION = {
 export async function runKeywordExpansionAgent(
   input: KeywordExpansionAgentInput
 ): Promise<KeywordExpansionOutput> {
+  if (goalKeywords(input.goal).length === 0) {
+    return {
+      relatedKeywords: [],
+      broadenedKeywords: [],
+      rationale: '没有正向餐饮目标，KeywordExpansionAgent 不生成搜索联想词。',
+    };
+  }
+
   if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
     return deterministicKeywordExpansion(input.goal, input.attempts);
   }
@@ -140,9 +152,20 @@ async function callKeywordExpansionModel(
 }
 
 function buildModelInput(input: KeywordExpansionAgentInput) {
+  const primarySearchTargets = goalKeywords(input.goal);
+
   return {
-    goal: input.goal,
-    primarySearchTargets: goalKeywords(input.goal),
+    primarySearchTargets,
+    goalContext: {
+      requestedItems: input.goal.requestedItems,
+      acceptableCategories: input.goal.acceptableCategories,
+      alternativeGroups: input.goal.alternativeGroups,
+      primaryKeywords: input.goal.primaryKeywords,
+      hardConstraints: input.goal.hardConstraints,
+      softPreferences: input.goal.softPreferences,
+      exclusions: input.goal.exclusions,
+      allowBroaden: input.goal.allowBroaden,
+    },
     attemptedKeywords: input.attempts.flatMap((attempt) => attempt.keywords),
     preferenceSummary: input.preferenceSummary,
   };
