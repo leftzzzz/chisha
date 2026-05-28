@@ -90,6 +90,9 @@ export const UserGoalSchema = z.object({
 });
 
 export const GoalPatchSchema = z.object({
+  replaceRequestedItems: z.array(RequestedItemSchema).optional(),
+  replaceCategories: z.array(GoalCategorySchema).optional(),
+  replacePrimaryKeywords: z.array(z.string()).optional(),
   addRequestedItems: z.array(RequestedItemSchema).optional(),
   addCategories: z.array(GoalCategorySchema).optional(),
   addSoftPreferences: z.array(PreferenceSchema).optional(),

@@ -83,6 +83,45 @@ describe('SearchSupervisorAgent', () => {
     );
   });
 
+  it('replaces stale primary targets when a clarification answer names a new target', () => {
+    const output = deterministicSupervisor({
+      message: '火锅',
+      previousGoal: goal({
+        rawQuery: '想吃日料',
+        requestedItems: [{ name: '日料', required: true, aliases: [] }],
+        primaryKeywords: ['日料'],
+        relatedKeywords: ['寿司'],
+      }),
+      pendingQuestion: {
+        question: '没有找到符合「日料」的餐厅，要调整需求或允许放宽吗？',
+        options: ['允许放宽', '换个类型'],
+        allowFreeText: true,
+      },
+    });
+
+    expect(output.nextAction).toBe('plan');
+    expect(output.question).toBeUndefined();
+    expect(output.patch).toEqual(expect.objectContaining({
+      replacePrimaryKeywords: ['火锅'],
+      replaceRequestedItems: [{ name: '火锅', required: true, aliases: [] }],
+    }));
+
+    const patched = applyGoalPatch(
+      goal({
+        requestedItems: [{ name: '日料', required: true, aliases: [] }],
+        primaryKeywords: ['日料'],
+        relatedKeywords: ['寿司'],
+      }),
+      output.patch!,
+      '火锅'
+    );
+
+    expect(patched.primaryKeywords).toEqual(['火锅']);
+    expect(patched.requestedItems.map((item) => item.name)).toEqual(['火锅']);
+    expect(patched.relatedKeywords).toEqual([]);
+    expect(patched.clarificationNeeded).toEqual([]);
+  });
+
   it('applies soft preference patches without turning them into requested items', () => {
     const patched = applyGoalPatch(
       goal({ primaryKeywords: ['火锅'] }),

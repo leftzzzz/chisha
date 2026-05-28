@@ -57,8 +57,9 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
 8. 用户只说“随便/推荐/附近有什么/吃点/不知道/清淡点/健康点/便宜点/环境好/人气高”等开放或软偏好、但没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
 9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true 并进入 plan，不要再次 ask_user。
-10. primaryKeywords 只能放适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
-11. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords 和 broadenedKeywords 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
+10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
+11. primaryKeywords 只能放适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
+12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords 和 broadenedKeywords 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
 
 需求归类：
 1. requestedItems 只放用户想吃的具体菜品、餐食或必须命中的食物目标；acceptableCategories 只放能满足需求的菜系/餐厅类型。
@@ -86,26 +87,72 @@ const SUPERVISOR_FUNCTION = {
 export async function runSearchSupervisor(
   input: SearchSupervisorInput
 ): Promise<SearchSupervisorOutput> {
-  const pendingAnswerPatch = buildPendingQuestionAnswerPatch(input);
-  if (pendingAnswerPatch) {
-    return {
-      patch: pendingAnswerPatch,
-      nextAction: 'plan',
-    };
-  }
-
   if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
     return deterministicSupervisor(input);
   }
 
   try {
-    return await callSupervisorModel(input);
+    return normalizeSupervisorOutput(input, await callSupervisorModel(input));
   } catch (error) {
     logger.warn('SearchSupervisorAgent unavailable, using minimal fallback', {
       error: error instanceof Error ? error.message : String(error),
     });
     return deterministicSupervisor(input);
   }
+}
+
+function normalizeSupervisorOutput(
+  input: SearchSupervisorInput,
+  output: SearchSupervisorOutput
+): SearchSupervisorOutput {
+  if (!input.previousGoal || !input.pendingQuestion) {
+    return output;
+  }
+
+  if (output.patch) {
+    return {
+      patch: normalizePendingAnswerPatch(input.previousGoal, output.patch),
+      nextAction: 'plan',
+    };
+  }
+
+  if (output.goal) {
+    return {
+      goal: UserGoalSchema.parse({
+        ...output.goal,
+        clarificationNeeded: [],
+      }),
+      nextAction: 'plan',
+    };
+  }
+
+  logger.warn('SearchSupervisorAgent returned no goal patch for a pending clarification answer, using deterministic parser', {
+    question: input.pendingQuestion.question,
+  });
+  return deterministicSupervisor(input);
+}
+
+function normalizePendingAnswerPatch(previousGoal: UserGoal, patch: GoalPatch): GoalPatch {
+  const alreadyReplacesTargets = patch.replacePrimaryKeywords !== undefined
+    || patch.replaceRequestedItems !== undefined
+    || patch.replaceCategories !== undefined;
+  const addedTargets = [
+    ...(patch.addRequestedItems ?? []).map((item) => item.name),
+    ...(patch.addCategories ?? []).map((category) => category.name),
+  ].filter(Boolean);
+
+  if (alreadyReplacesTargets || addedTargets.length === 0 || !hasPrimaryTargets(previousGoal)) {
+    return patch;
+  }
+
+  return GoalPatchSchema.parse({
+    ...patch,
+    replaceRequestedItems: patch.addRequestedItems ?? [],
+    replaceCategories: patch.addCategories ?? [],
+    replacePrimaryKeywords: addedTargets,
+    addRequestedItems: undefined,
+    addCategories: undefined,
+  });
 }
 
 export async function understandSearchGoal(input: AgentInput): Promise<UserGoal> {
@@ -214,11 +261,19 @@ export function buildMinimalFallbackGoal(
 }
 
 export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal.rawQuery): UserGoal {
+  const replacingPrimaryTargets = patch.replacePrimaryKeywords !== undefined
+    || patch.replaceRequestedItems !== undefined
+    || patch.replaceCategories !== undefined;
   const patched: UserGoal = {
     ...goal,
     rawQuery,
-    requestedItems: mergeByName(goal.requestedItems, patch.addRequestedItems ?? []),
-    acceptableCategories: mergeCategories(goal.acceptableCategories, patch.addCategories ?? []),
+    poiType: replacingPrimaryTargets ? undefined : goal.poiType,
+    requestedItems: patch.replaceRequestedItems
+      ?? mergeByName(goal.requestedItems, patch.addRequestedItems ?? []),
+    acceptableCategories: patch.replaceCategories
+      ?? mergeCategories(goal.acceptableCategories, patch.addCategories ?? []),
+    relatedKeywords: replacingPrimaryTargets ? [] : goal.relatedKeywords,
+    broadenedKeywords: replacingPrimaryTargets ? [] : goal.broadenedKeywords,
     softPreferences: mergePreferences(goal.softPreferences, patch.addSoftPreferences ?? []),
     hardConstraints: mergeConstraints(
       goal.hardConstraints.filter((constraint) =>
@@ -231,8 +286,15 @@ export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal
     clarificationNeeded: [],
   };
 
+  const primaryKeywordBase = patch.replacePrimaryKeywords
+    ?? (replacingPrimaryTargets
+      ? [
+          ...(patch.replaceRequestedItems ?? []).map((item) => item.name),
+          ...(patch.replaceCategories ?? []).map((category) => category.name),
+        ]
+      : patched.primaryKeywords);
   patched.primaryKeywords = mergeStrings(
-    patched.primaryKeywords,
+    primaryKeywordBase,
     [
       ...(patch.addRequestedItems ?? []).map((item) => item.name),
       ...(patch.addCategories ?? []).map((category) => category.name),
@@ -253,14 +315,13 @@ export function applySupervisorClarifyingAnswer(session: AgentSession, answer: s
   }
 
   const normalized = answer.trim();
-  const effect = normalized
-    ? session.pendingQuestion?.optionEffects?.[normalized]
-    : undefined;
-  const patch = effect
-    ? goalPatchFromClarificationEffect(effect)
-    : buildMinimalGoalPatch(normalized);
+  const patch = buildPendingQuestionAnswerPatch({
+    message: normalized,
+    previousGoal: goal,
+    pendingQuestion: session.pendingQuestion,
+  }) ?? buildMinimalGoalPatch(normalized);
 
-  session.goal = applyGoalPatch(goal, patch, normalized ? `${goal.rawQuery}，${normalized}` : goal.rawQuery);
+  session.goal = applyGoalPatch(goal, patch, patchedRawQuery(goal, patch, normalized));
   session.pendingQuestion = undefined;
 }
 
@@ -282,16 +343,13 @@ export function clarificationNeedToPendingQuestion(
 
 function buildMinimalGoalPatch(
   answer: string,
-  options: { forceAllowBroaden?: boolean } = {}
+  options: { forceAllowBroaden?: boolean; replaceTargets?: boolean } = {}
 ): GoalPatch {
   const trimmed = answer.trim();
   const openRecommendationConsent = isOpenRecommendationConsent(trimmed);
   const allowsBroaden = Boolean(options.forceAllowBroaden)
     || openRecommendationConsent
     || /放宽|扩大|远一点|候补/.test(trimmed);
-  const keywords = allowsBroaden || needsClarification(trimmed)
-    ? []
-    : normalizeSearchKeywords([trimmed]).filter((keyword) => !isGenericSearchKeyword(keyword));
   const constraints = [
     parseDistanceConstraint(trimmed),
     parseBudgetConstraint(trimmed),
@@ -299,13 +357,25 @@ function buildMinimalGoalPatch(
     ...parseExplicitExclusions(trimmed),
   ].filter((constraint): constraint is Constraint => Boolean(constraint));
   const softPreference = inferSoftPreference(trimmed);
+  const knownFoodTerms = extractKnownFoodTerms(trimmed);
+  const shouldSuppressKeywords = allowsBroaden
+    || needsClarification(trimmed)
+    || (knownFoodTerms.length === 0 && (constraints.length > 0 || Boolean(softPreference)));
+  const keywords = shouldSuppressKeywords
+    ? []
+    : normalizeSearchKeywords([trimmed]).filter((keyword) => !isGenericSearchKeyword(keyword));
   const softPreferences = [
     ...(openRecommendationConsent ? [{ name: '默认多样性', weight: 1, verifiable: true }] : []),
     ...(softPreference ? [softPreference] : []),
   ];
+  const requestedItems = keywords.map((keyword) => ({ name: keyword, required: true, aliases: [] }));
+  const replaceTargets = Boolean(options.replaceTargets && requestedItems.length > 0);
 
   return GoalPatchSchema.parse({
-    addRequestedItems: keywords.map((keyword) => ({ name: keyword, required: true, aliases: [] })),
+    replaceRequestedItems: replaceTargets ? requestedItems : undefined,
+    replaceCategories: replaceTargets ? [] : undefined,
+    replacePrimaryKeywords: replaceTargets ? keywords : undefined,
+    addRequestedItems: replaceTargets ? undefined : requestedItems,
     addSoftPreferences: softPreferences.length > 0 ? softPreferences : undefined,
     addConstraints: constraints,
     allowBroaden: allowsBroaden ? true : undefined,
@@ -319,6 +389,10 @@ function buildPendingQuestionAnswerPatch(input: SearchSupervisorInput): GoalPatc
   }
 
   const normalized = input.message.trim();
+  if (!normalized) {
+    return null;
+  }
+
   const effect = normalized
     ? input.pendingQuestion.optionEffects?.[normalized]
     : undefined;
@@ -330,7 +404,30 @@ function buildPendingQuestionAnswerPatch(input: SearchSupervisorInput): GoalPatc
     return buildMinimalGoalPatch(normalized, { forceAllowBroaden: true });
   }
 
-  return null;
+  return buildMinimalGoalPatch(normalized, {
+    replaceTargets: hasPrimaryTargets(input.previousGoal),
+  });
+}
+
+function patchedRawQuery(goal: UserGoal, patch: GoalPatch, answer: string): string {
+  const trimmed = answer.trim();
+  if (!trimmed) {
+    return goal.rawQuery;
+  }
+
+  if (patch.replacePrimaryKeywords || patch.replaceRequestedItems || patch.replaceCategories) {
+    return trimmed;
+  }
+
+  return goal.rawQuery.includes(trimmed) ? goal.rawQuery : `${goal.rawQuery}，${trimmed}`;
+}
+
+function hasPrimaryTargets(goal: UserGoal): boolean {
+  return [
+    ...goal.primaryKeywords,
+    ...goal.requestedItems.map((item) => item.name),
+    ...goal.acceptableCategories.map((category) => category.name),
+  ].some((item) => item.trim().length > 0);
 }
 
 function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatch {
@@ -723,6 +820,21 @@ function goalPatchJsonSchema() {
     type: 'object',
     additionalProperties: false,
     properties: {
+      replaceRequestedItems: {
+        type: 'array',
+        description: '当用户在澄清回答中改了主目标时，用新的具体菜品/餐食替换旧主目标。',
+        items: requestedItemJsonSchema(),
+      },
+      replaceCategories: {
+        type: 'array',
+        description: '当用户在澄清回答中改了主目标时，用新的菜系或餐厅类型替换旧主目标。',
+        items: goalCategoryJsonSchema(),
+      },
+      replacePrimaryKeywords: {
+        type: 'array',
+        description: '替换后的高德 keywords 主搜索词；只放单个餐饮意图词。',
+        items: { type: 'string' },
+      },
       addRequestedItems: {
         type: 'array',
         description: '新增必须命中的具体菜品/餐食；不要用于软偏好。',

@@ -26,6 +26,7 @@ import type {
   AgentRuntimeState,
   CandidateVerdict,
   EmitAgentEvent,
+  GoalPatch,
   PendingQuestion,
   RestaurantCandidate,
   SearchPlan,
@@ -59,6 +60,7 @@ export async function runSearchAgentV3(
     attempts: input.runtimeState?.attempts,
   });
   const baseGoal = resolveSupervisorGoal(input, supervisorOutput);
+  const resetSearchState = shouldResetSearchStateAfterGoalUpdate(input, baseGoal);
   let goal = baseGoal;
   if (!supervisorOutput.question && baseGoal.clarificationNeeded.length === 0) {
     emit({ type: 'status', message: 'KeywordExpansionAgent 正在生成搜索联想词...' });
@@ -66,12 +68,12 @@ export async function runSearchAgentV3(
       baseGoal,
       await runKeywordExpansionAgent({
         goal: baseGoal,
-        attempts: input.runtimeState?.attempts ?? [],
+        attempts: resetSearchState ? [] : (input.runtimeState?.attempts ?? []),
         preferenceSummary: input.preferenceSummary,
       })
     );
   }
-  const context = createInitialContext(input, goal);
+  const context = createInitialContext(input, goal, resetSearchState);
   const clarifyingQuestion = supervisorOutput.question
     ?? getInitialClarifyingQuestion(goal);
 
@@ -177,28 +179,62 @@ function resolveSupervisorGoal(
   }
 
   if (output.patch && input.runtimeState?.goal) {
-    return applyGoalPatch(input.runtimeState.goal, output.patch, input.query);
+    return applyGoalPatch(
+      input.runtimeState.goal,
+      output.patch,
+      patchedRawQuery(input.runtimeState.goal, output.patch, input.query)
+    );
   }
 
   return buildMinimalFallbackGoal(input.query, input.preferenceSummary);
 }
 
-function createInitialContext(input: AgentInput, goal: UserGoal): AgentV3Context {
-  const previousAttempts = input.runtimeState?.attempts ?? [];
+function createInitialContext(input: AgentInput, goal: UserGoal, resetSearchState = false): AgentV3Context {
+  const previousAttempts = resetSearchState ? [] : (input.runtimeState?.attempts ?? []);
 
   return {
     ...input,
     goal,
     attempts: [...previousAttempts],
-    candidates: [...(input.runtimeState?.candidates ?? [])],
-    actions: [...(input.runtimeState?.actions ?? [])],
-    observations: [...(input.runtimeState?.observations ?? [])],
+    candidates: resetSearchState ? [] : [...(input.runtimeState?.candidates ?? [])],
+    actions: resetSearchState ? [] : [...(input.runtimeState?.actions ?? [])],
+    observations: resetSearchState ? [] : [...(input.runtimeState?.observations ?? [])],
     unmetConstraints: [],
     maxSteps: 8,
-    maxActions: (input.runtimeState?.actions?.length ?? 0) + 8,
+    maxActions: (resetSearchState ? 0 : (input.runtimeState?.actions?.length ?? 0)) + 8,
     maxSearchCalls: previousAttempts.length + 5,
     targetCount: 8,
   };
+}
+
+function patchedRawQuery(goal: UserGoal, patch: GoalPatch, message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return goal.rawQuery;
+  }
+
+  if (patch.replacePrimaryKeywords || patch.replaceRequestedItems || patch.replaceCategories) {
+    return trimmed;
+  }
+
+  return goal.rawQuery.includes(trimmed) ? goal.rawQuery : `${goal.rawQuery}，${trimmed}`;
+}
+
+function shouldResetSearchStateAfterGoalUpdate(input: AgentInput, nextGoal: UserGoal): boolean {
+  const previousGoal = input.runtimeState?.goal;
+  if (!previousGoal || !input.runtimeState?.pendingQuestion) {
+    return false;
+  }
+
+  return primaryTargetSignature(previousGoal) !== primaryTargetSignature(nextGoal);
+}
+
+function primaryTargetSignature(goal: UserGoal): string {
+  return Array.from(new Set([
+    ...goal.primaryKeywords,
+    ...goal.requestedItems.map((item) => item.name),
+    ...goal.acceptableCategories.map((category) => category.name),
+  ].map((item) => item.trim()).filter(Boolean))).sort().join('|');
 }
 
 function getInitialClarifyingQuestion(goal: UserGoal): PendingQuestion | null {

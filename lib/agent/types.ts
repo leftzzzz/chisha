@@ -53,6 +53,9 @@ export interface AlternativeGroup {
 }
 
 export interface GoalPatch {
+  replaceRequestedItems?: RequestedItem[];
+  replaceCategories?: GoalCategory[];
+  replacePrimaryKeywords?: string[];
   addRequestedItems?: RequestedItem[];
   addCategories?: GoalCategory[];
   addSoftPreferences?: Preference[];

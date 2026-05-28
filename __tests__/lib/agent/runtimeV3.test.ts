@@ -264,6 +264,46 @@ describe('runSearchAgentV3', () => {
     expect(second.restaurants.length).toBeGreaterThan(0);
   });
 
+  it('re-summarizes the goal and resets stale search state after a concrete clarification answer', async () => {
+    const first = await runSearchAgentV3(
+      input(goal({
+        rawQuery: '想吃日料',
+        requestedItems: [{ name: '日料', required: true, aliases: [] }],
+        acceptableCategories: [],
+        primaryKeywords: ['日料'],
+      })),
+      () => undefined,
+      async () => []
+    );
+
+    expect(first.paused).toBe(true);
+    expect(first.question?.question).toContain('日料');
+
+    const searchedPlans: SearchPlan[] = [];
+    const second = await runSearchAgentV3(
+      {
+        query: '火锅',
+        location,
+        runtimeState: first.runtimeState,
+      },
+      () => undefined,
+      async (plan) => {
+        searchedPlans.push(plan);
+        return plan.keywords.includes('火锅')
+          ? [restaurant('r1', '重庆火锅', '火锅', 500)]
+          : [];
+      }
+    );
+
+    expect(second.paused).not.toBe(true);
+    expect(searchedPlans[0]).toEqual(expect.objectContaining({
+      keywords: ['火锅'],
+      searchIntent: 'exact',
+    }));
+    expect(second.restaurants.map((item) => item.name)).toEqual(['重庆火锅']);
+    expect(second.runtimeState?.goal.primaryKeywords).toEqual(['火锅']);
+  });
+
   it('normalizes sentence keywords before executing search tools', async () => {
     const plans: SearchPlan[] = [];
     await runSearchAgentV3(
