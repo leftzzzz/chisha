@@ -14,19 +14,16 @@ import type {
   PendingQuestion,
   SearchPlan,
 } from '@/lib/agent/types';
-import { applyClarifyingAnswer } from '@/lib/agent/conversation';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
 import {
+  applyRuntimeStateToSession,
   appendAssistantMessage,
   appendUserMessage,
-  createAgentSessionToken,
   createAgentSession,
   getAgentSession,
-  getSessionQuery,
   saveAgentSession,
 } from '@/lib/agent/session';
-import { runSearchAgent } from '@/lib/agent/runtime';
-import { runSearchAgentV2 } from '@/lib/agent/runtimeV2';
+import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
 import { getClientIP, rateLimit } from '@/lib/rateLimit';
@@ -68,37 +65,29 @@ function sendEvent(controller: ReadableStreamDefaultController, event: AgentEven
   controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
 }
 
-function isSupervisorV2Enabled(): boolean {
-  return process.env.AGENT_SUPERVISOR_V2 !== 'false';
-}
-
 function pauseSessionWithQuestion(
   controller: ReadableStreamDefaultController,
   session: AgentSession,
   question: PendingQuestion,
-  resultState?: Pick<AgentSession, 'goal' | 'attempts' | 'candidates'>
+  resultState?: AgentInput['runtimeState']
 ) {
-  if (resultState?.goal) {
-    session.goal = resultState.goal;
-  }
-  if (resultState?.attempts) {
-    session.attempts = resultState.attempts;
-  }
-  if (resultState?.candidates) {
-    session.candidates = resultState.candidates;
+  if (resultState) {
+    applyRuntimeStateToSession(session, {
+      ...resultState,
+      pendingQuestion: question,
+    });
   }
   session.pendingQuestion = question;
   appendAssistantMessage(session, question.question);
   saveAgentSession(session);
-  const resumableSessionId = createAgentSessionToken(session);
   sendEvent(controller, {
     type: 'question',
-    sessionId: resumableSessionId,
+    sessionId: session.id,
     question: question.question,
     options: question.options,
     allowFreeText: question.allowFreeText ?? true,
   });
-  sendEvent(controller, { type: 'session_paused', sessionId: resumableSessionId });
+  sendEvent(controller, { type: 'session_paused', sessionId: session.id });
   controller.close();
 }
 
@@ -108,7 +97,7 @@ function sendSessionUpdated(
 ): void {
   sendEvent(controller, {
     type: 'session_updated',
-    sessionId: createAgentSessionToken(session),
+    sessionId: session.id,
   });
 }
 
@@ -141,7 +130,6 @@ export async function POST(request: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const useSupervisorV2 = isSupervisorV2Enabled();
         const resumableSession = requestData.sessionId
           ? getAgentSession(requestData.sessionId)
           : null;
@@ -171,19 +159,16 @@ export async function POST(request: Request) {
 
         if (shouldResumeSession) {
           appendUserMessage(session, requestData.message);
-
-          if (session.pendingQuestion && !useSupervisorV2) {
-            applyClarifyingAnswer(session, requestData.message);
-          }
           sendEvent(controller, {
             type: 'session_resumed',
-            sessionId: createAgentSessionToken(session),
+            sessionId: session.id,
           });
         }
 
         const input: AgentInput = {
-          query: useSupervisorV2 ? requestData.message : getSessionQuery(session),
+          query: requestData.message,
           location: requestData.location,
+          messages: session.messages,
           preferenceSummary: mergeUserPreferenceSummaries([
             requestData.preferenceSummary,
             ...(requestData.groupPreferenceSummaries ?? []),
@@ -192,7 +177,9 @@ export async function POST(request: Request) {
             goal: session.goal,
             attempts: session.attempts,
             candidates: session.candidates,
-            pendingQuestion: useSupervisorV2 ? session.pendingQuestion : undefined,
+            actions: session.actions,
+            observations: session.observations,
+            pendingQuestion: session.pendingQuestion,
           },
         };
 
@@ -202,10 +189,7 @@ export async function POST(request: Request) {
           location: input.location,
         });
 
-        const runAgent = useSupervisorV2
-          ? runSearchAgentV2
-          : runSearchAgent;
-        const result = await runAgent(
+        const result = await runSearchAgentV3(
           input,
           (event) => sendEvent(controller, event),
           async (plan: SearchPlan) => {
@@ -214,10 +198,8 @@ export async function POST(request: Request) {
           }
         );
 
-        if (result.runtimeState?.goal) {
-          session.goal = result.runtimeState.goal;
-          session.attempts = result.runtimeState.attempts;
-          session.candidates = result.runtimeState.candidates;
+        if (result.runtimeState) {
+          applyRuntimeStateToSession(session, result.runtimeState);
         }
 
         if (result.paused && result.question) {

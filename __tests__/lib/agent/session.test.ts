@@ -1,8 +1,9 @@
 import {
+  applyRuntimeStateToSession,
   createAgentSession,
-  createAgentSessionToken,
   getAgentSession,
 } from '@/lib/agent/session';
+import type { UserGoal } from '@/lib/agent/types';
 import type { Location } from '@/types';
 
 const location: Location = {
@@ -11,31 +12,42 @@ const location: Location = {
   address: '上海市黄浦区',
 };
 
-describe('agent session tokens', () => {
-  it('can restore a session from a resumable token', () => {
+const goal: UserGoal = {
+  intent: 'find_restaurants',
+  rawQuery: '随便吃点',
+  requestedItems: [],
+  acceptableCategories: [],
+  alternativeGroups: [],
+  primaryKeywords: ['餐厅'],
+  relatedKeywords: [],
+  broadenedKeywords: [],
+  hardConstraints: [],
+  softPreferences: [],
+  exclusions: [],
+  ambiguity: [],
+  clarificationNeeded: [],
+  allowBroaden: true,
+};
+
+describe('agent session store', () => {
+  it('uses opaque server-side session ids instead of encoded state tokens', () => {
     const session = createAgentSession('随便吃点', location);
-    session.goal = {
-      intent: 'find_restaurants',
-      rawQuery: '随便吃点',
-      requestedItems: [],
-      acceptableCategories: [],
-      alternativeGroups: [],
-      primaryKeywords: ['餐厅'],
-      relatedKeywords: [],
-      broadenedKeywords: [],
-      hardConstraints: [],
-      softPreferences: [],
-      exclusions: [],
-      ambiguity: [],
-      clarificationNeeded: [],
-      allowBroaden: true,
-    };
+    applyRuntimeStateToSession(session, {
+      goal,
+      attempts: [],
+      candidates: [],
+      actions: [],
+      observations: [],
+    });
 
-    const token = createAgentSessionToken(session);
-    const restored = getAgentSession(token);
+    const restored = getAgentSession(session.id);
 
-    expect(token.startsWith('agent_state_')).toBe(true);
+    expect(session.id.startsWith('agent_state_')).toBe(false);
     expect(restored?.messages[0].content).toBe('随便吃点');
     expect(restored?.goal?.primaryKeywords).toEqual(['餐厅']);
+  });
+
+  it('does not decode client supplied agent_state payloads', () => {
+    expect(getAgentSession('agent_state_eyJpZCI6InRhbXBlcmVkIn0')).toBeNull();
   });
 });

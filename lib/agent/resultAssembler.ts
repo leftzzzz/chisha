@@ -5,118 +5,24 @@ import type {
   RestaurantCandidate,
 } from './types';
 import type { Restaurant } from '@/types';
+import { applyFinalGuard } from './finalGuard';
 
 export function finalizeRecommendations(
   context: AgentContext,
   proposed?: FinishRecommendation
 ): AgentFinalResult {
-  const orderedCandidates = getOrderedCandidates(context, proposed);
-  const primaryCandidates = orderedCandidates.filter((candidate) =>
-    isPrimaryEligible(candidate, context)
-  );
-  const selectedCandidates = primaryCandidates.slice(0, context.targetCount);
-  const selectedIds = new Set(selectedCandidates.map((candidate) => candidate.restaurant.id));
-  const backupCandidates = orderedCandidates
-    .filter((candidate) => !selectedIds.has(candidate.restaurant.id))
-    .slice(0, 20);
-  const unmetConstraints = buildUnmetConstraints(context, selectedCandidates);
+  const guarded = applyFinalGuard(context, proposed);
 
   return {
-    restaurants: selectedCandidates.map(withRecommendationDetails),
-    candidates: backupCandidates.map(withRecommendationDetails),
-    explanation: buildExplanation(context, selectedCandidates, unmetConstraints, proposed),
-    unmetConstraints,
+    restaurants: guarded.primaryCandidates.map((candidate) =>
+      withRecommendationDetails(candidate, context)
+    ),
+    candidates: guarded.backupCandidates.map((candidate) =>
+      withRecommendationDetails(candidate, context)
+    ),
+    explanation: buildExplanation(context, guarded.primaryCandidates, guarded.unmetConstraints, proposed),
+    unmetConstraints: guarded.unmetConstraints,
   };
-}
-
-function getOrderedCandidates(
-  context: AgentContext,
-  proposed?: FinishRecommendation
-): RestaurantCandidate[] {
-  const byId = new Map(context.candidates.map((candidate) => [candidate.restaurant.id, candidate]));
-
-  if (!proposed || proposed.selectedIds.length === 0) {
-    return [...context.candidates].sort(compareCandidate);
-  }
-
-  const proposedCandidates = proposed.selectedIds
-    .map((id) => byId.get(id))
-    .filter((candidate): candidate is RestaurantCandidate => Boolean(candidate));
-  const proposedIds = new Set(proposedCandidates.map((candidate) => candidate.restaurant.id));
-  const remaining = context.candidates.filter((candidate) => !proposedIds.has(candidate.restaurant.id));
-
-  return [...proposedCandidates, ...remaining].sort(compareCandidate);
-}
-
-function compareCandidate(a: RestaurantCandidate, b: RestaurantCandidate): number {
-  const statusRank = verificationRank(b) - verificationRank(a);
-  if (statusRank !== 0) {
-    return statusRank;
-  }
-
-  if (b.score !== a.score) {
-    return b.score - a.score;
-  }
-
-  return (a.restaurant.distance ?? Infinity) - (b.restaurant.distance ?? Infinity);
-}
-
-function verificationRank(candidate: RestaurantCandidate): number {
-  if (candidate.verification.status === 'passed') return 3;
-  if (candidate.verification.status === 'unverified') return 2;
-  return 1;
-}
-
-function isPrimaryEligible(candidate: RestaurantCandidate, context: AgentContext): boolean {
-  const attempt = context.attempts[candidate.sourceAttempt - 1];
-  return candidate.verification.status === 'passed' && attempt?.allowedForPrimary !== false;
-}
-
-function buildUnmetConstraints(
-  context: AgentContext,
-  selectedCandidates: RestaurantCandidate[]
-): string[] {
-  const unmet = [...context.unmetConstraints, ...context.goal.ambiguity];
-
-  if (selectedCandidates.length < context.targetCount) {
-    unmet.push(`只找到 ${selectedCandidates.length} 家通过硬约束和相关性过滤的餐厅。`);
-  }
-
-  const exactAccepted = context.candidates.filter((candidate) =>
-    context.attempts[candidate.sourceAttempt - 1]?.searchIntent === 'exact'
-    && candidate.verification.status === 'passed'
-  ).length;
-  const hasBroadenedSelected = selectedCandidates.some((candidate) => {
-    const attempt = context.attempts[candidate.sourceAttempt - 1];
-    return attempt?.searchIntent === 'broadened' || attempt?.searchIntent === 'fallback';
-  });
-
-  if (context.goal.primaryKeywords.length > 0 && hasBroadenedSelected && exactAccepted < context.targetCount) {
-    unmet.push(
-      `明确匹配「${context.goal.primaryKeywords.join('、')}」的餐厅不足 ${context.targetCount} 家，已补充相邻品类候选。`
-    );
-  }
-
-  const verificationFailures = selectedCandidates.flatMap((candidate) =>
-    candidate.verification.hardFailures.map((failure) => failure.message)
-  );
-  unmet.push(...verificationFailures);
-
-  for (const constraint of context.goal.hardConstraints) {
-    if (constraint.kind === 'avoid_spicy') {
-      continue;
-    }
-
-    if (constraint.kind === 'budget') {
-      unmet.push('预算信息依赖餐厅人均字段；当前数据源缺失时不会编造价格。');
-    }
-
-    if (constraint.kind === 'open_now') {
-      unmet.push('营业状态只过滤数据源明确标记为停业的餐厅，未知状态会保留并提示。');
-    }
-  }
-
-  return Array.from(new Set(unmet));
 }
 
 function buildExplanation(
@@ -152,10 +58,13 @@ function buildExplanation(
   return '已按你的需求、距离和餐厅类型匹配度排序。';
 }
 
-function withRecommendationDetails(candidate: RestaurantCandidate): Restaurant {
+function withRecommendationDetails(candidate: RestaurantCandidate, context: AgentContext): Restaurant {
+  const attempt = context.attempts[candidate.sourceAttempt - 1];
   const verificationWarnings = [
     ...candidate.verification.hardFailures.map((failure) => failure.message),
     ...candidate.verification.warnings,
+    ...(candidate.verification.status === 'unverified' ? ['候补：数据源不足，未验证为主推荐。'] : []),
+    ...(attempt?.allowedForPrimary === false ? ['候补：未授权放宽或兜底结果，不进入主推荐。'] : []),
   ];
 
   return {

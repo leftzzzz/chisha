@@ -110,7 +110,13 @@ export async function understandSearchGoal(input: AgentInput): Promise<UserGoal>
 
 export function deterministicSupervisor(input: SearchSupervisorInput): SearchSupervisorOutput {
   if (input.previousGoal && input.pendingQuestion) {
-    const patch = buildMinimalGoalPatch(input.message);
+    const normalized = input.message.trim();
+    const effect = normalized
+      ? input.pendingQuestion.optionEffects?.[normalized]
+      : undefined;
+    const patch = effect
+      ? goalPatchFromClarificationEffect(effect)
+      : buildMinimalGoalPatch(input.message);
     return {
       patch,
       nextAction: 'plan',

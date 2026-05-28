@@ -51,6 +51,9 @@ export type AgentEvent =
   | { type: 'tool_result'; tool: string; summary: unknown }
   | { type: 'strategy_change'; reason: string; next: unknown }
   | { type: 'partial_results'; restaurants: Restaurant[] }
+  | { type: 'action'; actionId: string; actionType: 'search' | 'ask_user' | 'finish'; summary: string }
+  | { type: 'observation'; actionId: string; found: number; accepted: number; rejected: number }
+  | { type: 'guardrail'; actionId: string; message: string; severity: 'info' | 'warn' }
   | {
       type: 'question';
       sessionId: string;
@@ -81,6 +84,9 @@ export interface AgentSearchCallbacks {
   onError?: (message: string) => void;
   onStatus?: (message: string) => void;
   onStrategyChange?: (reason: string, next: unknown) => void;
+  onAction?: (summary: string, actionType: 'search' | 'ask_user' | 'finish') => void;
+  onObservation?: (found: number, accepted: number, rejected: number) => void;
+  onGuardrail?: (message: string, severity: 'info' | 'warn') => void;
   onQuestion?: (question: AgentQuestion) => void;
   onSessionPaused?: (sessionId: string) => void;
   onSessionResumed?: (sessionId: string) => void;
@@ -499,6 +505,15 @@ export async function agentSearch(
               case 'strategy_change':
                 callbacks?.onStrategyChange?.(event.reason, event.next);
                 break;
+              case 'action':
+                callbacks?.onAction?.(event.summary, event.actionType);
+                break;
+              case 'observation':
+                callbacks?.onObservation?.(event.found, event.accepted, event.rejected);
+                break;
+              case 'guardrail':
+                callbacks?.onGuardrail?.(event.message, event.severity);
+                break;
               case 'question':
                 pausedQuestion = {
                   sessionId: event.sessionId,
@@ -713,6 +728,15 @@ async function requestAgentStream(
               break;
             case 'strategy_change':
               callbacks?.onStrategyChange?.(event.reason, event.next);
+              break;
+            case 'action':
+              callbacks?.onAction?.(event.summary, event.actionType);
+              break;
+            case 'observation':
+              callbacks?.onObservation?.(event.found, event.accepted, event.rejected);
+              break;
+            case 'guardrail':
+              callbacks?.onGuardrail?.(event.message, event.severity);
               break;
             case 'question':
               pausedQuestion = {

@@ -1,5 +1,5 @@
 import { POST } from '@/app/api/agent/chat/route';
-import { createAgentSession, createAgentSessionToken, saveAgentSession } from '@/lib/agent/session';
+import { createAgentSession, saveAgentSession } from '@/lib/agent/session';
 import type { UserGoal } from '@/lib/agent/types';
 import type { Location } from '@/types';
 import { ReadableStream } from 'stream/web';
@@ -118,17 +118,16 @@ describe('/api/agent/chat', () => {
     jest.clearAllMocks();
   });
 
-  it('starts a fresh search when a completed session token is sent by mistake', async () => {
+  it('starts a fresh search when a completed session id is sent by mistake', async () => {
     const previousSession = createAgentSession('想吃日料', location);
     previousSession.goal = goal();
     previousSession.pendingQuestion = undefined;
     saveAgentSession(previousSession);
-    const completedSessionToken = createAgentSessionToken(previousSession);
 
     const response = await POST(jsonRequest({
       message: '想吃火锅',
       location,
-      sessionId: completedSessionToken,
+      sessionId: previousSession.id,
     }));
     const events = await readSseEvents(response);
 
@@ -152,7 +151,7 @@ describe('/api/agent/chat', () => {
     const response = await POST(jsonRequest({
       message: '允许放宽',
       location,
-      sessionId: createAgentSessionToken(pausedSession),
+      sessionId: pausedSession.id,
     }));
     const events = await readSseEvents(response);
 

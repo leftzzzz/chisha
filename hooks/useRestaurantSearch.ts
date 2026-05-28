@@ -2,7 +2,7 @@
  * useRestaurantSearch - 餐厅搜索 Hook
  *
  * 使用 Agent API 执行智能搜索:
- * 1. 调用 /api/agent/search (SSE 流式)
+ * 1. 调用 /api/agent/chat (SSE 流式)
  * 2. 实时更新搜索进度
  * 3. 更新应用状态
  *
@@ -186,6 +186,30 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
               ...prev,
               status: 'searching',
               message: `正在调整策略：${reason}`,
+            }));
+          },
+
+          onAction: (summary, actionType) => {
+            setProgress(prev => ({
+              ...prev,
+              status: actionType === 'search' ? 'searching' : prev.status,
+              message: summary,
+            }));
+          },
+
+          onObservation: (found, accepted, rejected) => {
+            setProgress(prev => ({
+              ...prev,
+              status: 'searching',
+              message: `观察到 ${found} 家，${accepted} 家可进主推荐，${rejected} 家被硬约束过滤`,
+              found,
+            }));
+          },
+
+          onGuardrail: (message) => {
+            setProgress(prev => ({
+              ...prev,
+              message,
             }));
           },
 

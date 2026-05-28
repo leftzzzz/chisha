@@ -198,14 +198,14 @@ export interface Observation {
 }
 
 export interface FinishRecommendation {
-  selectedIds: string[];
+  selectedIds?: string[];
   candidateIds?: string[];
   explanation: string;
   unmetConstraints?: string[];
   confidence: number;
 }
 
-export type AgentDecision =
+export type AgentAction =
   | {
       type: 'search';
       plan: SearchPlan;
@@ -216,17 +216,38 @@ export type AgentDecision =
     }
   | {
       type: 'finish';
-      explanation?: string;
+      selectedIds?: string[];
+      candidateIds?: string[];
+      explanation: string;
+      confidence: number;
     };
 
-export type AgentDecisionMaker = (
-  context: AgentContext,
-  observation: Observation
-) => Promise<AgentDecision>;
+export interface AgentActionRecord {
+  id: string;
+  action: AgentAction;
+  createdAt: number;
+  summary: string;
+}
+
+export interface AgentObservation {
+  actionId: string;
+  plan: SearchPlan;
+  provider: 'amap' | 'osm';
+  rawCount: number;
+  hardRejected: Array<{
+    restaurantId: string;
+    reasons: string[];
+  }>;
+  verdicts: CandidateVerdict[];
+  acceptedPrimaryIds: string[];
+  candidateIds: string[];
+  unmetConstraints: string[];
+}
 
 export interface AgentInput {
   query: string;
   location: Location;
+  messages?: AgentMessage[];
   preferenceSummary?: UserPreferenceSummary;
   runtimeState?: AgentRuntimeState;
 }
@@ -255,6 +276,8 @@ export interface AgentRuntimeState {
   goal?: UserGoal;
   attempts: SearchAttempt[];
   candidates: RestaurantCandidate[];
+  actions?: AgentActionRecord[];
+  observations?: AgentObservation[];
   pendingQuestion?: PendingQuestion;
 }
 
@@ -286,6 +309,9 @@ export type AgentEvent =
   | { type: 'tool_result'; tool: string; summary: unknown }
   | { type: 'strategy_change'; reason: string; next: SearchPlan }
   | { type: 'partial_results'; restaurants: Restaurant[] }
+  | { type: 'action'; actionId: string; actionType: AgentAction['type']; summary: string }
+  | { type: 'observation'; actionId: string; found: number; accepted: number; rejected: number }
+  | { type: 'guardrail'; actionId: string; message: string; severity: 'info' | 'warn' }
   | {
       type: 'question';
       sessionId: string;
@@ -322,12 +348,16 @@ export interface PendingQuestion {
 
 export interface AgentSession {
   id: string;
+  version: 3;
   createdAt: number;
   updatedAt: number;
+  expiresAt: number;
   location: Location;
   messages: AgentMessage[];
   goal?: UserGoal;
   attempts: SearchAttempt[];
   candidates: RestaurantCandidate[];
+  actions: AgentActionRecord[];
+  observations: AgentObservation[];
   pendingQuestion?: PendingQuestion;
 }

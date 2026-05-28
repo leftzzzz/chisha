@@ -79,7 +79,7 @@ describe('agentSearch', () => {
     );
   });
 
-  it('can send a resumable session token to the deprecated search endpoint', async () => {
+  it('can send an opaque session id to the deprecated search endpoint', async () => {
     mockFetchResponse({
       ok: true,
       body: streamFromEvents([
@@ -97,7 +97,7 @@ describe('agentSearch', () => {
           explanation: '继续会话后找到餐厅。',
           unmetConstraints: [],
         },
-        { type: 'session_updated', sessionId: 'agent_state_next' },
+        { type: 'session_updated', sessionId: 'session-next' },
       ]),
     } as Response);
 
@@ -108,14 +108,14 @@ describe('agentSearch', () => {
       undefined,
       undefined,
       undefined,
-      'agent_state_prev'
+      'session-prev'
     );
 
     const fetchCall = (globalThis as typeof globalThis & { fetch: jest.Mock }).fetch.mock.calls[0];
     expect(JSON.parse(fetchCall[1].body)).toEqual(
-      expect.objectContaining({ sessionId: 'agent_state_prev' })
+      expect.objectContaining({ sessionId: 'session-prev' })
     );
-    expect(result.sessionId).toBe('agent_state_next');
+    expect(result.sessionId).toBe('session-next');
   });
 });
 
@@ -136,12 +136,12 @@ describe('agentChat', () => {
       body: streamFromEvents([
         {
           type: 'question',
-          sessionId: 'agent_state_abc',
+          sessionId: 'session-abc',
           question: '想吃正餐、小吃，还是喝点东西？',
           options: ['正餐', '小吃'],
           allowFreeText: true,
         },
-        { type: 'session_paused', sessionId: 'agent_state_abc' },
+        { type: 'session_paused', sessionId: 'session-abc' },
       ]),
     } as Response);
 
@@ -150,10 +150,10 @@ describe('agentChat', () => {
     expect(result).toEqual({
       restaurants: [],
       candidates: [],
-      sessionId: 'agent_state_abc',
+      sessionId: 'session-abc',
       paused: true,
       question: {
-        sessionId: 'agent_state_abc',
+        sessionId: 'session-abc',
         question: '想吃正餐、小吃，还是喝点东西？',
         options: ['正餐', '小吃'],
         allowFreeText: true,
@@ -167,7 +167,7 @@ describe('agentChat', () => {
     );
   });
 
-  it('returns updated session tokens after successful chat searches', async () => {
+  it('returns updated opaque session ids after successful chat searches', async () => {
     const restaurants = [{
       id: 'r1',
       name: '寿司店',
@@ -187,15 +187,15 @@ describe('agentChat', () => {
           explanation: '已找到日料。',
           unmetConstraints: [],
         },
-        { type: 'session_updated', sessionId: 'agent_state_next' },
+        { type: 'session_updated', sessionId: 'session-next' },
       ]),
     } as Response);
 
     const onSessionUpdated = jest.fn();
     const result = await agentChat('想吃日料', location, { onSessionUpdated });
 
-    expect(result.sessionId).toBe('agent_state_next');
-    expect(onSessionUpdated).toHaveBeenCalledWith('agent_state_next');
+    expect(result.sessionId).toBe('session-next');
+    expect(onSessionUpdated).toHaveBeenCalledWith('session-next');
   });
 });
 

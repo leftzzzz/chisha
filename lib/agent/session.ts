@@ -1,9 +1,26 @@
-import type { AgentMessage, AgentSession } from './types';
+import type {
+  AgentMessage,
+  AgentRuntimeState,
+  AgentSession,
+} from './types';
 import type { Location } from '@/types';
 
 const sessions = new Map<string, AgentSession>();
 const SESSION_TTL_MS = 30 * 60 * 1000;
-const TOKEN_PREFIX = 'agent_state_';
+
+export interface AgentSessionStore {
+  create(message: string, location: Location): AgentSession;
+  get(sessionId: string): AgentSession | null;
+  save(session: AgentSession): AgentSession;
+  delete(sessionId: string): boolean;
+}
+
+export const inMemoryAgentSessionStore: AgentSessionStore = {
+  create: createAgentSession,
+  get: getAgentSession,
+  save: saveAgentSession,
+  delete: deleteAgentSession,
+};
 
 export function createAgentSession(message: string, location: Location): AgentSession {
   cleanupExpiredSessions();
@@ -11,12 +28,16 @@ export function createAgentSession(message: string, location: Location): AgentSe
   const now = Date.now();
   const session: AgentSession = {
     id: createSessionId(),
+    version: 3,
     createdAt: now,
     updatedAt: now,
+    expiresAt: now + SESSION_TTL_MS,
     location,
     messages: [createUserMessage(message, now)],
     attempts: [],
     candidates: [],
+    actions: [],
+    observations: [],
   };
 
   sessions.set(session.id, session);
@@ -25,14 +46,17 @@ export function createAgentSession(message: string, location: Location): AgentSe
 
 export function getAgentSession(sessionId: string): AgentSession | null {
   cleanupExpiredSessions();
-  return sessions.get(sessionId) ?? decodeSessionToken(sessionId);
+  return sessions.get(sessionId) ?? null;
+}
+
+export function deleteAgentSession(sessionId: string): boolean {
+  cleanupExpiredSessions();
+  return sessions.delete(sessionId);
 }
 
 export function appendUserMessage(session: AgentSession, content: string): AgentSession {
   session.messages.push(createUserMessage(content));
-  session.updatedAt = Date.now();
-  sessions.set(session.id, session);
-  return session;
+  return saveAgentSession(session);
 }
 
 export function appendAssistantMessage(session: AgentSession, content: string): AgentSession {
@@ -41,23 +65,30 @@ export function appendAssistantMessage(session: AgentSession, content: string): 
     content,
     createdAt: Date.now(),
   });
-  session.updatedAt = Date.now();
-  sessions.set(session.id, session);
-  return session;
+  return saveAgentSession(session);
 }
 
 export function saveAgentSession(session: AgentSession): AgentSession {
-  session.updatedAt = Date.now();
+  const now = Date.now();
+  session.updatedAt = now;
+  session.expiresAt = now + SESSION_TTL_MS;
   sessions.set(session.id, session);
   return session;
 }
 
-export function getSessionQuery(session: AgentSession): string {
-  return session.messages
-    .filter((message) => message.role === 'user')
-    .map((message) => message.content.trim())
-    .filter(Boolean)
-    .join('，');
+export function applyRuntimeStateToSession(
+  session: AgentSession,
+  state: AgentRuntimeState
+): AgentSession {
+  if (state.goal) {
+    session.goal = state.goal;
+  }
+  session.attempts = state.attempts;
+  session.candidates = state.candidates;
+  session.actions = state.actions ?? [];
+  session.observations = state.observations ?? [];
+  session.pendingQuestion = state.pendingQuestion;
+  return saveAgentSession(session);
 }
 
 function createUserMessage(content: string, createdAt: number = Date.now()): AgentMessage {
@@ -69,9 +100,9 @@ function createUserMessage(content: string, createdAt: number = Date.now()): Age
 }
 
 function cleanupExpiredSessions(): void {
-  const expiresBefore = Date.now() - SESSION_TTL_MS;
+  const now = Date.now();
   for (const [sessionId, session] of sessions.entries()) {
-    if (session.updatedAt < expiresBefore) {
+    if (session.expiresAt <= now) {
       sessions.delete(sessionId);
     }
   }
@@ -83,58 +114,4 @@ function createSessionId(): string {
   }
 
   return `agent_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-export function createAgentSessionToken(session: AgentSession): string {
-  return `${TOKEN_PREFIX}${toBase64Url(JSON.stringify(session))}`;
-}
-
-function decodeSessionToken(sessionId: string): AgentSession | null {
-  if (!sessionId.startsWith(TOKEN_PREFIX)) {
-    return null;
-  }
-
-  try {
-    const decoded = JSON.parse(fromBase64Url(sessionId.slice(TOKEN_PREFIX.length))) as AgentSession;
-    if (!decoded.id || !decoded.messages || decoded.updatedAt < Date.now() - SESSION_TTL_MS) {
-      return null;
-    }
-    sessions.set(decoded.id, decoded);
-    return decoded;
-  } catch {
-    return null;
-  }
-}
-
-function toBase64Url(value: string): string {
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(value, 'utf8')
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/g, '');
-  }
-
-  const bytes = new TextEncoder().encode(value);
-  let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-}
-
-function fromBase64Url(value: string): string {
-  const padded = value.replace(/-/g, '+').replace(/_/g, '/')
-    .padEnd(Math.ceil(value.length / 4) * 4, '=');
-
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(padded, 'base64').toString('utf8');
-  }
-
-  const binary = atob(padded);
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
 }

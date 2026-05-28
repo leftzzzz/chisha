@@ -2,12 +2,11 @@
  * Agent 搜索 API 端点
  * POST /api/agent/search
  *
- * 运行轻量 Agent Loop：
- * 1. 解析用户目标和硬约束
- * 2. 规划搜索策略
- * 3. 调用高德 POI 观察外部结果
- * 4. 确定性过滤、评分和策略调整
- * 5. 通过 SSE 返回兼容旧前端的事件和新增 Agent 事件
+ * 运行 V3 Supervisor-controlled Agent Loop：
+ * 1. SearchSupervisorAgent 维护目标并选择 AgentAction
+ * 2. Runtime 执行 search/ask_user/finish
+ * 3. FinalGuard 统一控制主推荐准入
+ * 4. 通过 SSE 返回 action、observation 和推荐事件
  */
 
 import { z } from 'zod';
@@ -18,19 +17,16 @@ import type {
   PendingQuestion,
   SearchPlan,
 } from '@/lib/agent/types';
-import { applyClarifyingAnswer } from '@/lib/agent/conversation';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
 import {
+  applyRuntimeStateToSession,
   appendAssistantMessage,
   appendUserMessage,
   createAgentSession,
-  createAgentSessionToken,
   getAgentSession,
-  getSessionQuery,
   saveAgentSession,
 } from '@/lib/agent/session';
-import { runSearchAgent } from '@/lib/agent/runtime';
-import { runSearchAgentV2 } from '@/lib/agent/runtimeV2';
+import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
 import { getClientIP, rateLimit } from '@/lib/rateLimit';
@@ -88,29 +84,25 @@ function sendQuestionEvent(
   controller: ReadableStreamDefaultController,
   session: AgentSession,
   question: PendingQuestion,
-  resultState?: Pick<AgentSession, 'goal' | 'attempts' | 'candidates'>
+  resultState?: AgentInput['runtimeState']
 ) {
-  if (resultState?.goal) {
-    session.goal = resultState.goal;
-  }
-  if (resultState?.attempts) {
-    session.attempts = resultState.attempts;
-  }
-  if (resultState?.candidates) {
-    session.candidates = resultState.candidates;
+  if (resultState) {
+    applyRuntimeStateToSession(session, {
+      ...resultState,
+      pendingQuestion: question,
+    });
   }
   session.pendingQuestion = question;
   appendAssistantMessage(session, question.question);
   saveAgentSession(session);
-  const sessionId = createAgentSessionToken(session);
   sendEvent(controller, {
     type: 'question',
-    sessionId,
+    sessionId: session.id,
     question: question.question,
     options: question.options,
     allowFreeText: question.allowFreeText ?? true,
   });
-  sendEvent(controller, { type: 'session_paused', sessionId });
+  sendEvent(controller, { type: 'session_paused', sessionId: session.id });
 }
 
 function sendSessionUpdated(
@@ -119,12 +111,8 @@ function sendSessionUpdated(
 ) {
   sendEvent(controller, {
     type: 'session_updated',
-    sessionId: createAgentSessionToken(session),
+    sessionId: session.id,
   });
-}
-
-function isSupervisorV2Enabled(): boolean {
-  return process.env.AGENT_SUPERVISOR_V2 !== 'false';
 }
 
 export async function POST(request: Request) {
@@ -162,7 +150,6 @@ export async function POST(request: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const useSupervisorV2 = isSupervisorV2Enabled();
         const resumableSession = requestData.sessionId
           ? getAgentSession(requestData.sessionId)
           : null;
@@ -193,13 +180,9 @@ export async function POST(request: Request) {
         if (shouldResumeSession) {
           appendUserMessage(session, requestData.query);
 
-          if (session.pendingQuestion && !useSupervisorV2) {
-            applyClarifyingAnswer(session, requestData.query);
-          }
-
           sendEvent(controller, {
             type: 'session_resumed',
-            sessionId: createAgentSessionToken(session),
+            sessionId: session.id,
           });
         }
 
@@ -208,20 +191,20 @@ export async function POST(request: Request) {
           ...(requestData.groupPreferenceSummaries ?? []),
         ].filter((summary): summary is NonNullable<typeof requestData.preferenceSummary> => Boolean(summary));
         const input: AgentInput = {
-          query: useSupervisorV2 ? requestData.query : getSessionQuery(session),
+          query: requestData.query,
           location: requestData.location,
+          messages: session.messages,
           preferenceSummary: mergeUserPreferenceSummaries(summaries),
           runtimeState: {
             goal: session.goal,
             attempts: session.attempts,
             candidates: session.candidates,
-            pendingQuestion: useSupervisorV2 ? session.pendingQuestion : undefined,
+            actions: session.actions,
+            observations: session.observations,
+            pendingQuestion: session.pendingQuestion,
           },
         };
-        const runAgent = useSupervisorV2
-          ? runSearchAgentV2
-          : runSearchAgent;
-        const result = await runAgent(
+        const result = await runSearchAgentV3(
           input,
           (event) => sendEvent(controller, event),
           async (plan: SearchPlan) => {
@@ -230,10 +213,8 @@ export async function POST(request: Request) {
           }
         );
 
-        if (result.runtimeState?.goal) {
-          session.goal = result.runtimeState.goal;
-          session.attempts = result.runtimeState.attempts;
-          session.candidates = result.runtimeState.candidates;
+        if (result.runtimeState) {
+          applyRuntimeStateToSession(session, result.runtimeState);
         }
 
         if (result.paused && result.question) {
