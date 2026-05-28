@@ -1,5 +1,6 @@
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
+import { parseModelJsonArguments } from './modelJson';
 import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
 import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
 import type {
@@ -354,7 +355,7 @@ async function callSupervisorModel(input: SearchSupervisorInput): Promise<Search
         functions: [SUPERVISOR_FUNCTION],
         function_call: { name: 'superviseRestaurantSearch' },
         temperature: 0,
-        max_tokens: 1600,
+        max_tokens: 2400,
       }),
     },
     SUPERVISOR_TIMEOUT
@@ -370,7 +371,9 @@ async function callSupervisorModel(input: SearchSupervisorInput): Promise<Search
     throw new Error('SearchSupervisorAgent returned no function arguments');
   }
 
-  const parsed = SearchSupervisorOutputSchema.safeParse(JSON.parse(args));
+  const parsed = SearchSupervisorOutputSchema.safeParse(
+    parseModelJsonArguments(args, 'SearchSupervisorAgent')
+  );
   if (!parsed.success) {
     throw new Error(`SearchSupervisorAgent returned invalid schema: ${parsed.error.message}`);
   }

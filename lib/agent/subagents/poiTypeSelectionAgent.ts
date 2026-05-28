@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
+import { parseModelJsonArguments } from '../modelJson';
 import { AMAP_FOOD_POI_TYPES, getAmapFoodPoiType } from '../amapPoiTypeCatalog';
 import type { SearchPlan, UserGoal } from '../types';
 
@@ -157,7 +158,9 @@ async function callPoiTypeSelectionModel(
     throw new Error('PoiTypeSelectionAgent returned no function arguments');
   }
 
-  const parsed = PoiTypeSelectionOutputSchema.safeParse(JSON.parse(args));
+  const parsed = PoiTypeSelectionOutputSchema.safeParse(
+    parseModelJsonArguments(args, 'PoiTypeSelectionAgent')
+  );
   if (!parsed.success) {
     throw new Error(`PoiTypeSelectionAgent returned invalid schema: ${parsed.error.message}`);
   }

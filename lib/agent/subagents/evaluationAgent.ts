@@ -1,6 +1,7 @@
 import type { Restaurant } from '@/types';
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
+import { parseModelJsonArguments } from '../modelJson';
 import { getPoiTerms, lookupFoodPoiTypes } from '../poiTaxonomy';
 import { EvaluationAgentOutputSchema } from '../schemas/verdict';
 import type {
@@ -369,7 +370,9 @@ async function callEvaluationModel(input: EvaluationAgentInput): Promise<Evaluat
     throw new Error('EvaluationAgent returned no function arguments');
   }
 
-  const parsed = EvaluationAgentOutputSchema.safeParse(JSON.parse(args));
+  const parsed = EvaluationAgentOutputSchema.safeParse(
+    parseModelJsonArguments(args, 'EvaluationAgent')
+  );
   if (!parsed.success) {
     throw new Error(`EvaluationAgent returned invalid schema: ${parsed.error.message}`);
   }

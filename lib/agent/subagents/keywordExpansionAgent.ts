@@ -1,5 +1,6 @@
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
+import { parseModelJsonArguments } from '../modelJson';
 import { expandPoiSearchKeywords, isGenericSearchKeyword, normalizeSearchKeywords } from '../poiTaxonomy';
 import { KeywordExpansionOutputSchema } from '../schemas/keywordExpansion';
 import type { SearchAttempt, UserGoal, UserPreferenceSummary } from '../types';
@@ -143,7 +144,9 @@ async function callKeywordExpansionModel(
     throw new Error('KeywordExpansionAgent returned no function arguments');
   }
 
-  const parsed = KeywordExpansionOutputSchema.safeParse(JSON.parse(args));
+  const parsed = KeywordExpansionOutputSchema.safeParse(
+    parseModelJsonArguments(args, 'KeywordExpansionAgent')
+  );
   if (!parsed.success) {
     throw new Error(`KeywordExpansionAgent returned invalid schema: ${parsed.error.message}`);
   }

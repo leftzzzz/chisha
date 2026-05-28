@@ -1,5 +1,6 @@
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
+import { parseModelJsonArguments } from '../modelJson';
 import { normalizeSearchKeywords } from '../poiTaxonomy';
 import { PlanningAgentOutputSchema } from '../schemas/plan';
 import type {
@@ -236,7 +237,9 @@ async function callPlanningModel(input: PlanningAgentInput): Promise<PlanningAge
     throw new Error('PlanningAgent returned no function arguments');
   }
 
-  const parsed = PlanningAgentOutputSchema.safeParse(JSON.parse(args));
+  const parsed = PlanningAgentOutputSchema.safeParse(
+    parseModelJsonArguments(args, 'PlanningAgent')
+  );
   if (!parsed.success) {
     throw new Error(`PlanningAgent returned invalid schema: ${parsed.error.message}`);
   }

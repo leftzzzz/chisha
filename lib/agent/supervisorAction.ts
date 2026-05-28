@@ -1,6 +1,7 @@
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
 import { AgentActionSchema } from './schemas/action';
+import { parseModelJsonArguments } from './modelJson';
 import { DEFAULT_POI_TYPE, lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import type {
@@ -405,7 +406,9 @@ async function callSupervisorActionModel(input: SearchSupervisorActionInput): Pr
     throw new Error('SearchSupervisorAgent action returned no function arguments');
   }
 
-  const parsed = AgentActionSchema.safeParse(JSON.parse(args));
+  const parsed = AgentActionSchema.safeParse(
+    parseModelJsonArguments(args, 'SearchSupervisorAgent action')
+  );
   if (!parsed.success) {
     throw new Error(`SearchSupervisorAgent action returned invalid schema: ${parsed.error.message}`);
   }
