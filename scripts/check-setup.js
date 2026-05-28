@@ -30,14 +30,20 @@ const requiredFiles = [
   { path: 'lib/apiResponse.ts', description: '统一 API 响应格式' },
   { path: 'lib/logger.ts', description: '日志工具' },
   { path: 'lib/withTimeout.ts', description: '超时中间件' },
-  { path: 'lib/llm.ts', description: 'OpenAI API 封装' },
+  { path: 'lib/llm.ts', description: 'OpenAI API 兼容封装' },
+  { path: 'lib/agent/supervisor.ts', description: 'SearchSupervisorAgent' },
+  { path: 'lib/agent/subagents/planningAgent.ts', description: 'PlanningAgent' },
+  { path: 'lib/agent/subagents/evaluationAgent.ts', description: 'EvaluationAgent' },
+  { path: 'lib/agent/poiTaxonomy.ts', description: '高德 POI Taxonomy' },
+  { path: 'lib/agent/guards.ts', description: 'Agent Runtime Guards' },
   { path: 'lib/amap.ts', description: '高德地图 API 封装' },
   { path: 'lib/osm.ts', description: 'OpenStreetMap API 封装' },
   { path: 'lib/distance.ts', description: '距离计算工具' },
   { path: 'lib/dataTransform.ts', description: '数据转换和合并' },
 
   // API 路由
-  { path: 'app/api/understand/route.ts', description: 'LLM 理解 API' },
+  { path: 'app/api/agent/chat/route.ts', description: '多轮 Agent 对话搜索 API' },
+  { path: 'app/api/agent/search/route.ts', description: 'Agent 搜索 API' },
   { path: 'app/api/search/route.ts', description: '餐厅搜索 API' },
   { path: 'app/api/geocode/route.ts', description: '地理编码 API' },
   { path: 'app/api/geocode/reverse/route.ts', description: '逆向地理编码 API' },
@@ -60,6 +66,7 @@ const requiredEnvVars = [
   { name: 'AMAP_SECURITY_CODE', required: false, description: '高德地图安全码' },
   { name: 'NEXT_PUBLIC_APP_URL', required: false, description: '应用 URL' },
   { name: 'LOG_LEVEL', required: false, description: '日志级别' },
+  { name: 'AGENT_SUPERVISOR_V2', required: false, description: '启用 Supervisor + 子 Agent 搜索链路' },
 ];
 
 function checkFile(filePath) {

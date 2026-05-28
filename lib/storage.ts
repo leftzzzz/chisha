@@ -565,7 +565,11 @@ export function buildUserPreferenceSummary(records: TurntableRecord[] = getRecor
     const recencyWeight = Math.max(0.35, 1 - index * 0.03);
 
     if (!isCustomOption(record.selected)) {
-      addWeight(favoriteCuisineWeights, record.selected.cuisineType, 3 * recencyWeight);
+      addWeight(
+        favoriteCuisineWeights,
+        record.selected.cuisineType,
+        selectedPreferenceWeight(record.selected) * recencyWeight
+      );
       selectedRestaurants.push(record.selected.name);
 
       if (record.selected.distance !== undefined) {
@@ -579,7 +583,11 @@ export function buildUserPreferenceSummary(records: TurntableRecord[] = getRecor
 
     for (const restaurant of record.restaurants) {
       if (restaurant.id !== record.selected.id) {
-        addWeight(favoriteCuisineWeights, restaurant.cuisineType, 0.2 * recencyWeight);
+        addWeight(
+          favoriteCuisineWeights,
+          restaurant.cuisineType,
+          weakPreferenceWeight(restaurant, 0.2) * recencyWeight
+        );
       }
     }
 
@@ -597,6 +605,22 @@ export function buildUserPreferenceSummary(records: TurntableRecord[] = getRecor
     recentSelectedRestaurants: Array.from(new Set(selectedRestaurants)).slice(0, 10),
     recentRejectedRestaurants: Array.from(new Set(rejectedRestaurants)).slice(0, 10),
   };
+}
+
+function selectedPreferenceWeight(restaurant: Restaurant): number {
+  return isWeakRecommendationSignal(restaurant) ? 0.6 : 3;
+}
+
+function weakPreferenceWeight(restaurant: Restaurant, defaultWeight: number): number {
+  return isWeakRecommendationSignal(restaurant)
+    ? Math.min(defaultWeight, 0.1)
+    : defaultWeight;
+}
+
+function isWeakRecommendationSignal(restaurant: Restaurant): boolean {
+  return (restaurant.recommendationWarnings ?? []).some((warning) =>
+    /候补|放宽|未验证|无法验证|兜底|相关性可能较弱/.test(warning)
+  );
 }
 
 /**

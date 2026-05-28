@@ -14,6 +14,7 @@ import { z } from 'zod';
 import type { AgentEvent, AgentInput, PendingQuestion, SearchPlan } from '@/lib/agent/types';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
 import { runSearchAgent } from '@/lib/agent/runtime';
+import { runSearchAgentV2 } from '@/lib/agent/runtimeV2';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
 import { getClientIP, rateLimit } from '@/lib/rateLimit';
@@ -125,7 +126,10 @@ export async function POST(request: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const result = await runSearchAgent(
+        const runAgent = process.env.AGENT_SUPERVISOR_V2 === 'true'
+          ? runSearchAgentV2
+          : runSearchAgent;
+        const result = await runAgent(
           input,
           (event) => sendEvent(controller, event),
           async (plan: SearchPlan) => {

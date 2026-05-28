@@ -179,6 +179,9 @@ async function fetchWithTimeout<T>(
 /**
  * 理解用户需求
  *
+ * @deprecated 主搜索链路已迁移到 `/api/agent/chat`。该封装仅保留给旧页面或迁移期测试使用，
+ * 不参与 Agent 主推荐流程。
+ *
  * 调用 LLM 解析用户输入,提取关键词、菜系类型、价格范围等
  *
  * @param query - 用户输入的需求描述

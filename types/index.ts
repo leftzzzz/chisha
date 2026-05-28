@@ -21,6 +21,7 @@ export interface Restaurant {
   openingHours?: string; // 营业时间
   businessStatus?: 'open' | 'closed' | 'unknown'; // 营业状态（数据源可提供时）
   averagePrice?: number; // 人均消费（元）
+  poiTypeCode?: string; // 数据源返回的 POI 类型码（如高德 typecode）
   recommendationReason?: string; // 推荐理由
   recommendationWarnings?: string[]; // 不可验证或放宽匹配说明
   location: Location; // 地理位置

@@ -52,6 +52,15 @@ export interface AlternativeGroup {
   minPerGroup?: number;
 }
 
+export interface GoalPatch {
+  addRequestedItems?: RequestedItem[];
+  addCategories?: GoalCategory[];
+  addConstraints?: Constraint[];
+  removeConstraints?: string[];
+  allowBroaden?: boolean;
+  reason: string;
+}
+
 export interface ClarificationEffect {
   addRequestedItems?: string[];
   addCategories?: string[];
@@ -97,6 +106,44 @@ export interface SearchPlan {
   searchIntent: SearchIntent;
   allowedForPrimary: boolean;
   reason: string;
+}
+
+export interface SearchTarget {
+  label: string;
+  kind: 'dish' | 'cuisine' | 'restaurant_type' | 'generic';
+  strictness: 'exact' | 'compatible' | 'broad';
+}
+
+export interface PlanningAgentPlan {
+  targets: SearchTarget[];
+  radiusMeters: number;
+  searchIntent: SearchIntent;
+  allowedForPrimary: boolean;
+  reason: string;
+}
+
+export interface PlanningAgentOutput {
+  plans: PlanningAgentPlan[];
+}
+
+export interface CandidateVerdict {
+  restaurantId: string;
+  status: 'passed' | 'failed' | 'unverified';
+  primaryEligible: boolean;
+  confidence: number;
+  matchedItems: string[];
+  matchedCategories: string[];
+  conflicts: string[];
+  evidence: string[];
+  warnings: string[];
+}
+
+export interface EvaluationAgentOutput {
+  verdicts: CandidateVerdict[];
+  selectedIds: string[];
+  candidateIds: string[];
+  explanation: string;
+  unmetConstraints: string[];
 }
 
 export interface SearchAttempt {

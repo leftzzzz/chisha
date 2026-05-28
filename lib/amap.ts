@@ -8,43 +8,17 @@ import { logger } from './logger';
 import { fetchWithTimeout } from './withTimeout';
 import { ErrorCode } from './apiResponse';
 import { osmReverseGeocode } from './osm';
+import {
+  MAX_POI_PAGES,
+  getPagesPerKeyword,
+  normalizeSearchKeywords,
+  resolvePoiTypesForKeyword,
+} from './agent/poiTaxonomy';
 
 const AMAP_API_KEY = process.env.AMAP_API_KEY;
 const AMAP_SECURITY_CODE = process.env.AMAP_SECURITY_CODE;
 const AMAP_BASE_URL = 'https://restapi.amap.com/v3';
 const AMAP_TIMEOUT = 10000; // 10 秒超时
-
-// 高德 POI 类型映射（餐饮服务相关）
-const DEFAULT_POI_TYPE = '050000'; // 餐饮服务（最宽泛的餐饮大类）
-const MAX_SEARCH_KEYWORDS = 5;
-const MAX_POI_PAGES = 5;
-const MAX_SEARCH_REQUESTS_PER_CALL = 8;
-
-const FOOD_POI_TYPE_MATCHERS: Array<{ terms: string[]; poiTypes: string[] }> = [
-  { terms: ['江浙菜'], poiTypes: ['050105', '050106'] },
-  { terms: ['川菜', '川味', '麻辣'], poiTypes: ['050102'] },
-  { terms: ['粤菜', '广东菜', '茶餐厅', '烧腊', '点心'], poiTypes: ['050103'] },
-  { terms: ['湘菜', '湖南菜'], poiTypes: ['050109'] },
-  { terms: ['鲁菜', '山东菜'], poiTypes: ['050104'] },
-  { terms: ['苏菜', '江苏菜'], poiTypes: ['050105'] },
-  { terms: ['浙菜', '杭帮菜', '浙江菜'], poiTypes: ['050106'] },
-  { terms: ['闽菜', '福建菜'], poiTypes: ['050108'] },
-  { terms: ['徽菜', '安徽菜'], poiTypes: ['050107'] },
-  { terms: ['火锅', '涮锅', '牛肉火锅', '潮汕牛肉火锅', '串串'], poiTypes: ['050117'] },
-  { terms: ['日料', '日本料理', '日本菜', '寿司', '刺身', '日式拉面'], poiTypes: ['050201'] },
-  { terms: ['韩餐', '韩国料理', '韩式', '石锅拌饭', '韩式烤肉'], poiTypes: ['050202'] },
-  { terms: ['西餐', '牛排', '意面', '披萨', '比萨', '意大利菜'], poiTypes: ['050203'] },
-  { terms: ['烧烤', '烤串', '烤肉', 'bbq'], poiTypes: ['050700'] },
-  { terms: ['快餐', '汉堡', '炸鸡', '薯条', '鸡排'], poiTypes: ['050300'] },
-  { terms: ['小吃', '麻辣烫', '冒菜', '米线'], poiTypes: ['050310'] },
-  { terms: ['咖啡', '咖啡店', '咖啡厅'], poiTypes: ['050401'] },
-  { terms: ['奶茶', '果茶', '柠檬茶'], poiTypes: ['050307'] },
-  { terms: ['饮品', '喝点', '喝的'], poiTypes: ['050307', '050401'] },
-  { terms: ['甜品', '甜点', '蛋糕', '面包', '烘焙'], poiTypes: ['050600'] },
-  { terms: ['海鲜', '小龙虾', '龙虾'], poiTypes: ['050118'] },
-  { terms: ['素食', '素菜'], poiTypes: ['050119'] },
-  { terms: ['清真', '兰州拉面'], poiTypes: ['050116'] },
-];
 
 /**
  * 高德 API 响应类型
@@ -162,51 +136,6 @@ export async function amapPoiSearch(
     logger.error('Amap search failed', { error });
     throw error;
   }
-}
-
-function normalizeSearchKeywords(keywords: string[]): string[] {
-  const normalized = Array.from(new Set(
-    keywords.map((keyword) => keyword.trim()).filter(Boolean)
-  )).slice(0, MAX_SEARCH_KEYWORDS);
-
-  return normalized.length > 0 ? normalized : [''];
-}
-
-function getPagesPerKeyword(keywordCount: number, requestedPages: number): number {
-  if (keywordCount <= 1) {
-    return requestedPages;
-  }
-
-  return Math.max(
-    1,
-    Math.min(requestedPages, Math.floor(MAX_SEARCH_REQUESTS_PER_CALL / keywordCount))
-  );
-}
-
-function resolvePoiTypesForKeyword(
-  keyword: string,
-  fallbackPoiType: string | undefined,
-  hasMultipleKeywords: boolean
-): string {
-  const keywordPoiType = lookupFoodPoiTypes(keyword);
-  if (keywordPoiType) {
-    return keywordPoiType;
-  }
-
-  if (!hasMultipleKeywords && fallbackPoiType) {
-    return fallbackPoiType;
-  }
-
-  return DEFAULT_POI_TYPE;
-}
-
-function lookupFoodPoiTypes(keyword: string): string | undefined {
-  const normalizedKeyword = keyword.toLowerCase();
-  const matcher = FOOD_POI_TYPE_MATCHERS.find(({ terms }) =>
-    terms.some((term) => normalizedKeyword.includes(term.toLowerCase()))
-  );
-
-  return matcher ? matcher.poiTypes.join('|') : undefined;
 }
 
 function dedupeAmapPois(pois: AmapPoi[]): AmapPoi[] {
@@ -385,6 +314,7 @@ function transformAmapPoi(poi: AmapPoi): Restaurant {
     openingHours: pickOpeningHours(poi),
     averagePrice: parseOptionalNumber(poi.biz_ext?.cost ?? poi.cost),
     businessStatus: parseBusinessStatus(poi.biz_ext?.business_status ?? poi.business_status),
+    poiTypeCode: poi.typecode,
     location: { lat, lng },
     source: 'amap',
   };

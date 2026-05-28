@@ -15,6 +15,7 @@ import type {
   SearchPlan,
 } from '@/lib/agent/types';
 import { applyClarifyingAnswer } from '@/lib/agent/conversation';
+import { applySupervisorClarifyingAnswer } from '@/lib/agent/supervisor';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
 import {
   appendAssistantMessage,
@@ -26,6 +27,7 @@ import {
   saveAgentSession,
 } from '@/lib/agent/session';
 import { runSearchAgent } from '@/lib/agent/runtime';
+import { runSearchAgentV2 } from '@/lib/agent/runtimeV2';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
 import { getClientIP, rateLimit } from '@/lib/rateLimit';
@@ -141,7 +143,11 @@ export async function POST(request: Request) {
 
         if (requestData.sessionId) {
           appendUserMessage(session, requestData.message);
-          applyClarifyingAnswer(session, requestData.message);
+          if (process.env.AGENT_SUPERVISOR_V2 === 'true') {
+            applySupervisorClarifyingAnswer(session, requestData.message);
+          } else {
+            applyClarifyingAnswer(session, requestData.message);
+          }
           sendEvent(controller, { type: 'session_resumed', sessionId: session.id });
         }
 
@@ -165,7 +171,10 @@ export async function POST(request: Request) {
           location: input.location,
         });
 
-        const result = await runSearchAgent(
+        const runAgent = process.env.AGENT_SUPERVISOR_V2 === 'true'
+          ? runSearchAgentV2
+          : runSearchAgent;
+        const result = await runAgent(
           input,
           (event) => sendEvent(controller, event),
           async (plan: SearchPlan) => {

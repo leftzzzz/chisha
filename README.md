@@ -120,7 +120,7 @@ npm run dev
 chisha/
 ├── app/                      # Next.js App Router
 │   ├── api/                 # API 路由
-│   │   ├── understand/      # LLM 需求理解
+│   │   ├── agent/           # Agent 对话搜索
 │   │   ├── search/          # 餐厅搜索
 │   │   └── geocode/         # 地理编码
 │   ├── history/             # 历史记录页面
@@ -251,14 +251,14 @@ chisha/
 
 ## API 端点
 
-### POST /api/understand
+### POST /api/agent/chat
 
-理解用户自然语言需求
+多轮 Agent 对话搜索（SSE）
 
 **请求体**：
 ```json
 {
-  "query": "附近便宜的川菜",
+  "message": "附近便宜的川菜",
   "location": {
     "lat": 39.9,
     "lng": 116.4,
@@ -267,18 +267,7 @@ chisha/
 }
 ```
 
-**响应**：
-```json
-{
-  "success": true,
-  "data": {
-    "keywords": ["川菜", "便宜"],
-    "cuisine": "川菜",
-    "priceRange": "low",
-    "radius": 2000
-  }
-}
-```
+**响应**：`text/event-stream`，事件包括 `thinking`、`searching`、`question`、`final`、`done`。
 
 ### POST /api/search
 
