@@ -4,9 +4,6 @@
   "main": ".open-next/worker.js",
   "compatibility_date": "2024-12-01",
   "compatibility_flags": ["nodejs_compat"],
-  "limits": {
-    "subrequests": 50
-  },
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"
