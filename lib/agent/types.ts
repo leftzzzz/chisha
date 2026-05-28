@@ -66,6 +66,9 @@ export interface GoalPatch {
 }
 
 export interface ClarificationEffect {
+  replaceRequestedItems?: string[];
+  replaceCategories?: string[];
+  replacePrimaryKeywords?: string[];
   addRequestedItems?: string[];
   addCategories?: string[];
   addSoftPreferences?: Preference[];

@@ -84,7 +84,7 @@ export function verifyCandidate(
   const hasStrongItemMatch = itemMatches.some((match) => match.confidence >= PRIMARY_MATCH_CONFIDENCE);
   const hasSupportedSearchKeywordMatch = hasSearchKeywordItemMatch(itemMatches)
     && isPrimaryKeywordPlan(plan)
-    && hasCategorySupportForKeywordEvidence(goal, categoryMatches);
+    && hasCategorySupportForKeywordEvidence(categoryMatches);
 
   if (requiredItems.length > 0 && !hasStrongItemMatch && !hasSupportedSearchKeywordMatch && !goal.allowBroaden) {
     hardFailures.push({
@@ -298,6 +298,11 @@ function matchCategories(restaurant: Restaurant, categories: GoalCategory[], pla
       continue;
     }
 
+    if (planPoiTypesMatchRestaurant(plan, restaurant)) {
+      matches.push(category.name);
+      continue;
+    }
+
     if (category.confidence < 0.7 && plan.searchIntent !== 'exact' && plan.keywords.some((keyword) =>
       aliases.some((alias) => textContains(keyword, alias) || textContains(alias, keyword))
     )) {
@@ -360,15 +365,8 @@ function isPrimaryKeywordPlan(plan: SearchPlan): boolean {
     && (plan.searchIntent === 'exact' || plan.searchIntent === 'synonym');
 }
 
-function hasCategorySupportForKeywordEvidence(
-  goal: UserGoal,
-  categoryMatches: string[]
-): boolean {
-  if (categoryMatches.length > 0) {
-    return true;
-  }
-
-  return goal.acceptableCategories.every((category) => category.confidence < 0.7);
+function hasCategorySupportForKeywordEvidence(categoryMatches: string[]): boolean {
+  return categoryMatches.length > 0;
 }
 
 function hasDefaultDiversity(goal: UserGoal): boolean {
@@ -424,6 +422,14 @@ function categoryMatchesPoiType(category: string, restaurant: Restaurant): boole
   return poiTypesForCategory(category).some((poiType) =>
     restaurant.poiTypeCode === poiType
   );
+}
+
+function planPoiTypesMatchRestaurant(plan: SearchPlan, restaurant: Restaurant): boolean {
+  if (!plan.poiType || !restaurant.poiTypeCode) {
+    return false;
+  }
+
+  return plan.poiType.split('|').some((poiType) => poiType === restaurant.poiTypeCode);
 }
 
 function poiTypesForCategory(category: string): string[] {

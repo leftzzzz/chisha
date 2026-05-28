@@ -51,6 +51,9 @@ export const AlternativeGroupSchema = z.object({
 });
 
 export const ClarificationEffectSchema = z.object({
+  replaceRequestedItems: z.array(z.string()).optional(),
+  replaceCategories: z.array(z.string()).optional(),
+  replacePrimaryKeywords: z.array(z.string()).optional(),
   addRequestedItems: z.array(z.string()).optional(),
   addCategories: z.array(z.string()).optional(),
   addSoftPreferences: z.array(PreferenceSchema).optional(),

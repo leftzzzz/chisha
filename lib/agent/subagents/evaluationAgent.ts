@@ -141,7 +141,7 @@ function evaluateRestaurantFacts(
     .filter((item) => itemTerms(item).some((term) => textContains(text, term)))
     .map((item) => item.name);
   const matchedCategories = goal.acceptableCategories
-    .filter((category) => categoryMatchesRestaurant(category.name, restaurant, text))
+    .filter((category) => categoryMatchesRestaurant(category.name, restaurant, text, plan))
     .map((category) => category.name);
   const keywordMatchedItems = matchItemsBySearchKeyword(goal, plan, matchedCategories);
   const matchedItems = Array.from(new Set([...fieldMatchedItems, ...keywordMatchedItems]));
@@ -218,8 +218,7 @@ function matchItemsBySearchKeyword(
     return [];
   }
 
-  const hasCategorySupport = matchedCategories.length > 0
-    || goal.acceptableCategories.every((category) => category.confidence < 0.7);
+  const hasCategorySupport = matchedCategories.length > 0;
   if (!hasCategorySupport) {
     return [];
   }
@@ -234,10 +233,15 @@ function matchItemsBySearchKeyword(
 function categoryMatchesRestaurant(
   categoryName: string,
   restaurant: Restaurant,
-  text: string
+  text: string,
+  plan: SearchPlan
 ): boolean {
   if (getPoiTerms(categoryName).some((term) => textContains(text, term))) {
     return true;
+  }
+
+  if (plan.poiType && restaurant.poiTypeCode) {
+    return plan.poiType.split('|').some((poiType) => poiType === restaurant.poiTypeCode);
   }
 
   return poiTypesForTerm(categoryName).some((poiType) =>

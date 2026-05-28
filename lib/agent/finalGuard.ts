@@ -119,11 +119,10 @@ function buildUnmetConstraints(
     unmet.push('部分候补缺少可验证字段，未进入主推荐。');
   }
 
-  const hasUnauthorizedBroadened = context.candidates.some((candidate) => {
-    const attempt = context.attempts[candidate.sourceAttempt - 1];
-    return attempt?.allowedForPrimary === false
-      && (attempt.searchIntent === 'broadened' || attempt.searchIntent === 'fallback');
-  });
+  const hasUnauthorizedBroadened = context.attempts.some((attempt) =>
+    attempt.allowedForPrimary === false
+    && (attempt.searchIntent === 'broadened' || attempt.searchIntent === 'fallback')
+  );
   if (hasUnauthorizedBroadened) {
     unmet.push('未授权放宽或兜底结果只作为候补，不进入主推荐。');
   }

@@ -158,8 +158,13 @@ export function getPagesPerKeyword(keywordCount: number, requestedPages: number)
 export function resolvePoiTypesForKeyword(
   keyword: string,
   fallbackPoiType: string | undefined,
-  hasMultipleKeywords: boolean
+  hasMultipleKeywords: boolean,
+  preferFallbackPoiType = false
 ): string {
+  if (preferFallbackPoiType && fallbackPoiType) {
+    return fallbackPoiType;
+  }
+
   const keywordPoiType = lookupFoodPoiTypes(keyword);
   if (keywordPoiType) {
     return keywordPoiType;

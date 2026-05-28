@@ -105,6 +105,10 @@ function evaluateRestaurant(
     return null;
   }
 
+  if (verification.status === 'failed') {
+    return null;
+  }
+
   const matched: string[] = [];
   const warnings = [...context.goal.ambiguity, ...verificationSummary(verification)];
   let score = plan.searchIntent === 'fallback' ? 18 : 32;
@@ -151,9 +155,7 @@ function evaluateRestaurant(
     matched.push(`验证品类${category}`);
   }
 
-  if (verification.status === 'failed') {
-    score -= 24;
-  } else if (verification.status === 'unverified') {
+  if (verification.status === 'unverified') {
     score -= 8;
   } else {
     score += Math.round(verification.confidence * 8);

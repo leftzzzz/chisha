@@ -62,6 +62,9 @@ export const AskUserInputSchema = z.object({
     label: z.string().min(1).max(20),
     value: z.string().min(1).max(80),
     effect: z.object({
+      replaceRequestedItems: z.array(z.string()).default([]),
+      replaceCategories: z.array(z.string()).default([]),
+      replacePrimaryKeywords: z.array(z.string()).default([]),
       addRequestedItems: z.array(z.string()).default([]),
       addCategories: z.array(z.string()).default([]),
       setDistanceMaxMeters: z.number().optional(),
@@ -98,6 +101,13 @@ export function createAgentTools(executors: AgentToolExecutors) {
           question: input.question,
           options: input.options?.map((option) => option.label),
           allowFreeText: input.allowFreeText,
+          optionEffects: input.options
+            ? Object.fromEntries(
+                input.options
+                  .filter((option) => option.effect)
+                  .map((option) => [option.label, option.effect!])
+              )
+            : undefined,
         };
 
         return executors.askUser?.(input) ?? question;

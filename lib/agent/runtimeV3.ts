@@ -10,8 +10,9 @@ import { applyHardConstraintGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import { SearchPlanSchema } from './schemas/plan';
 import { finalizeRecommendations } from './resultAssembler';
-import { lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
+import { isGenericSearchKeyword, lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
 import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
+import { runPoiTypeSelectionAgent } from './subagents/poiTypeSelectionAgent';
 import {
   createActionRecord,
   decideSearchSupervisorAction,
@@ -56,6 +57,7 @@ export async function runSearchAgentV3(
     message: input.query,
     previousGoal: input.runtimeState?.goal,
     pendingQuestion: input.runtimeState?.pendingQuestion,
+    messages: input.messages,
     preferenceSummary: input.preferenceSummary,
     attempts: input.runtimeState?.attempts,
   });
@@ -101,7 +103,7 @@ export async function runSearchAgentV3(
       },
       context
     );
-    const guarded = guardAction(rawAction, context);
+    const guarded = await guardAction(rawAction, context);
     const actionRecord = appendAction(context, guarded.action, emit);
 
     for (const message of guarded.guardrails) {
@@ -213,11 +215,32 @@ function patchedRawQuery(goal: UserGoal, patch: GoalPatch, message: string): str
     return goal.rawQuery;
   }
 
-  if (patch.replacePrimaryKeywords || patch.replaceRequestedItems || patch.replaceCategories) {
+  if (
+    (patch.replacePrimaryKeywords || patch.replaceRequestedItems || patch.replaceCategories)
+    && replacementTargetsComeFromMessage(patch, trimmed)
+  ) {
     return trimmed;
   }
 
   return goal.rawQuery.includes(trimmed) ? goal.rawQuery : `${goal.rawQuery}，${trimmed}`;
+}
+
+function replacementTargetsComeFromMessage(patch: GoalPatch, message: string): boolean {
+  const replacementTargets = [
+    ...(patch.replacePrimaryKeywords ?? []),
+    ...(patch.replaceRequestedItems ?? []).map((item) => item.name),
+    ...(patch.replaceCategories ?? []).map((category) => category.name),
+  ].filter(Boolean);
+
+  if (replacementTargets.length === 0) {
+    return true;
+  }
+
+  const normalizedMessageTargets = normalizeSearchKeywords([message])
+    .filter((keyword) => !isGenericSearchKeyword(keyword));
+  const messageTargetSet = new Set([message.trim(), ...normalizedMessageTargets]);
+
+  return replacementTargets.every((target) => messageTargetSet.has(target));
 }
 
 function shouldResetSearchStateAfterGoalUpdate(input: AgentInput, nextGoal: UserGoal): boolean {
@@ -242,7 +265,7 @@ function getInitialClarifyingQuestion(goal: UserGoal): PendingQuestion | null {
   return clarificationNeed ? clarificationNeedToPendingQuestion(clarificationNeed) : null;
 }
 
-function guardAction(action: AgentAction, context: AgentV3Context): GuardedAction {
+async function guardAction(action: AgentAction, context: AgentV3Context): Promise<GuardedAction> {
   if (action.type === 'search') {
     return guardSearchAction(action, context);
   }
@@ -254,10 +277,10 @@ function guardAction(action: AgentAction, context: AgentV3Context): GuardedActio
   return { action, guardrails: [] };
 }
 
-function guardSearchAction(
+async function guardSearchAction(
   action: Extract<AgentAction, { type: 'search' }>,
   context: AgentV3Context
-): GuardedAction {
+): Promise<GuardedAction> {
   const guardrails: string[] = [];
 
   if (context.attempts.length >= context.maxSearchCalls) {
@@ -309,17 +332,42 @@ function guardSearchAction(
     guardrails.push('未获得用户放宽授权，放宽/兜底搜索结果只能进入候补。');
   }
 
-  const parsed = SearchPlanSchema.safeParse({
+  const planBeforePoiType = SearchPlanSchema.safeParse({
     ...action.plan,
     keywords,
+    poiType: undefined,
     radiusMeters: Math.max(300, Math.min(5000, Math.round(radiusMeters))),
     allowedForPrimary,
+  });
+
+  if (!planBeforePoiType.success) {
+    return {
+      action: { type: 'ask_user', question: buildNoPrimaryQuestion(context) },
+      guardrails: [...guardrails, `搜索计划结构无效，已改为追问：${planBeforePoiType.error.message}`],
+    };
+  }
+
+  const poiTypeSelection = await runPoiTypeSelectionAgent({
+    goal: context.goal,
+    plan: planBeforePoiType.data,
+  });
+  const selectedPoiType = poiTypeSelection.typeCodes.length > 0
+    ? poiTypeSelection.typeCodes.join('|')
+    : undefined;
+
+  if (action.plan.poiType && action.plan.poiType !== selectedPoiType) {
+    guardrails.push('已用 PoiTypeSelectionAgent 的官方分类表选择结果替换模型/旧词表 poiType。');
+  }
+
+  const parsed = SearchPlanSchema.safeParse({
+    ...planBeforePoiType.data,
+    poiType: selectedPoiType,
   });
 
   if (!parsed.success) {
     return {
       action: { type: 'ask_user', question: buildNoPrimaryQuestion(context) },
-      guardrails: [...guardrails, `搜索计划结构无效，已改为追问：${parsed.error.message}`],
+      guardrails: [...guardrails, `POI type 选择后搜索计划无效，已改为追问：${parsed.error.message}`],
     };
   }
 
@@ -431,6 +479,9 @@ async function executeSearchAction(
   const hardGuard = applyHardConstraintGuard(restaurants, context.goal);
   const hardRejectedReasons = hardGuard.rejected.flatMap((item) => item.reasons);
   context.unmetConstraints.push(...hardRejectedReasons);
+  if (!plan.allowedForPrimary && restaurants.length > 0) {
+    context.unmetConstraints.push('未授权放宽或兜底结果只作为候补，不进入主推荐。');
+  }
 
   const evaluated = evaluateSearchResult(hardGuard.passed, context, plan, round);
   mergeCandidates(context, evaluated.acceptedCandidates);

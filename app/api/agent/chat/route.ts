@@ -193,7 +193,14 @@ export async function POST(request: Request) {
           input,
           (event) => sendEvent(controller, event),
           async (plan: SearchPlan) => {
-            const restaurants = await amapPoiSearch(plan.keywords, input.location, plan.radiusMeters, plan.poiType, 3);
+            const restaurants = await amapPoiSearch(
+              plan.keywords,
+              input.location,
+              plan.radiusMeters,
+              plan.poiType,
+              3,
+              { preferProvidedPoiType: Boolean(plan.poiType) }
+            );
             return enrichRestaurantsWithAmapDetails(restaurants, 12);
           }
         );

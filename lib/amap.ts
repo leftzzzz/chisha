@@ -70,6 +70,10 @@ interface AmapPoi {
   business_status?: string;
 }
 
+interface AmapPoiSearchOptions {
+  preferProvidedPoiType?: boolean;
+}
+
 const amapResponseCache = new Map<string, { expiresAt: number; data: unknown }>();
 let amapRequestSchedule = Promise.resolve();
 let lastAmapRequestAt = 0;
@@ -87,7 +91,8 @@ export async function amapPoiSearch(
   location: Location,
   distance: number = 2000,
   poiType?: string,
-  pageCount: number = 1
+  pageCount: number = 1,
+  options: AmapPoiSearchOptions = {}
 ): Promise<Restaurant[]> {
   // 检查 API Key
   if (!AMAP_API_KEY) {
@@ -103,7 +108,12 @@ export async function amapPoiSearch(
   const pagesPerKeyword = getPagesPerKeyword(searchKeywords.length, pages);
   const searchTasks = searchKeywords.map((keyword) => ({
     keyword,
-    poiType: resolvePoiTypesForKeyword(keyword, poiType, searchKeywords.length > 1),
+    poiType: resolvePoiTypesForKeyword(
+      keyword,
+      poiType,
+      searchKeywords.length > 1,
+      options.preferProvidedPoiType
+    ),
   }));
 
   logger.info('Calling Amap POI search', {

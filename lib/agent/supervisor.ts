@@ -8,6 +8,7 @@ import {
   normalizeSearchKeywords,
 } from './poiTaxonomy';
 import type {
+  AgentMessage,
   AgentInput,
   AgentSession,
   ClarificationEffect,
@@ -33,6 +34,7 @@ export interface SearchSupervisorInput {
   previousGoal?: UserGoal;
   preferenceSummary?: UserPreferenceSummary;
   pendingQuestion?: PendingQuestion;
+  messages?: AgentMessage[];
   failureReason?: string;
   attempts?: SearchAttempt[];
   verdictSummary?: CandidateVerdict[];
@@ -55,11 +57,14 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 5. 用户没有明确授权时 allowBroaden=false。
 6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
 7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
+7a. 如果追问给出选项，必须尽量给每个选项设置 optionEffects；选项只是分类说明时，effect 要指向被澄清的原始目标，不能把选项标签当搜索词。
 8. 用户只说“随便/推荐/附近有什么/吃点/不知道/清淡点/健康点/便宜点/环境好/人气高”等开放或软偏好、但没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
 9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true 并进入 plan，不要再次 ask_user。
 10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
 11. primaryKeywords 只能放适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
 12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords 和 broadenedKeywords 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
+13. 处理 pendingQuestion 的用户回复时，必须结合 previousGoal.rawQuery、pendingQuestion 和历史 messages 重新总结完整需求；当前 message 不是独立新需求。
+14. 如果用户回复命中的是上轮澄清问题的选项标签或分类说明，不要把该标签本身作为搜索词；优先通过 pendingQuestion.optionEffects 或历史上下文恢复被澄清的原始目标。
 
 需求归类：
 1. requestedItems 只放用户想吃的具体菜品、餐食或必须命中的食物目标；acceptableCategories 只放能满足需求的菜系/餐厅类型。
@@ -160,6 +165,7 @@ export async function understandSearchGoal(input: AgentInput): Promise<UserGoal>
     message: input.query,
     previousGoal: input.runtimeState?.goal,
     preferenceSummary: input.preferenceSummary,
+    messages: input.messages,
   });
 
   if (output.goal) {
@@ -415,11 +421,32 @@ function patchedRawQuery(goal: UserGoal, patch: GoalPatch, answer: string): stri
     return goal.rawQuery;
   }
 
-  if (patch.replacePrimaryKeywords || patch.replaceRequestedItems || patch.replaceCategories) {
+  if (
+    (patch.replacePrimaryKeywords || patch.replaceRequestedItems || patch.replaceCategories)
+    && replacementTargetsComeFromAnswer(patch, trimmed)
+  ) {
     return trimmed;
   }
 
   return goal.rawQuery.includes(trimmed) ? goal.rawQuery : `${goal.rawQuery}，${trimmed}`;
+}
+
+function replacementTargetsComeFromAnswer(patch: GoalPatch, answer: string): boolean {
+  const replacementTargets = [
+    ...(patch.replacePrimaryKeywords ?? []),
+    ...(patch.replaceRequestedItems ?? []).map((item) => item.name),
+    ...(patch.replaceCategories ?? []).map((category) => category.name),
+  ].filter(Boolean);
+
+  if (replacementTargets.length === 0) {
+    return true;
+  }
+
+  const normalizedAnswerTargets = normalizeSearchKeywords([answer])
+    .filter((keyword) => !isGenericSearchKeyword(keyword));
+  const answerTargetSet = new Set([answer.trim(), ...normalizedAnswerTargets]);
+
+  return replacementTargets.every((target) => answerTargetSet.has(target));
 }
 
 function hasPrimaryTargets(goal: UserGoal): boolean {
@@ -432,6 +459,11 @@ function hasPrimaryTargets(goal: UserGoal): boolean {
 
 function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatch {
   const addConstraints: Constraint[] = [];
+  const replaceRequestedItems = effect.replaceRequestedItems?.filter(Boolean);
+  const replaceCategories = effect.replaceCategories?.filter(Boolean);
+  const replacePrimaryKeywords = effect.replacePrimaryKeywords?.filter(Boolean);
+  const addRequestedItems = effect.addRequestedItems?.filter(Boolean);
+  const addCategories = effect.addCategories?.filter(Boolean);
 
   if (effect.setDistanceMaxMeters !== undefined) {
     addConstraints.push({
@@ -444,15 +476,33 @@ function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatc
   }
 
   return GoalPatchSchema.parse({
-    addRequestedItems: effect.addRequestedItems?.map((item) => ({
-      name: item,
-      required: true,
-      aliases: [],
-    })),
-    addCategories: effect.addCategories?.map((category) => ({
-      name: category,
-      confidence: 0.8,
-    })),
+    replaceRequestedItems: replaceRequestedItems?.length
+      ? replaceRequestedItems.map((item) => ({
+          name: item,
+          required: true,
+          aliases: [],
+        }))
+      : undefined,
+    replaceCategories: replaceCategories?.length
+      ? replaceCategories.map((category) => ({
+          name: category,
+          confidence: 0.8,
+        }))
+      : undefined,
+    replacePrimaryKeywords: replacePrimaryKeywords?.length ? replacePrimaryKeywords : undefined,
+    addRequestedItems: addRequestedItems?.length
+      ? addRequestedItems.map((item) => ({
+          name: item,
+          required: true,
+          aliases: [],
+        }))
+      : undefined,
+    addCategories: addCategories?.length
+      ? addCategories.map((category) => ({
+          name: category,
+          confidence: 0.8,
+        }))
+      : undefined,
     addSoftPreferences: effect.addSoftPreferences,
     addConstraints,
     removeConstraints: effect.setDistanceMaxMeters !== undefined
@@ -481,6 +531,7 @@ async function callSupervisorModel(input: SearchSupervisorInput): Promise<Search
               message: input.message,
               previousGoal: input.previousGoal,
               pendingQuestion: input.pendingQuestion,
+              messages: input.messages?.slice(-8),
               failureReason: input.failureReason,
               attempts: input.attempts,
               verdictSummary: input.verdictSummary,
@@ -985,6 +1036,9 @@ function clarificationEffectJsonSchema() {
     type: 'object',
     additionalProperties: false,
     properties: {
+      replaceRequestedItems: { type: 'array', items: { type: 'string' } },
+      replaceCategories: { type: 'array', items: { type: 'string' } },
+      replacePrimaryKeywords: { type: 'array', items: { type: 'string' } },
       addRequestedItems: { type: 'array', items: { type: 'string' } },
       addCategories: { type: 'array', items: { type: 'string' } },
       addSoftPreferences: { type: 'array', items: preferenceJsonSchema() },

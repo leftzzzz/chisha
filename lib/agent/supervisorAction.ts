@@ -50,7 +50,8 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，也是餐厅搜索唯一 l
 - strict 距离、明确排除项、不吃辣等硬约束不能被自动放宽。
 - 用户没有 allowBroaden 时，broadened/fallback 搜索的 allowedForPrimary 必须为 false。
 - selectedIds 只能来自候选摘要中的 id；未验证或 failed 候选不能作为主推荐。
-- relatedKeywords 还有未尝试词且主推荐少于目标数时，优先继续 search，不要过早 finish。`;
+- relatedKeywords 还有未尝试词且主推荐少于目标数时，优先继续 search，不要过早 finish。
+- ask_user 如果给出选项，尽量为选项提供 optionEffects。选项标签只是分类说明时，effect 必须指向历史上下文里的真实目标，不能把选项标签当搜索词。`;
 
 const ACTION_FUNCTION = {
   name: 'decideRestaurantSearchAction',
@@ -77,6 +78,10 @@ const ACTION_FUNCTION = {
           question: { type: 'string' },
           options: { type: 'array', items: { type: 'string' } },
           allowFreeText: { type: 'boolean' },
+          optionEffects: {
+            type: 'object',
+            additionalProperties: clarificationEffectJsonSchema(),
+          },
         },
       },
       selectedIds: { type: 'array', items: { type: 'string' } },
@@ -87,6 +92,35 @@ const ACTION_FUNCTION = {
     required: ['type'],
   },
 };
+
+function clarificationEffectJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      replaceRequestedItems: { type: 'array', items: { type: 'string' } },
+      replaceCategories: { type: 'array', items: { type: 'string' } },
+      replacePrimaryKeywords: { type: 'array', items: { type: 'string' } },
+      addRequestedItems: { type: 'array', items: { type: 'string' } },
+      addCategories: { type: 'array', items: { type: 'string' } },
+      addSoftPreferences: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string' },
+            weight: { type: 'number' },
+            verifiable: { type: 'boolean' },
+          },
+          required: ['name', 'weight', 'verifiable'],
+        },
+      },
+      setDistanceMaxMeters: { type: 'number' },
+      allowBroaden: { type: 'boolean' },
+    },
+  };
+}
 
 export async function decideSearchSupervisorAction(
   input: SearchSupervisorActionInput,

@@ -141,8 +141,10 @@ describe('SearchSupervisorAgent', () => {
   it('applies pending question option effects inside Supervisor ownership', () => {
     const session: AgentSession = {
       id: 's1',
+      version: 3,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      expiresAt: Date.now() + 1000,
       location: { lat: 31.2, lng: 121.4 },
       messages: [],
       attempts: [],
@@ -165,6 +167,55 @@ describe('SearchSupervisorAgent', () => {
     expect(session.goal?.hardConstraints).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: 'distance', maxMeters: 5000 })])
     );
+  });
+
+  it('uses structured option effects to re-summarize clarification answers with previous context', () => {
+    const session: AgentSession = {
+      id: 's2',
+      version: 3,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + 1000,
+      location: { lat: 31.2, lng: 121.4 },
+      messages: [
+        { role: 'user', content: '港奶', createdAt: Date.now() },
+        { role: 'assistant', content: '你说的「港奶」是菜品、菜系还是店名？', createdAt: Date.now() },
+      ],
+      attempts: [],
+      candidates: [],
+      actions: [],
+      observations: [],
+      goal: goal({
+        rawQuery: '港奶',
+        primaryKeywords: ['港奶'],
+      }),
+      pendingQuestion: {
+        question: '你说的「港奶」是菜品、菜系还是店名？',
+        options: ['菜品', '菜系', '店名'],
+        allowFreeText: true,
+        optionEffects: {
+          '菜品': {
+            replaceRequestedItems: ['港奶'],
+            replacePrimaryKeywords: ['港奶'],
+          },
+          '菜系': {
+            replaceCategories: ['港奶'],
+            replacePrimaryKeywords: ['港奶'],
+          },
+          '店名': {
+            replacePrimaryKeywords: ['港奶'],
+          },
+        },
+      },
+    };
+
+    applySupervisorClarifyingAnswer(session, '菜品');
+
+    expect(session.pendingQuestion).toBeUndefined();
+    expect(session.goal?.rawQuery).toBe('港奶，菜品');
+    expect(session.goal?.primaryKeywords).toEqual(['港奶']);
+    expect(session.goal?.requestedItems).toEqual([{ name: '港奶', required: true, aliases: [] }]);
+    expect(session.goal?.primaryKeywords).not.toContain('菜品');
   });
 
   it('accepts soft-preference clarification answers instead of asking again', () => {
