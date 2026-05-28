@@ -4,7 +4,11 @@ describe('PoiTypeSelectionAgent', () => {
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
-    process.env.OPENAI_API_KEY = originalApiKey;
+    if (originalApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
     jest.dontMock('@/lib/withTimeout');
     jest.resetModules();
   });
@@ -61,5 +65,60 @@ describe('PoiTypeSelectionAgent', () => {
 
     expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
     expect(result.typeCodes).toEqual(['050700']);
+  });
+
+  it('defaults non-critical model fields when selecting POI types', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.OPENAI_API_KEY = 'test-key';
+
+    const fetchWithTimeout = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            function_call: {
+              name: 'selectAmapPoiTypes',
+              arguments: JSON.stringify({
+                typeCodes: ['050700'],
+              }),
+            },
+          },
+        }],
+      }),
+    }));
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    const { runPoiTypeSelectionAgent } = await import('@/lib/agent/subagents/poiTypeSelectionAgent');
+    const result = await runPoiTypeSelectionAgent({
+      goal: {
+        intent: 'find_restaurants',
+        rawQuery: '港奶',
+        requestedItems: [],
+        acceptableCategories: [],
+        alternativeGroups: [],
+        primaryKeywords: ['港奶'],
+        relatedKeywords: [],
+        broadenedKeywords: [],
+        hardConstraints: [],
+        softPreferences: [],
+        exclusions: [],
+        ambiguity: [],
+        clarificationNeeded: [],
+        allowBroaden: false,
+      },
+      plan: {
+        keywords: ['港奶'],
+        radiusMeters: 1800,
+        searchIntent: 'exact',
+        allowedForPrimary: true,
+        reason: '搜索用户明确表达的饮品。',
+      },
+    });
+
+    expect(result).toEqual({
+      typeCodes: ['050700'],
+      confidence: 0.5,
+      rationale: '根据搜索目标选择高德 POI 类型。',
+    });
   });
 });

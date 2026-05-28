@@ -12,8 +12,8 @@ const POI_TYPE_SELECTION_TIMEOUT = 12000;
 
 const PoiTypeSelectionOutputSchema = z.object({
   typeCodes: z.array(z.string().regex(/^\d{6}$/)).max(5),
-  confidence: z.number().min(0).max(1),
-  rationale: z.string(),
+  confidence: z.number().min(0).max(1).default(0.5),
+  rationale: z.string().default('根据搜索目标选择高德 POI 类型。'),
 });
 
 export interface PoiTypeSelectionInput {

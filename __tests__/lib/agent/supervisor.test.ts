@@ -246,4 +246,15 @@ describe('SearchSupervisorAgent', () => {
     expect(parsed.goal?.clarificationNeeded).toEqual([]);
     expect(parsed.goal?.allowBroaden).toBe(false);
   });
+
+  it('defaults omitted patch reason from model output', () => {
+    const parsed = SearchSupervisorOutputSchema.parse({
+      patch: {
+        allowBroaden: true,
+      },
+      nextAction: 'plan',
+    });
+
+    expect(parsed.patch?.reason).toBe('SearchSupervisorAgent 更新目标。');
+  });
 });

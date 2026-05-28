@@ -10,7 +10,7 @@ export const ConstraintKindSchema = z.enum([
 
 export const ConstraintSchema = z.object({
   kind: ConstraintKindSchema,
-  label: z.string().min(1),
+  label: z.string().min(1).default('约束'),
   value: z.union([
     z.string(),
     z.number(),
@@ -29,19 +29,19 @@ export const ConstraintSchema = z.object({
 
 export const PreferenceSchema = z.object({
   name: z.string().min(1),
-  weight: z.number(),
-  verifiable: z.boolean(),
+  weight: z.number().default(1),
+  verifiable: z.boolean().default(false),
 });
 
 export const RequestedItemSchema = z.object({
   name: z.string().min(1),
-  required: z.boolean(),
+  required: z.boolean().default(true),
   aliases: z.array(z.string()).default([]),
 });
 
 export const GoalCategorySchema = z.object({
   name: z.string().min(1),
-  confidence: z.number().min(0).max(1),
+  confidence: z.number().min(0).max(1).default(0.8),
 });
 
 const ClarificationEffectTargetSchema = z.preprocess((value) => {
@@ -83,10 +83,10 @@ export const ClarificationOptionSchema = z.object({
 });
 
 export const ClarificationNeedSchema = z.object({
-  reason: z.string().min(1),
+  reason: z.string().min(1).default('需要补充信息。'),
   question: z.string().min(1),
   options: z.array(ClarificationOptionSchema).optional(),
-  allowFreeText: z.boolean(),
+  allowFreeText: z.boolean().default(true),
 });
 
 export const UserGoalSchema = z.object({
@@ -117,7 +117,7 @@ export const GoalPatchSchema = z.object({
   addConstraints: z.array(ConstraintSchema).optional(),
   removeConstraints: z.array(z.string()).optional(),
   allowBroaden: z.boolean().optional(),
-  reason: z.string().min(1),
+  reason: z.string().min(1).default('SearchSupervisorAgent 更新目标。'),
 });
 
 export const AgentGoalDraftSchema = z.object({

@@ -14,8 +14,8 @@ export const CandidateVerdictSchema = z.object({
 
 export const EvaluationAgentOutputSchema = z.object({
   verdicts: z.array(CandidateVerdictSchema),
-  selectedIds: z.array(z.string()),
-  candidateIds: z.array(z.string()),
-  explanation: z.string().min(1).max(500),
+  selectedIds: z.array(z.string()).default([]),
+  candidateIds: z.array(z.string()).default([]),
+  explanation: z.string().min(1).max(500).default('已完成候选评估。'),
   unmetConstraints: z.array(z.string()).default([]),
 });

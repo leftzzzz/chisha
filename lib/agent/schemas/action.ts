@@ -15,7 +15,7 @@ export const AgentActionSchema = z.union([
     type: z.literal('finish'),
     selectedIds: z.array(z.string()).max(8).optional(),
     candidateIds: z.array(z.string()).max(20).optional(),
-    explanation: z.string().min(1).max(500),
-    confidence: z.number().min(0).max(1),
+    explanation: z.string().min(1).max(500).default('已完成当前推荐。'),
+    confidence: z.number().min(0).max(1).default(0.6),
   }),
 ]);
