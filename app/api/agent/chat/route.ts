@@ -69,6 +69,10 @@ function sendEvent(controller: ReadableStreamDefaultController, event: AgentEven
   controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
 }
 
+function isSupervisorV2Enabled(): boolean {
+  return process.env.AGENT_SUPERVISOR_V2 !== 'false';
+}
+
 function pauseSessionWithQuestion(
   controller: ReadableStreamDefaultController,
   session: AgentSession,
@@ -97,6 +101,16 @@ function pauseSessionWithQuestion(
   });
   sendEvent(controller, { type: 'session_paused', sessionId: resumableSessionId });
   controller.close();
+}
+
+function sendSessionUpdated(
+  controller: ReadableStreamDefaultController,
+  session: AgentSession
+): void {
+  sendEvent(controller, {
+    type: 'session_updated',
+    sessionId: createAgentSessionToken(session),
+  });
 }
 
 export async function POST(request: Request) {
@@ -128,6 +142,7 @@ export async function POST(request: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
+        const useSupervisorV2 = isSupervisorV2Enabled();
         let session = requestData.sessionId
           ? getAgentSession(requestData.sessionId)
           : createAgentSession(requestData.message, requestData.location);
@@ -143,16 +158,22 @@ export async function POST(request: Request) {
 
         if (requestData.sessionId) {
           appendUserMessage(session, requestData.message);
-          if (process.env.AGENT_SUPERVISOR_V2 === 'true') {
-            applySupervisorClarifyingAnswer(session, requestData.message);
-          } else {
-            applyClarifyingAnswer(session, requestData.message);
+
+          if (session.pendingQuestion) {
+            if (useSupervisorV2) {
+              applySupervisorClarifyingAnswer(session, requestData.message);
+            } else {
+              applyClarifyingAnswer(session, requestData.message);
+            }
           }
-          sendEvent(controller, { type: 'session_resumed', sessionId: session.id });
+          sendEvent(controller, {
+            type: 'session_resumed',
+            sessionId: createAgentSessionToken(session),
+          });
         }
 
         const input: AgentInput = {
-          query: getSessionQuery(session),
+          query: useSupervisorV2 ? requestData.message : getSessionQuery(session),
           location: requestData.location,
           preferenceSummary: mergeUserPreferenceSummaries([
             requestData.preferenceSummary,
@@ -171,7 +192,7 @@ export async function POST(request: Request) {
           location: input.location,
         });
 
-        const runAgent = process.env.AGENT_SUPERVISOR_V2 === 'true'
+        const runAgent = useSupervisorV2
           ? runSearchAgentV2
           : runSearchAgent;
         const result = await runAgent(
@@ -197,6 +218,7 @@ export async function POST(request: Request) {
         session.pendingQuestion = undefined;
         appendAssistantMessage(session, result.explanation);
         saveAgentSession(session);
+        sendSessionUpdated(controller, session);
         controller.close();
       } catch (error) {
         logger.error('Agent chat stream error', { error });

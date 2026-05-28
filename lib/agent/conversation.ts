@@ -2,8 +2,8 @@ import { parseUserGoal } from './planner';
 import type { AgentSession, ClarificationEffect, Constraint, PendingQuestion, UserPreferenceSummary } from './types';
 
 const CLARIFYING_QUESTION: PendingQuestion = {
-  question: '想吃正餐、小吃，还是喝点东西？',
-  options: ['正餐', '小吃', '喝点东西'],
+  question: '你想找哪类餐厅，或具体想吃什么？',
+  allowFreeText: true,
 };
 
 export function getClarifyingQuestion(

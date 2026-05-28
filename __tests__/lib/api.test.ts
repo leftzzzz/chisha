@@ -53,6 +53,7 @@ describe('agentSearch', () => {
     expect(result).toEqual({
       restaurants: [],
       candidates: [],
+      sessionId: 'session-1',
       paused: true,
       question: {
         sessionId: 'session-1',
@@ -76,6 +77,45 @@ describe('agentSearch', () => {
         code: 'NO_RESULTS',
       } satisfies Partial<APIError>)
     );
+  });
+
+  it('can send a resumable session token to the deprecated search endpoint', async () => {
+    mockFetchResponse({
+      ok: true,
+      body: streamFromEvents([
+        {
+          type: 'final',
+          restaurants: [{
+            id: 'r1',
+            name: '测试餐厅',
+            cuisineType: '餐饮',
+            address: '测试地址',
+            location,
+            source: 'amap',
+          }],
+          candidates: [],
+          explanation: '继续会话后找到餐厅。',
+          unmetConstraints: [],
+        },
+        { type: 'session_updated', sessionId: 'agent_state_next' },
+      ]),
+    } as Response);
+
+    const result = await agentSearch(
+      '继续找',
+      location,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'agent_state_prev'
+    );
+
+    const fetchCall = (globalThis as typeof globalThis & { fetch: jest.Mock }).fetch.mock.calls[0];
+    expect(JSON.parse(fetchCall[1].body)).toEqual(
+      expect.objectContaining({ sessionId: 'agent_state_prev' })
+    );
+    expect(result.sessionId).toBe('agent_state_next');
   });
 });
 
@@ -110,6 +150,7 @@ describe('agentChat', () => {
     expect(result).toEqual({
       restaurants: [],
       candidates: [],
+      sessionId: 'agent_state_abc',
       paused: true,
       question: {
         sessionId: 'agent_state_abc',
@@ -124,6 +165,37 @@ describe('agentChat', () => {
         method: 'POST',
       })
     );
+  });
+
+  it('returns updated session tokens after successful chat searches', async () => {
+    const restaurants = [{
+      id: 'r1',
+      name: '寿司店',
+      cuisineType: '日本料理',
+      address: '测试地址',
+      location,
+      source: 'amap' as const,
+    }];
+
+    mockFetchResponse({
+      ok: true,
+      body: streamFromEvents([
+        {
+          type: 'final',
+          restaurants,
+          candidates: [],
+          explanation: '已找到日料。',
+          unmetConstraints: [],
+        },
+        { type: 'session_updated', sessionId: 'agent_state_next' },
+      ]),
+    } as Response);
+
+    const onSessionUpdated = jest.fn();
+    const result = await agentChat('想吃日料', location, { onSessionUpdated });
+
+    expect(result.sessionId).toBe('agent_state_next');
+    expect(onSessionUpdated).toHaveBeenCalledWith('agent_state_next');
   });
 });
 

@@ -60,6 +60,7 @@ export type AgentEvent =
     }
   | { type: 'session_paused'; sessionId: string }
   | { type: 'session_resumed'; sessionId: string }
+  | { type: 'session_updated'; sessionId: string }
   | {
       type: 'final';
       restaurants: Restaurant[];
@@ -83,6 +84,7 @@ export interface AgentSearchCallbacks {
   onQuestion?: (question: AgentQuestion) => void;
   onSessionPaused?: (sessionId: string) => void;
   onSessionResumed?: (sessionId: string) => void;
+  onSessionUpdated?: (sessionId: string) => void;
 }
 
 /**
@@ -379,6 +381,7 @@ export interface AgentSearchResult {
   candidates: Restaurant[];
   explanation?: string;
   unmetConstraints?: string[];
+  sessionId?: string;
   paused?: boolean;
   question?: AgentQuestion;
 }
@@ -417,7 +420,8 @@ export async function agentSearch(
   callbacks?: AgentSearchCallbacks,
   signal?: AbortSignal,
   preferenceSummary?: UserPreferenceSummary,
-  groupPreferenceSummaries?: UserPreferenceSummary[]
+  groupPreferenceSummaries?: UserPreferenceSummary[],
+  sessionId?: string
 ): Promise<AgentSearchResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
@@ -433,7 +437,7 @@ export async function agentSearch(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ query, location, preferenceSummary, groupPreferenceSummaries }),
+      body: JSON.stringify({ query, location, preferenceSummary, groupPreferenceSummaries, sessionId }),
       signal: controller.signal,
     });
 
@@ -458,6 +462,7 @@ export async function agentSearch(
     let result: AgentSearchResult = { restaurants: [], candidates: [] };
     let hasReceivedDone = false;
     let pausedQuestion: AgentQuestion | undefined;
+    let currentSessionId: string | undefined;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -501,13 +506,20 @@ export async function agentSearch(
                   options: event.options,
                   allowFreeText: event.allowFreeText,
                 };
+                currentSessionId = event.sessionId;
                 callbacks?.onQuestion?.(pausedQuestion);
                 break;
               case 'session_paused':
+                currentSessionId = event.sessionId;
                 callbacks?.onSessionPaused?.(event.sessionId);
                 break;
               case 'session_resumed':
+                currentSessionId = event.sessionId;
                 callbacks?.onSessionResumed?.(event.sessionId);
+                break;
+              case 'session_updated':
+                currentSessionId = event.sessionId;
+                callbacks?.onSessionUpdated?.(event.sessionId);
                 break;
               case 'tool_start':
               case 'tool_result':
@@ -521,6 +533,7 @@ export async function agentSearch(
                     candidates: event.candidates || [],
                     explanation: event.explanation,
                     unmetConstraints: event.unmetConstraints,
+                    sessionId: currentSessionId,
                   };
                   callbacks?.onDone?.(
                     event.restaurants,
@@ -539,6 +552,7 @@ export async function agentSearch(
                     candidates: event.candidates || [],
                     explanation: event.explanation,
                     unmetConstraints: event.unmetConstraints,
+                    sessionId: currentSessionId,
                   };
                   callbacks?.onDone?.(
                     event.restaurants,
@@ -564,9 +578,14 @@ export async function agentSearch(
       return {
         restaurants: [],
         candidates: [],
+        sessionId: currentSessionId ?? pausedQuestion.sessionId,
         paused: true,
         question: pausedQuestion,
       };
+    }
+
+    if (currentSessionId) {
+      result = { ...result, sessionId: currentSessionId };
     }
 
     if (result.restaurants.length === 0 && !pausedQuestion) {
@@ -656,6 +675,7 @@ async function requestAgentStream(
     let result: AgentSearchResult = { restaurants: [], candidates: [] };
     let hasReceivedResult = false;
     let pausedQuestion: AgentQuestion | undefined;
+    let currentSessionId: string | undefined;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -701,13 +721,20 @@ async function requestAgentStream(
                 options: event.options,
                 allowFreeText: event.allowFreeText,
               };
+              currentSessionId = event.sessionId;
               callbacks?.onQuestion?.(pausedQuestion);
               break;
             case 'session_paused':
+              currentSessionId = event.sessionId;
               callbacks?.onSessionPaused?.(event.sessionId);
               break;
             case 'session_resumed':
+              currentSessionId = event.sessionId;
               callbacks?.onSessionResumed?.(event.sessionId);
+              break;
+            case 'session_updated':
+              currentSessionId = event.sessionId;
+              callbacks?.onSessionUpdated?.(event.sessionId);
               break;
             case 'tool_start':
             case 'tool_result':
@@ -721,6 +748,7 @@ async function requestAgentStream(
                   candidates: event.candidates || [],
                   explanation: event.explanation,
                   unmetConstraints: event.unmetConstraints,
+                  sessionId: currentSessionId,
                 };
                 callbacks?.onDone?.(
                   event.restaurants,
@@ -738,6 +766,7 @@ async function requestAgentStream(
                   candidates: event.candidates || [],
                   explanation: event.explanation,
                   unmetConstraints: event.unmetConstraints,
+                  sessionId: currentSessionId,
                 };
                 callbacks?.onDone?.(
                   event.restaurants,
@@ -761,9 +790,14 @@ async function requestAgentStream(
       return {
         restaurants: [],
         candidates: [],
+        sessionId: currentSessionId ?? pausedQuestion.sessionId,
         paused: true,
         question: pausedQuestion,
       };
+    }
+
+    if (currentSessionId) {
+      result = { ...result, sessionId: currentSessionId };
     }
 
     if (result.restaurants.length === 0 && !pausedQuestion) {

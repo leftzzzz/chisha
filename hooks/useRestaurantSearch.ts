@@ -89,6 +89,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeLocationRef = useRef<Location | null>(null);
   const activeQuestionRef = useRef<AgentQuestion | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
 
   /**
    * 执行 Agent 搜索或会话续跑
@@ -190,11 +191,24 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
 
           onQuestion: (question) => {
             activeQuestionRef.current = question;
+            activeSessionIdRef.current = question.sessionId;
             setProgress({
               status: 'question',
               message: question.question,
               question,
             });
+          },
+
+          onSessionPaused: (sessionId) => {
+            activeSessionIdRef.current = sessionId;
+          },
+
+          onSessionResumed: (sessionId) => {
+            activeSessionIdRef.current = sessionId;
+          },
+
+          onSessionUpdated: (sessionId) => {
+            activeSessionIdRef.current = sessionId;
           },
 
           onDone: () => {
@@ -211,6 +225,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
 
         if (result.paused && result.question) {
           activeQuestionRef.current = result.question;
+          activeSessionIdRef.current = result.sessionId ?? result.question.sessionId;
           setProgress({
             status: 'question',
             message: result.question.question,
@@ -221,6 +236,9 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
 
         const { restaurants, candidates, explanation, unmetConstraints } = result;
         activeQuestionRef.current = null;
+        if (result.sessionId) {
+          activeSessionIdRef.current = result.sessionId;
+        }
 
         // 搜索完成
         const totalFound = restaurants.length + candidates.length;
@@ -269,7 +287,15 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
   const search = useCallback(
     async (query: string, location: Location, onError?: (errorCode: string) => void) => {
       activeQuestionRef.current = null;
-      await runChatSearch(query, location, onError);
+      const sessionId = isSameSearchLocation(activeLocationRef.current, location)
+        ? activeSessionIdRef.current ?? undefined
+        : undefined;
+
+      if (!sessionId) {
+        activeSessionIdRef.current = null;
+      }
+
+      await runChatSearch(query, location, onError, sessionId);
     },
     [runChatSearch]
   );
@@ -295,4 +321,13 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
     search,
     answerQuestion,
   };
+}
+
+function isSameSearchLocation(left: Location | null, right: Location): boolean {
+  if (!left) {
+    return false;
+  }
+
+  return Math.abs(left.lat - right.lat) < 0.000001
+    && Math.abs(left.lng - right.lng) < 0.000001;
 }

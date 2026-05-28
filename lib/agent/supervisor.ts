@@ -47,7 +47,8 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 3. 你不能生成高德 POI typecode；只输出 UserGoal、GoalPatch 或 PendingQuestion。
 4. 用户明确表达的菜品必须保留在 requestedItems，不要只泛化成菜系。
 5. 用户没有明确授权时 allowBroaden=false。
-6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。`;
+6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
+7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。`;
 
 const SUPERVISOR_FUNCTION = {
   name: 'superviseRestaurantSearch',

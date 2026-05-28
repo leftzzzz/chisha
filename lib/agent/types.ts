@@ -292,6 +292,7 @@ export type AgentEvent =
     }
   | { type: 'session_paused'; sessionId: string }
   | { type: 'session_resumed'; sessionId: string }
+  | { type: 'session_updated'; sessionId: string }
   | {
       type: 'final';
       restaurants: Restaurant[];

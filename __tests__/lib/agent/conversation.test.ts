@@ -7,8 +7,8 @@ describe('agent conversation', () => {
 
     expect(question).toEqual(
       expect.objectContaining({
-        question: expect.stringContaining('正餐'),
-        options: expect.arrayContaining(['正餐', '小吃']),
+        question: expect.stringContaining('具体想吃什么'),
+        allowFreeText: true,
       })
     );
   });
@@ -44,7 +44,7 @@ describe('agent conversation', () => {
         allowBroaden: false,
       },
       pendingQuestion: {
-        question: '想吃正餐、小吃，还是喝点东西？',
+        question: '你想找哪类餐厅，或具体想吃什么？',
         options: ['正餐', '小吃'],
         optionEffects: {
           '小吃': { addCategories: ['小吃', '快餐'] },
@@ -86,13 +86,13 @@ describe('agent conversation', () => {
         ambiguity: [],
         clarificationNeeded: [{
           reason: '用户需求较开放，缺少可验证目标。',
-          question: '想吃正餐、小吃，还是喝点东西？',
+          question: '你想找哪类餐厅，或具体想吃什么？',
           allowFreeText: true,
         }],
         allowBroaden: false,
       },
       pendingQuestion: {
-        question: '想吃正餐、小吃，还是喝点东西？',
+        question: '你想找哪类餐厅，或具体想吃什么？',
         allowFreeText: true,
       },
     };

@@ -496,12 +496,7 @@ function buildFallbackClarificationNeeds(
   return [
     {
       reason: '用户需求较开放，缺少可验证的菜品或品类目标。',
-      question: '想吃正餐、小吃，还是喝点东西？',
-      options: [
-        { label: '正餐', value: '正餐', effect: { addCategories: ['正餐'] } },
-        { label: '小吃', value: '小吃', effect: { addCategories: ['小吃'] } },
-        { label: '喝点东西', value: '喝点东西', effect: { addCategories: ['饮品'] } },
-      ],
+      question: '你想找哪类餐厅，或具体想吃什么？',
       allowFreeText: true,
     },
   ];
