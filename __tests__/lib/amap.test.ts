@@ -21,6 +21,8 @@ function amapPoi(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe('amapPoiSearch', () => {
   const originalAmapKey = process.env.AMAP_API_KEY;
+  const originalAmapMaxQps = process.env.AMAP_MAX_QPS;
+  const originalAmapMaxRetries = process.env.AMAP_MAX_RETRIES;
 
   afterEach(() => {
     jest.resetModules();
@@ -30,10 +32,21 @@ describe('amapPoiSearch', () => {
     } else {
       process.env.AMAP_API_KEY = originalAmapKey;
     }
+    if (originalAmapMaxQps === undefined) {
+      delete process.env.AMAP_MAX_QPS;
+    } else {
+      process.env.AMAP_MAX_QPS = originalAmapMaxQps;
+    }
+    if (originalAmapMaxRetries === undefined) {
+      delete process.env.AMAP_MAX_RETRIES;
+    } else {
+      process.env.AMAP_MAX_RETRIES = originalAmapMaxRetries;
+    }
   });
 
   it('searches each keyword separately with keyword-specific POI types', async () => {
     process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
     const requestUrls: string[] = [];
 
     jest.doMock('@/lib/withTimeout', () => ({
@@ -77,6 +90,7 @@ describe('amapPoiSearch', () => {
 
   it('keeps the caller-provided POI type for a single unknown keyword', async () => {
     process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
     const requestUrls: string[] = [];
 
     jest.doMock('@/lib/withTimeout', () => ({
@@ -102,5 +116,64 @@ describe('amapPoiSearch', () => {
     const params = new URL(requestUrls[0]).searchParams;
     expect(params.get('keywords')).toBe('私房菜');
     expect(params.get('types')).toBe('050100');
+  });
+
+  it('caches successful Amap POI pages to avoid duplicate quota usage', async () => {
+    process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
+    const fetchWithTimeout = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        status: '1',
+        count: '1',
+        info: 'OK',
+        infocode: '10000',
+        pois: [amapPoi({ id: 'cache-hit' })],
+      }),
+    }));
+
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    const { amapPoiSearch } = await import('@/lib/amap');
+    await amapPoiSearch(['川菜'], location, 1800, undefined, 1);
+    await amapPoiSearch(['川菜'], location, 1800, undefined, 1);
+
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries once when Amap reports a QPS limit error', async () => {
+    process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
+    process.env.AMAP_MAX_RETRIES = '1';
+    const fetchWithTimeout = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          status: '0',
+          count: '0',
+          info: 'QPS超过限制',
+          infocode: '10020',
+          pois: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          status: '1',
+          count: '1',
+          info: 'OK',
+          infocode: '10000',
+          pois: [amapPoi({ id: 'retried' })],
+        }),
+      });
+
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    const { amapPoiSearch } = await import('@/lib/amap');
+    const restaurants = await amapPoiSearch(['川菜'], location, 1800, undefined, 1);
+
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
+    expect(restaurants.map((restaurant) => restaurant.id)).toEqual(['amap_retried']);
   });
 });

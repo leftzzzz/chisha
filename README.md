@@ -426,8 +426,14 @@ npm run test:api
 | `OPENAI_BASE_URL` | 否 | OpenAI API 基础 URL | https://api.openai.com/v1 |
 | `AMAP_API_KEY` | 是 | 高德地图 API 密钥 | - |
 | `AMAP_SECURITY_CODE` | 否 | 高德地图安全码 | - |
+| `AMAP_MAX_QPS` | 否 | 后端高德 Web 服务每实例最高请求速率 | 4 |
+| `AMAP_MAX_RETRIES` | 否 | 高德 QPS/网络错误重试次数 | 2 |
+| `AMAP_SEARCH_CACHE_TTL_MS` | 否 | POI 搜索页缓存时间 | 120000 |
+| `AMAP_DETAIL_CACHE_TTL_MS` | 否 | POI 详情缓存时间 | 86400000 |
+| `AMAP_GEOCODE_CACHE_TTL_MS` | 否 | 地理编码缓存时间 | 3600000 |
 | `NEXT_PUBLIC_APP_URL` | 否 | 应用 URL | http://localhost:3000 |
 | `LOG_LEVEL` | 否 | 日志级别 | info |
+| `AGENT_SUPERVISOR_V2` | 否 | 设置为 `false` 时回退到旧 Agent runtime | true |
 
 ## 性能指标
 

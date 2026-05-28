@@ -19,10 +19,22 @@ const AMAP_API_KEY = process.env.AMAP_API_KEY;
 const AMAP_SECURITY_CODE = process.env.AMAP_SECURITY_CODE;
 const AMAP_BASE_URL = 'https://restapi.amap.com/v3';
 const AMAP_TIMEOUT = 10000; // 10 秒超时
+const AMAP_MAX_QPS = parsePositiveInt(process.env.AMAP_MAX_QPS, 4);
+const AMAP_MAX_RETRIES = parsePositiveInt(process.env.AMAP_MAX_RETRIES, 2);
+const AMAP_SEARCH_CACHE_TTL_MS = parsePositiveInt(process.env.AMAP_SEARCH_CACHE_TTL_MS, 2 * 60 * 1000);
+const AMAP_DETAIL_CACHE_TTL_MS = parsePositiveInt(process.env.AMAP_DETAIL_CACHE_TTL_MS, 24 * 60 * 60 * 1000);
+const AMAP_GEOCODE_CACHE_TTL_MS = parsePositiveInt(process.env.AMAP_GEOCODE_CACHE_TTL_MS, 60 * 60 * 1000);
+const AMAP_RATE_LIMIT_INFOCODES = new Set(['10020', '10021']);
 
 /**
  * 高德 API 响应类型
  */
+interface AmapStatusResponse {
+  status: string;
+  info: string;
+  infocode: string;
+}
+
 interface AmapPoiResponse {
   status: string;
   count: string;
@@ -57,6 +69,10 @@ interface AmapPoi {
   opentime_week?: string;
   business_status?: string;
 }
+
+const amapResponseCache = new Map<string, { expiresAt: number; data: unknown }>();
+let amapRequestSchedule = Promise.resolve();
+let lastAmapRequestAt = 0;
 
 /**
  * 调用高德地图 POI 搜索 API
@@ -196,28 +212,166 @@ async function fetchAmapPoiPage(
   }
 
   const url = `${AMAP_BASE_URL}/place/around?${params.toString()}`;
-  const response = await fetchWithTimeout(url, {}, AMAP_TIMEOUT);
+  return fetchAmapJson<AmapPoiResponse>(
+    url,
+    ErrorCode.SEARCH_API_ERROR,
+    AMAP_SEARCH_CACHE_TTL_MS
+  );
+}
 
-  if (!response.ok) {
-    throw new ApiError(
-      ErrorCode.SEARCH_API_ERROR,
-      `Amap API error: ${response.status}`
-    );
+async function fetchAmapJson<T extends AmapStatusResponse>(
+  url: string,
+  errorCode: string,
+  cacheTtlMs: number
+): Promise<T> {
+  const cached = getCachedAmapResponse<T>(url);
+  if (cached) {
+    logger.info('Amap cache hit', { endpoint: redactAmapUrl(url) });
+    return cached;
   }
 
-  const data: AmapPoiResponse = await response.json();
-  if (data.status !== '1') {
-    logger.warn('Amap API returned error', {
-      info: data.info,
-      infocode: data.infocode,
-    });
-    throw new ApiError(
-      ErrorCode.SEARCH_API_ERROR,
-      `Amap API error: ${data.info}`
-    );
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= AMAP_MAX_RETRIES; attempt++) {
+    try {
+      await scheduleAmapRequest();
+      const response = await fetchWithTimeout(url, {}, AMAP_TIMEOUT);
+
+      if (!response.ok) {
+        throw new ApiError(errorCode, `Amap API error: ${response.status}`);
+      }
+
+      const data = await response.json() as T;
+
+      if (data.status === '1') {
+        setCachedAmapResponse(url, data, cacheTtlMs);
+        return data;
+      }
+
+      if (isAmapQpsLimit(data) && attempt < AMAP_MAX_RETRIES) {
+        const delayMs = getAmapRetryDelayMs(attempt);
+        logger.warn('Amap QPS limit hit, retrying after backoff', {
+          info: data.info,
+          infocode: data.infocode,
+          attempt: attempt + 1,
+          delayMs,
+        });
+        await sleep(delayMs);
+        continue;
+      }
+
+      logger.warn('Amap API returned error', {
+        info: data.info,
+        infocode: data.infocode,
+      });
+      throw new ApiError(
+        isAmapQpsLimit(data) ? ErrorCode.RATE_LIMIT_EXCEEDED : errorCode,
+        `Amap API error: ${data.info}`
+      );
+    } catch (error) {
+      lastError = error;
+
+      if (error instanceof ApiError) {
+        throw error;
+      }
+
+      if (attempt >= AMAP_MAX_RETRIES) {
+        throw error;
+      }
+
+      const delayMs = getAmapRetryDelayMs(attempt);
+      logger.warn('Amap request failed, retrying after backoff', {
+        error: error instanceof Error ? error.message : String(error),
+        attempt: attempt + 1,
+        delayMs,
+      });
+      await sleep(delayMs);
+    }
   }
 
-  return data;
+  throw lastError;
+}
+
+function scheduleAmapRequest(): Promise<void> {
+  const scheduled = amapRequestSchedule.then(async () => {
+    const minIntervalMs = Math.ceil(1000 / Math.max(1, AMAP_MAX_QPS));
+    const waitMs = Math.max(0, lastAmapRequestAt + minIntervalMs - Date.now());
+    if (waitMs > 0) {
+      await sleep(waitMs);
+    }
+    lastAmapRequestAt = Date.now();
+  });
+
+  amapRequestSchedule = scheduled.catch(() => undefined);
+  return scheduled;
+}
+
+function getCachedAmapResponse<T>(url: string): T | null {
+  const cached = amapResponseCache.get(url);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    amapResponseCache.delete(url);
+    return null;
+  }
+
+  return cached.data as T;
+}
+
+function setCachedAmapResponse(url: string, data: unknown, ttlMs: number): void {
+  if (ttlMs <= 0) {
+    return;
+  }
+
+  pruneAmapResponseCache();
+  amapResponseCache.set(url, {
+    data,
+    expiresAt: Date.now() + ttlMs,
+  });
+}
+
+function pruneAmapResponseCache(): void {
+  if (amapResponseCache.size < 500) {
+    return;
+  }
+
+  const now = Date.now();
+  for (const [key, value] of amapResponseCache.entries()) {
+    if (value.expiresAt <= now || amapResponseCache.size > 400) {
+      amapResponseCache.delete(key);
+    }
+  }
+}
+
+function isAmapQpsLimit(data: AmapStatusResponse): boolean {
+  return AMAP_RATE_LIMIT_INFOCODES.has(data.infocode)
+    || /QPS|并发|访问过于频繁|限流/.test(data.info);
+}
+
+function getAmapRetryDelayMs(attempt: number): number {
+  return Math.min(2000, 300 * 2 ** attempt);
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function redactAmapUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.delete('key');
+    parsed.searchParams.delete('sig');
+    return `${parsed.pathname}?${parsed.searchParams.toString()}`;
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**
@@ -271,17 +425,12 @@ async function amapPoiDetail(amapId: string): Promise<Restaurant | null> {
   });
 
   const url = `${AMAP_BASE_URL}/place/detail?${params.toString()}`;
-  const response = await fetchWithTimeout(url, {}, AMAP_TIMEOUT);
-
-  if (!response.ok) {
-    throw new ApiError(
-      ErrorCode.SEARCH_API_ERROR,
-      `Amap detail API error: ${response.status}`
-    );
-  }
-
-  const data: AmapPoiResponse = await response.json();
-  if (data.status !== '1' || !data.pois || data.pois.length === 0) {
+  const data = await fetchAmapJson<AmapPoiResponse>(
+    url,
+    ErrorCode.SEARCH_API_ERROR,
+    AMAP_DETAIL_CACHE_TTL_MS
+  );
+  if (!data.pois || data.pois.length === 0) {
     return null;
   }
 
@@ -387,18 +536,17 @@ export async function amapGeocode(
   logger.info('Calling Amap geocode', { address, city });
 
   try {
-    const response = await fetchWithTimeout(url, {}, AMAP_TIMEOUT);
+    const data = await fetchAmapJson<{
+      status: string;
+      info: string;
+      infocode: string;
+      geocodes?: Array<{
+        location: string;
+        formatted_address: string;
+      }>;
+    }>(url, ErrorCode.GEOCODE_ERROR, AMAP_GEOCODE_CACHE_TTL_MS);
 
-    if (!response.ok) {
-      throw new ApiError(
-        ErrorCode.GEOCODE_ERROR,
-        `Amap API error: ${response.status}`
-      );
-    }
-
-    const data = await response.json();
-
-    if (data.status !== '1' || !data.geocodes || data.geocodes.length === 0) {
+    if (!data.geocodes || data.geocodes.length === 0) {
       throw new ApiError(
         ErrorCode.GEOCODE_NO_RESULTS,
         'No geocoding results found'
@@ -446,16 +594,19 @@ async function amapReverseGeocodeOnly(location: Location): Promise<{
   logger.info('Calling Amap reverse geocode', { location });
 
   try {
-    const response = await fetchWithTimeout(url, {}, AMAP_TIMEOUT);
-
-    if (!response.ok) {
-      throw new ApiError(
-        ErrorCode.GEOCODE_ERROR,
-        `Amap API error: ${response.status}`
-      );
-    }
-
-    const data = await response.json();
+    const data = await fetchAmapJson<{
+      status: string;
+      info: string;
+      infocode: string;
+      regeocode?: {
+        formatted_address?: string | string[];
+        addressComponent?: {
+          province?: string;
+          city?: string;
+          district?: string;
+        };
+      };
+    }>(url, ErrorCode.GEOCODE_ERROR, AMAP_GEOCODE_CACHE_TTL_MS);
 
     logger.info('Amap reverse geocode response', {
       status: data.status,
@@ -463,7 +614,7 @@ async function amapReverseGeocodeOnly(location: Location): Promise<{
       regeocode: data.regeocode,
     });
 
-    if (data.status !== '1' || !data.regeocode) {
+    if (!data.regeocode) {
       throw new ApiError(
         ErrorCode.GEOCODE_NO_RESULTS,
         'No reverse geocoding results found from Amap'
@@ -472,12 +623,10 @@ async function amapReverseGeocodeOnly(location: Location): Promise<{
 
     const regeocode = data.regeocode;
     const addressComponent = regeocode.addressComponent;
-    let formattedAddress = regeocode.formatted_address;
-
-    // 如果 formatted_address 是数组，取第一个元素
-    if (Array.isArray(formattedAddress)) {
-      formattedAddress = formattedAddress[0] || null;
-    }
+    const rawFormattedAddress = regeocode.formatted_address;
+    const formattedAddress = Array.isArray(rawFormattedAddress)
+      ? rawFormattedAddress[0]
+      : rawFormattedAddress;
 
     // 验证 formatted_address 存在且非空
     const isValidAddress =
