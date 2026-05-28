@@ -2,6 +2,7 @@ import {
   applyGoalPatch,
   applySupervisorClarifyingAnswer,
 } from '@/lib/agent/supervisor';
+import { SearchSupervisorOutputSchema } from '@/lib/agent/schemas/clarification';
 import type { AgentSession, UserGoal } from '@/lib/agent/types';
 
 function goal(overrides: Partial<UserGoal> = {}): UserGoal {
@@ -200,5 +201,34 @@ describe('SearchSupervisorAgent', () => {
     expect(session.pendingQuestion).toBeUndefined();
     expect(session.goal?.primaryKeywords).toEqual([]);
     expect(session.goal?.requestedItems).toEqual([]);
+  });
+
+  it('normalizes category objects in clarification option effects', () => {
+    const parsed = SearchSupervisorOutputSchema.parse({
+      goal: {
+        ...goal({
+          rawQuery: '随便推荐',
+          primaryKeywords: [],
+          clarificationNeeded: [],
+        }),
+        clarificationNeeded: [{
+          reason: '用户需求缺少明确餐饮目标。',
+          question: '你想找哪类餐厅？',
+          allowFreeText: true,
+          options: [{
+            label: '川菜',
+            value: 'sichuan',
+            effect: {
+              addCategories: [{ name: '川菜', confidence: 0.8 }],
+            },
+          }],
+        }],
+      },
+      nextAction: 'ask_user',
+    });
+
+    expect(
+      parsed.goal?.clarificationNeeded[0].options?.[0].effect?.addCategories
+    ).toEqual(['川菜']);
   });
 });

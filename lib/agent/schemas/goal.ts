@@ -44,6 +44,21 @@ export const GoalCategorySchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
+const ClarificationEffectTargetSchema = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (value && typeof value === 'object' && 'name' in value) {
+    const name = (value as { name?: unknown }).name;
+    return typeof name === 'string' ? name : value;
+  }
+
+  return value;
+}, z.string().min(1));
+
+const ClarificationEffectTargetListSchema = z.array(ClarificationEffectTargetSchema);
+
 export const AlternativeGroupSchema = z.object({
   mode: z.enum(['any_of', 'all_of']),
   items: z.array(z.string().min(1)),
@@ -51,11 +66,11 @@ export const AlternativeGroupSchema = z.object({
 });
 
 export const ClarificationEffectSchema = z.object({
-  replaceRequestedItems: z.array(z.string()).optional(),
-  replaceCategories: z.array(z.string()).optional(),
-  replacePrimaryKeywords: z.array(z.string()).optional(),
-  addRequestedItems: z.array(z.string()).optional(),
-  addCategories: z.array(z.string()).optional(),
+  replaceRequestedItems: ClarificationEffectTargetListSchema.optional(),
+  replaceCategories: ClarificationEffectTargetListSchema.optional(),
+  replacePrimaryKeywords: ClarificationEffectTargetListSchema.optional(),
+  addRequestedItems: ClarificationEffectTargetListSchema.optional(),
+  addCategories: ClarificationEffectTargetListSchema.optional(),
   addSoftPreferences: z.array(PreferenceSchema).optional(),
   setDistanceMaxMeters: z.number().optional(),
   allowBroaden: z.boolean().optional(),
