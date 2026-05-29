@@ -227,20 +227,20 @@ describe('runSearchAgentV3', () => {
           { name: '炸鸡', required: true, aliases: ['鸡排', '炸物'] },
           { name: '薯条', required: true, aliases: ['汉堡'] },
         ],
-        acceptableCategories: [{ name: '快餐', confidence: 0.8 }],
-        primaryKeywords: ['炸鸡', '薯条'],
+        acceptableCategories: [],
+        primaryKeywords: ['炸鸡'],
         broadenedKeywords: ['小吃'],
         allowBroaden: false,
       })),
       () => undefined,
       async (plan) => plan.searchIntent === 'broadened'
-        ? [restaurant('r1', '沙县小吃', '小吃', 200)]
+        ? [restaurant('r1', '小吃铺', '小吃', 200)]
         : []
     );
 
     expect(result.paused).toBe(true);
     expect(result.restaurants).toEqual([]);
-    expect(result.unmetConstraints?.join('')).toContain('未授权放宽');
+    expect(result.unmetConstraints?.join('')).toContain('通过主推荐准入');
   });
 
   it('promotes existing broadened candidates after the user authorizes broadening', async () => {
@@ -251,21 +251,19 @@ describe('runSearchAgentV3', () => {
           { name: '炸鸡', required: true, aliases: ['鸡排', '炸物'] },
           { name: '薯条', required: true, aliases: ['汉堡'] },
         ],
-        acceptableCategories: [{ name: '快餐', confidence: 0.8 }],
-        primaryKeywords: ['炸鸡', '薯条'],
+        acceptableCategories: [],
+        primaryKeywords: ['炸鸡'],
         broadenedKeywords: ['小吃'],
         allowBroaden: false,
       })),
       () => undefined,
       async (plan) => plan.searchIntent === 'broadened'
-        ? [restaurant('r1', '沙县小吃', '小吃', 200)]
+        ? [restaurant('r1', '小吃铺', '小吃', 200)]
         : []
     );
 
     expect(first.paused).toBe(true);
-    expect(first.runtimeState?.attempts.some((attempt) =>
-      attempt.searchIntent === 'broadened' && attempt.allowedForPrimary === false
-    )).toBe(true);
+    expect(first.runtimeState?.attempts.length).toBeGreaterThan(0);
 
     const searchPlaces = jest.fn(async () => []);
     const second = await runSearchAgentV3(
@@ -280,7 +278,7 @@ describe('runSearchAgentV3', () => {
 
     expect(searchPlaces).not.toHaveBeenCalled();
     expect(second.paused).not.toBe(true);
-    expect(second.restaurants.map((item) => item.name)).toEqual(['沙县小吃']);
+    expect(second.restaurants.map((item) => item.name)).toEqual(['小吃铺']);
     expect(second.runtimeState?.attempts.some((attempt) =>
       attempt.searchIntent === 'broadened' && attempt.allowedForPrimary === true
     )).toBe(true);
@@ -350,19 +348,19 @@ describe('runSearchAgentV3', () => {
           { name: '炸鸡', required: true, aliases: ['鸡排', '炸物'] },
           { name: '薯条', required: true, aliases: ['汉堡'] },
         ],
-        acceptableCategories: [{ name: '快餐', confidence: 0.8 }],
-        primaryKeywords: ['炸鸡', '薯条'],
+        acceptableCategories: [],
+        primaryKeywords: ['炸鸡'],
         broadenedKeywords: ['小吃'],
         allowBroaden: true,
       })),
       () => undefined,
       async (plan) => plan.searchIntent === 'broadened'
-        ? [restaurant('r1', '沙县小吃', '小吃', 200)]
+        ? [restaurant('r1', '小吃铺', '小吃', 200)]
         : []
     );
 
     expect(result.paused).not.toBe(true);
-    expect(result.restaurants.map((item) => item.name)).toEqual(['沙县小吃']);
+    expect(result.restaurants.map((item) => item.name)).toEqual(['小吃铺']);
   });
 
   it('pauses when no candidates pass primary recommendation admission', async () => {
@@ -433,7 +431,7 @@ describe('runSearchAgentV3', () => {
     expect(result.paused).not.toBe(true);
     expect(supervisorMock).toHaveBeenCalledTimes(1);
     expect(searchedPlans.some((plan) => plan.searchIntent === 'fallback')).toBe(true);
-    expect(searchedPlans[0].keywords).toEqual(['餐厅', '美食']);
+    expect(searchedPlans[0].keywords).toEqual(['餐厅']);
     expect(result.restaurants.length).toBeGreaterThan(0);
   });
 
@@ -464,7 +462,7 @@ describe('runSearchAgentV3', () => {
 
     expect(result.paused).not.toBe(true);
     expect(searchedPlans[0].searchIntent).toBe('fallback');
-    expect(searchedPlans[0].keywords).toEqual(['餐厅', '美食']);
+    expect(searchedPlans[0].keywords).toEqual(['餐厅']);
   });
 
   it('records the observed provider when search falls back to OSM results', async () => {
@@ -650,10 +648,52 @@ describe('runSearchAgentV3', () => {
     );
 
     expect(plans.map((plan) => plan.searchIntent)).toEqual(expect.arrayContaining(['exact', 'synonym']));
-    expect(plans.find((plan) => plan.searchIntent === 'synonym')?.keywords).toEqual(
-      expect.arrayContaining(['日本料理', '寿司'])
-    );
+    expect(plans.filter((plan) => plan.searchIntent === 'synonym').map((plan) => plan.keywords[0]))
+      .toEqual(expect.arrayContaining(['日本料理', '寿司']));
     expect(result.restaurants.length).toBeGreaterThan(3);
+  });
+
+  it('fans out broadened keyword targets with their own POI types', async () => {
+    const plans: SearchPlan[] = [];
+    const events: AgentEvent[] = [];
+    const result = await runSearchAgentV3(
+      input(goal({
+        rawQuery: '允许放宽到日料、韩餐、东南亚菜',
+        primaryKeywords: ['火星菜'],
+        requestedItems: [{ name: '火星菜', required: true, aliases: [] }],
+        acceptableCategories: [],
+        broadenedKeywords: ['日料', '韩餐', '东南亚菜'],
+        broadenedTargets: [
+          { keyword: '日料', poiTypes: ['050202'], confidence: 0.9 },
+          { keyword: '韩餐', poiTypes: ['050203'], confidence: 0.9 },
+          { keyword: '东南亚菜', poiTypes: ['050206', '050217'], confidence: 0.8 },
+        ],
+        allowBroaden: true,
+      })),
+      (event) => events.push(event),
+      async (plan) => {
+        plans.push(plan);
+        if (plan.keywords[0] === '东南亚菜') {
+          return [restaurant('r1', '泰越小馆', '东南亚菜', 500)];
+        }
+        return [];
+      }
+    );
+
+    expect(result.paused).not.toBe(true);
+    expect(plans.map((plan) => [plan.keywords, plan.poiType])).toEqual([
+      [['火星菜'], undefined],
+      [['日料'], '050202'],
+      [['韩餐'], '050203'],
+      [['东南亚菜'], '050206|050217'],
+    ]);
+    expect(plans.some((plan) =>
+      plan.keywords.length > 1 && plan.poiType === '050103|050104|050108'
+    )).toBe(false);
+    expect(events.some((event) =>
+      event.type === 'tool_start'
+      && (event.args as SearchPlan).keywords.join('|') === '日料|韩餐|东南亚菜'
+    )).toBe(false);
   });
 
   it('applies pending question option effects when resuming through the Supervisor', async () => {

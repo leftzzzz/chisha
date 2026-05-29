@@ -41,18 +41,34 @@ describe('KeywordExpansionAgent', () => {
     expect(expansion.relatedKeywords).toHaveLength(3);
     expect(expansion.relatedKeywords).not.toContain('日料');
     expect(expansion.broadenedKeywords).toEqual(expect.arrayContaining(['亚洲料理']));
+    expect(expansion.relatedTargets?.find((target) => target.keyword === '日本料理')?.poiTypes)
+      .toEqual(['050202']);
   });
 
   it('applies agent-generated keyword expansion without overwriting primary targets', () => {
     const expandedGoal = applyKeywordExpansion(goal(), {
       relatedKeywords: ['寿司', '居酒屋'],
       broadenedKeywords: ['亚洲料理'],
+      relatedTargets: [
+        { keyword: '寿司', poiTypes: ['050202'], confidence: 0.9 },
+        { keyword: '居酒屋', poiTypes: ['050202'], confidence: 0.8 },
+      ],
+      broadenedTargets: [
+        { keyword: '亚洲料理', poiTypes: ['050217'], confidence: 0.7 },
+      ],
       rationale: 'Agent 联想到更容易命中 POI 的日料子类。',
     });
 
     expect(expandedGoal.primaryKeywords).toEqual(['日料']);
     expect(expandedGoal.relatedKeywords).toEqual(['寿司', '居酒屋']);
     expect(expandedGoal.broadenedKeywords).toEqual(['亚洲料理']);
+    expect(expandedGoal.relatedTargets?.map((target) => [target.keyword, target.poiTypes])).toEqual([
+      ['寿司', ['050202']],
+      ['居酒屋', ['050202']],
+    ]);
+    expect(expandedGoal.broadenedTargets?.map((target) => [target.keyword, target.poiTypes])).toEqual([
+      ['亚洲料理', ['050217']],
+    ]);
   });
 
   it('does not generate expansions when there is no positive food target or open authorization', async () => {
@@ -80,6 +96,8 @@ describe('KeywordExpansionAgent', () => {
       expect(fetchWithTimeout).not.toHaveBeenCalled();
       expect(expansion.relatedKeywords).toEqual([]);
       expect(expansion.broadenedKeywords).toEqual([]);
+      expect(expansion.relatedTargets).toEqual([]);
+      expect(expansion.broadenedTargets).toEqual([]);
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
       process.env.OPENAI_API_KEY = originalApiKey;
@@ -101,8 +119,13 @@ describe('KeywordExpansionAgent', () => {
             function_call: {
               name: 'expandRestaurantSearchKeywords',
               arguments: JSON.stringify({
-                relatedKeywords: ['寿司'],
-                broadenedKeywords: ['简餐', '面馆', '小吃', '餐厅'],
+                relatedTargets: [{ keyword: '简餐', poiTypes: ['050300'] }],
+                broadenedTargets: [
+                  { keyword: '简餐', poiTypes: ['050300'] },
+                  { keyword: '面馆', poiTypes: ['050000'] },
+                  { keyword: '小吃', poiTypes: ['999999'] },
+                  { keyword: '餐厅', poiTypes: ['050000'] },
+                ],
                 rationale: '用户授权开放推荐，生成多样的餐饮探索词。',
               }),
             },
@@ -135,6 +158,11 @@ describe('KeywordExpansionAgent', () => {
       expect(modelInput.goalContext.rawQuery).toBe('随意，你来选择');
       expect(expansion.relatedKeywords).toEqual([]);
       expect(expansion.broadenedKeywords).toEqual(['简餐', '面馆', '小吃']);
+      expect(expansion.broadenedTargets?.map((target) => [target.keyword, target.poiTypes])).toEqual([
+        ['简餐', ['050300']],
+        ['面馆', []],
+        ['小吃', ['050310']],
+      ]);
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
       process.env.OPENAI_API_KEY = originalApiKey;
@@ -156,8 +184,13 @@ describe('KeywordExpansionAgent', () => {
             function_call: {
               name: 'expandRestaurantSearchKeywords',
               arguments: JSON.stringify({
-                relatedKeywords: ['怀石料理', '荞麦面'],
-                broadenedKeywords: ['亚洲料理'],
+                relatedTargets: [
+                  { keyword: '怀石料理', poiTypes: ['050202'] },
+                  { keyword: '荞麦面', poiTypes: ['050202'] },
+                ],
+                broadenedTargets: [
+                  { keyword: '亚洲料理', poiTypes: ['050217'] },
+                ],
                 rationale: '根据日料目标动态联想到更细分的 POI 搜索词。',
               }),
             },
@@ -177,6 +210,10 @@ describe('KeywordExpansionAgent', () => {
       expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
       expect(expansion.relatedKeywords).toEqual(['怀石料理', '荞麦面']);
       expect(expansion.broadenedKeywords).toEqual(['亚洲料理']);
+      expect(expansion.relatedTargets?.map((target) => [target.keyword, target.poiTypes])).toEqual([
+        ['怀石料理', ['050202']],
+        ['荞麦面', ['050202']],
+      ]);
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
       process.env.OPENAI_API_KEY = originalApiKey;

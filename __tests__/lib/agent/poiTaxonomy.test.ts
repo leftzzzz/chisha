@@ -31,9 +31,24 @@ function goal(overrides: Partial<UserGoal> = {}): UserGoal {
 
 describe('poiTaxonomy', () => {
   it('resolves keyword-specific Amap POI types without using caller fallback for multi-keyword plans', () => {
-    expect(resolvePoiTypesForKeyword('牛排', '050102', true)).toBe('050203');
+    expect(resolvePoiTypesForKeyword('牛排', '050102', true)).toBe('050201|050211');
     expect(resolvePoiTypesForKeyword('私房菜', '050102', true)).toBe(DEFAULT_POI_TYPE);
     expect(resolvePoiTypesForKeyword('私房菜', '050102', false)).toBe('050102');
+  });
+
+  it('uses official Amap V1.06 food POI codes for foreign cuisines', () => {
+    expect(resolvePoiTypesForKeyword('日料', undefined, false)).toBe('050202');
+    expect(resolvePoiTypesForKeyword('韩餐', undefined, false)).toBe('050203');
+    expect(resolvePoiTypesForKeyword('东南亚菜', undefined, false)).toBe('050206|050217');
+  });
+
+  it('uses official Amap V1.06 food POI codes for corrected Chinese categories', () => {
+    expect(resolvePoiTypesForKeyword('湘菜', undefined, false)).toBe('050108');
+    expect(resolvePoiTypesForKeyword('闽菜', undefined, false)).toBe('050110');
+    expect(resolvePoiTypesForKeyword('徽菜', undefined, false)).toBe('050109');
+    expect(resolvePoiTypesForKeyword('海鲜', undefined, false)).toBe('050119');
+    expect(resolvePoiTypesForKeyword('素食', undefined, false)).toBe('050120');
+    expect(resolvePoiTypesForKeyword('清真', undefined, false)).toBe('050121');
   });
 
   it('keeps alternative targets together when resolving PlanningAgent output', () => {

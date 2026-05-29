@@ -63,7 +63,6 @@ function input(searchGoal: UserGoal): AgentInput {
 describe('runSearchAgentV3 POI type selection', () => {
   afterEach(() => {
     jest.dontMock('@/lib/agent/supervisor');
-    jest.dontMock('@/lib/agent/subagents/poiTypeSelectionAgent');
     jest.resetModules();
   });
 
@@ -73,13 +72,6 @@ describe('runSearchAgentV3 POI type selection', () => {
       runSearchSupervisor: jest.fn(async (supervisorInput: { previousGoal?: UserGoal }) => ({
         goal: supervisorInput.previousGoal,
         nextAction: 'plan',
-      })),
-    }));
-    jest.doMock('@/lib/agent/subagents/poiTypeSelectionAgent', () => ({
-      runPoiTypeSelectionAgent: jest.fn(async () => ({
-        typeCodes: ['050700'],
-        confidence: 0.9,
-        rationale: '港式奶茶应使用冷饮店。',
       })),
     }));
     jest.doMock('@/lib/agent/subagents/evaluationAgent', () => ({
@@ -135,7 +127,7 @@ describe('runSearchAgentV3 POI type selection', () => {
     );
 
     expect(searchedPlans[0]).toEqual(expect.objectContaining({
-      keywords: expect.arrayContaining(['港奶', '奶茶']),
+      keywords: ['港奶'],
       poiType: '050700',
     }));
     expect(result.restaurants.map((item) => item.name)).toEqual(['港式奶茶铺']);

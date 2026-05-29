@@ -217,7 +217,7 @@ export async function POST(request: Request) {
                 plan.radiusMeters,
                 plan.poiType,
                 AGENT_POI_PAGES_PER_SEARCH,
-                { preferProvidedPoiType: Boolean(plan.poiType) }
+                { preferProvidedPoiType: Boolean(plan.poiType) && plan.keywords.length === 1 }
               );
               return enrichRestaurantsWithAmapDetails(restaurants, AGENT_DETAIL_ENRICH_LIMIT);
             } catch (error) {

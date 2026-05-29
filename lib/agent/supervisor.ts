@@ -60,7 +60,7 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true，加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
 10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
 11. primaryKeywords 只能放用户正向想吃的、适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
-12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords 和 broadenedKeywords 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
+12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords/broadenedKeywords 及 relatedTargets/broadenedTargets 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
 13. 处理 pendingQuestion 的用户回复时，必须结合 previousGoal.rawQuery、pendingQuestion 和历史 messages 重新总结完整需求；当前 message 不是独立新需求。
 14. 如果用户回复命中的是上轮澄清问题的选项标签或分类说明，不要把该标签本身作为搜索词；优先通过 pendingQuestion.optionEffects 或历史上下文恢复被澄清的原始目标。
 15. 否定条件、口味限制、排除项、开放授权和软偏好都不是搜索目标，不能进入 primaryKeywords、requestedItems 或 acceptableCategories。类似“不要辣的，其他都可以”应表达为硬约束/开放授权，并在缺少正向餐饮目标时追问，不要输出“不辣”“都可以”作为关键词。
@@ -209,6 +209,8 @@ export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal
       ?? mergeCategories(goal.acceptableCategories, patch.addCategories ?? []),
     relatedKeywords: replacingPrimaryTargets ? [] : goal.relatedKeywords,
     broadenedKeywords: replacingPrimaryTargets ? [] : goal.broadenedKeywords,
+    relatedTargets: replacingPrimaryTargets ? [] : goal.relatedTargets,
+    broadenedTargets: replacingPrimaryTargets ? [] : goal.broadenedTargets,
     softPreferences: mergePreferences(goal.softPreferences, patch.addSoftPreferences ?? []),
     hardConstraints: mergeConstraints(
       goal.hardConstraints.filter((constraint) =>
@@ -479,6 +481,16 @@ function userGoalJsonSchema() {
         description: '上位或放宽关键词；只有用户授权 allowBroaden 后才能进入主推荐。',
         items: { type: 'string' },
       },
+      relatedTargets: {
+        type: 'array',
+        description: '由 KeywordExpansionAgent 维护；Supervisor 初始化时保持空数组。',
+        items: searchKeywordTargetJsonSchema(),
+      },
+      broadenedTargets: {
+        type: 'array',
+        description: '由 KeywordExpansionAgent 维护；Supervisor 初始化时保持空数组。',
+        items: searchKeywordTargetJsonSchema(),
+      },
       hardConstraints: {
         type: 'array',
         description: '只放可由距离、预算、营业状态、排除项、不吃辣等事实字段稳定验证的硬限制。',
@@ -517,6 +529,8 @@ function userGoalJsonSchema() {
       'primaryKeywords',
       'relatedKeywords',
       'broadenedKeywords',
+      'relatedTargets',
+      'broadenedTargets',
       'hardConstraints',
       'softPreferences',
       'exclusions',
@@ -524,6 +538,20 @@ function userGoalJsonSchema() {
       'clarificationNeeded',
       'allowBroaden',
     ],
+  };
+}
+
+function searchKeywordTargetJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      keyword: { type: 'string' },
+      poiTypes: { type: 'array', items: { type: 'string' } },
+      confidence: { type: 'number' },
+      reason: { type: 'string' },
+    },
+    required: ['keyword'],
   };
 }
 

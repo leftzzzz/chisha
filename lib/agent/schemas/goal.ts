@@ -44,6 +44,13 @@ export const GoalCategorySchema = z.object({
   confidence: z.number().min(0).max(1).default(0.8),
 });
 
+export const SearchKeywordTargetSchema = z.object({
+  keyword: z.string().min(1).max(30),
+  poiTypes: z.array(z.string().regex(/^\d{6}$/)).max(5).optional(),
+  confidence: z.number().min(0).max(1).default(0.5),
+  reason: z.string().max(120).optional(),
+});
+
 const ClarificationEffectTargetSchema = z.preprocess((value) => {
   if (typeof value === 'string') {
     return value;
@@ -99,6 +106,8 @@ export const UserGoalSchema = z.object({
   primaryKeywords: z.array(z.string()).default([]),
   relatedKeywords: z.array(z.string()).default([]),
   broadenedKeywords: z.array(z.string()).default([]),
+  relatedTargets: z.array(SearchKeywordTargetSchema).default([]),
+  broadenedTargets: z.array(SearchKeywordTargetSchema).default([]),
   hardConstraints: z.array(ConstraintSchema).default([]),
   softPreferences: z.array(PreferenceSchema).default([]),
   exclusions: z.array(z.string()).default([]),
@@ -127,6 +136,8 @@ export const AgentGoalDraftSchema = z.object({
   primaryKeywords: z.array(z.string().min(1)).default([]),
   relatedKeywords: z.array(z.string().min(1)).default([]),
   broadenedKeywords: z.array(z.string().min(1)).default([]),
+  relatedTargets: z.array(SearchKeywordTargetSchema).default([]),
+  broadenedTargets: z.array(SearchKeywordTargetSchema).default([]),
   poiType: z.string().regex(/^\d{6}$/).optional(),
   softPreferences: z.array(PreferenceSchema).default([]),
   ambiguity: z.array(z.string()).default([]),

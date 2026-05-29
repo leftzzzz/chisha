@@ -3,6 +3,7 @@ import { AgentActionSchema } from './schemas/action';
 import { callJsonFunctionAgent } from './modelClient';
 import { DEFAULT_POI_TYPE, lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
+import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
 import type {
   AgentAction,
   AgentActionRecord,
@@ -11,6 +12,7 @@ import type {
   AgentObservation,
   RestaurantCandidate,
   SearchAttempt,
+  SearchKeywordTarget,
   SearchPlan,
   UserPreferenceSummary,
 } from './types';
@@ -203,29 +205,48 @@ function deterministicSupervisorAction(
       : buildFailureQuestionAction(context);
   }
 
-  const exactKeywords = initialKeywords(context);
-  if (context.attempts.length === 0 && exactKeywords.length > 0) {
+  if (!context.goal.allowBroaden && hasUnauthorizedBroadenedCandidates(context)) {
+    return buildFailureQuestionAction(context);
+  }
+
+  const exactTarget = nextUntriedInitialTarget(context);
+  if (exactTarget) {
     return {
       type: 'search',
-      plan: buildPlan(context, exactKeywords, 'exact', true, '先搜索用户明确表达的餐饮目标。'),
+      plan: buildPlan(context, exactTarget, 'exact', true, '先搜索用户明确表达的餐饮目标。'),
     };
   }
 
-  const relatedKeywords = untriedRelatedKeywords(context);
-  if (relatedKeywords.length > 0) {
-    return {
-      type: 'search',
-      plan: buildPlan(context, relatedKeywords, 'synonym', true, '原始搜索不足，继续尝试同义词和近似表达。'),
-    };
-  }
-
-  const broadenedKeywords = untriedBroadenedKeywords(context);
-  if (broadenedKeywords.length > 0) {
+  const broadenedTarget = nextUntriedBroadenedTarget(context);
+  if (broadenedTarget && primaryCandidates.length === 0) {
     return {
       type: 'search',
       plan: buildPlan(
         context,
-        broadenedKeywords,
+        broadenedTarget,
+        'broadened',
+        context.goal.allowBroaden,
+        context.goal.allowBroaden
+          ? '用户允许放宽，扩展到相邻品类。'
+          : '原始目标不足，搜索相邻品类作为候补。'
+      ),
+    };
+  }
+
+  const relatedTarget = nextUntriedRelatedTarget(context);
+  if (relatedTarget) {
+    return {
+      type: 'search',
+      plan: buildPlan(context, relatedTarget, 'synonym', true, '原始搜索不足，继续尝试同义词和近似表达。'),
+    };
+  }
+
+  if (broadenedTarget) {
+    return {
+      type: 'search',
+      plan: buildPlan(
+        context,
+        broadenedTarget,
         'broadened',
         context.goal.allowBroaden,
         context.goal.allowBroaden
@@ -296,14 +317,16 @@ function buildFailureQuestionAction(context: AgentContext): AgentAction {
 
 function buildPlan(
   context: AgentContext,
-  keywords: string[],
+  target: string[] | SearchKeywordTarget,
   searchIntent: SearchPlan['searchIntent'],
   allowedForPrimary: boolean,
   reason: string
 ): SearchPlan {
-  const normalizedKeywords = normalizeSearchKeywords(keywords);
+  const targetKeywords = Array.isArray(target) ? target : [target.keyword];
+  const normalizedKeywords = normalizeSearchKeywords(targetKeywords);
+  const targetPoiTypes = Array.isArray(target) ? undefined : target.poiTypes;
   const poiType = normalizedKeywords.length === 1
-    ? lookupFoodPoiTypes(normalizedKeywords[0]) ?? context.goal.poiType
+    ? resolvePlanPoiType(normalizedKeywords[0], targetPoiTypes, context)
     : undefined;
 
   return {
@@ -324,24 +347,39 @@ function initialKeywords(context: AgentContext): string[] {
   ].filter(Boolean);
 }
 
-function hasUntriedRelatedKeywords(context: AgentContext): boolean {
-  return untriedRelatedKeywords(context).length > 0;
+function nextUntriedInitialTarget(context: AgentContext): SearchKeywordTarget | null {
+  return untriedGoalTargets(context, undefined, initialKeywords(context))[0] ?? null;
 }
 
-function untriedRelatedKeywords(context: AgentContext): string[] {
-  return context.goal.relatedKeywords.filter((keyword) =>
-    !hasTriedKeyword(context, keyword)
-  );
+function hasUntriedRelatedKeywords(context: AgentContext): boolean {
+  return Boolean(nextUntriedRelatedTarget(context));
+}
+
+function nextUntriedRelatedTarget(context: AgentContext): SearchKeywordTarget | null {
+  return untriedGoalTargets(context, context.goal.relatedTargets, context.goal.relatedKeywords)[0] ?? null;
 }
 
 function hasUntriedBroadenedKeywords(context: AgentContext): boolean {
-  return untriedBroadenedKeywords(context).length > 0;
+  return Boolean(nextUntriedBroadenedTarget(context));
 }
 
-function untriedBroadenedKeywords(context: AgentContext): string[] {
-  return context.goal.broadenedKeywords.filter((keyword) =>
-    !hasTriedKeyword(context, keyword)
-  );
+function nextUntriedBroadenedTarget(context: AgentContext): SearchKeywordTarget | null {
+  return untriedGoalTargets(context, context.goal.broadenedTargets, context.goal.broadenedKeywords)[0] ?? null;
+}
+
+function untriedGoalTargets(
+  context: AgentContext,
+  targets: SearchKeywordTarget[] | undefined,
+  fallbackKeywords: string[]
+): SearchKeywordTarget[] {
+  const baseTargets = targets && targets.length > 0
+    ? targets
+    : fallbackKeywords.map((keyword) => ({
+        keyword,
+        poiTypes: inferPoiTypesForGoalKeyword(context, keyword)?.split('|'),
+      }));
+
+  return baseTargets.filter((target) => !hasTriedKeyword(context, target.keyword));
 }
 
 function hasTriedKeyword(context: AgentContext, keyword: string): boolean {
@@ -353,6 +391,16 @@ function hasTriedKeyword(context: AgentContext, keyword: string): boolean {
 
 function hasTriedIntent(context: AgentContext, intent: string): boolean {
   return context.attempts.some((attempt) => attempt.searchIntent === intent);
+}
+
+function hasUnauthorizedBroadenedCandidates(context: AgentContext): boolean {
+  return context.candidates.some((candidate) => {
+    const attempt = context.attempts[candidate.sourceAttempt - 1];
+    return attempt?.allowedForPrimary === false
+      && (attempt.searchIntent === 'broadened' || attempt.searchIntent === 'fallback')
+      && candidate.verification.status === 'passed'
+      && candidate.verification.hardFailures.length === 0;
+  });
 }
 
 function nextRadius(context: AgentContext): number {
@@ -368,6 +416,43 @@ function nextRadius(context: AgentContext): number {
 
   const latestRadius = context.attempts.at(-1)?.radius ?? 1800;
   return Math.min(5000, Math.max(300, Math.round(latestRadius * 1.25)));
+}
+
+function resolvePlanPoiType(
+  keyword: string,
+  targetPoiTypes: string[] | undefined,
+  context: AgentContext
+): string | undefined {
+  const sanitizedTargetPoiTypes = Array.from(new Set(targetPoiTypes ?? []))
+    .filter((code) => Boolean(getAmapFoodPoiType(code)))
+    .filter((code) => code !== DEFAULT_POI_TYPE);
+  if (sanitizedTargetPoiTypes.length > 0) {
+    return sanitizedTargetPoiTypes.join('|');
+  }
+
+  return inferPoiTypesForGoalKeyword(context, keyword) ?? context.goal.poiType;
+}
+
+function inferPoiTypesForGoalKeyword(context: AgentContext, keyword: string): string | undefined {
+  const direct = lookupFoodPoiTypes(keyword);
+  if (direct && direct !== DEFAULT_POI_TYPE) {
+    return direct;
+  }
+
+  const relatedTerms = [
+    ...context.goal.requestedItems
+      .filter((item) => item.name === keyword || item.aliases.includes(keyword))
+      .flatMap((item) => [item.name, ...item.aliases]),
+    ...context.goal.acceptableCategories.map((category) => category.name),
+  ];
+  for (const term of relatedTerms) {
+    const inferred = lookupFoodPoiTypes(term);
+    if (inferred && inferred !== DEFAULT_POI_TYPE) {
+      return inferred;
+    }
+  }
+
+  return direct;
 }
 
 async function callSupervisorActionModel(input: SearchSupervisorActionInput): Promise<AgentAction> {

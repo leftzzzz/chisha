@@ -16,13 +16,14 @@ import { SearchPlanSchema } from './schemas/plan';
 import { finalizeRecommendations } from './resultAssembler';
 import {
   extractKnownFoodTerms,
+  DEFAULT_POI_TYPE,
   isGenericSearchKeyword,
   lookupFoodPoiTypes,
   normalizeSearchKeywords,
 } from './poiTaxonomy';
 import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
-import { runPoiTypeSelectionAgent } from './subagents/poiTypeSelectionAgent';
 import { runEvaluationAgent } from './subagents/evaluationAgent';
+import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
 import {
   createActionRecord,
   decideSearchSupervisorAction,
@@ -40,6 +41,7 @@ import type {
   GoalPatch,
   PendingQuestion,
   RestaurantCandidate,
+  SearchKeywordTarget,
   SearchPlan,
   UserGoal,
 } from './types';
@@ -50,7 +52,7 @@ interface AgentV3Context extends AgentContext {
   maxActions: number;
 }
 
-const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 3);
+const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 4);
 
 interface GuardedAction {
   action: AgentAction;
@@ -95,8 +97,8 @@ export async function runSearchAgentV3(
 
   const promotion = promoteAuthorizedBroadenedResults(context);
   if (
-    hasPrimaryCandidates(context)
-    && (promotion.promotedCandidates > 0 || hasPromotedBroadenedPrimaryCandidates(context))
+    promotion.promotedCandidates > 0
+    || hasPromotedBroadenedPrimaryCandidates(context)
   ) {
     const action: AgentAction = {
       type: 'finish',
@@ -302,6 +304,8 @@ function buildOpenRecommendationGoal(query: string, modelGoal?: UserGoal): UserG
     primaryKeywords: [],
     relatedKeywords: [],
     broadenedKeywords: [],
+    relatedTargets: [],
+    broadenedTargets: [],
     hardConstraints: modelGoal?.hardConstraints ?? [],
     softPreferences: hasDefaultDiversity
       ? existingPreferences
@@ -329,10 +333,11 @@ function hasPrimaryTargets(goal: UserGoal): boolean {
 
 function createInitialContext(input: AgentInput, goal: UserGoal, resetSearchState = false): AgentV3Context {
   const previousAttempts = resetSearchState ? [] : (input.runtimeState?.attempts ?? []);
+  const hydratedGoal = hydrateGoalSearchTargets(goal);
 
   return {
     ...input,
-    goal,
+    goal: hydratedGoal,
     attempts: [...previousAttempts],
     candidates: resetSearchState ? [] : [...(input.runtimeState?.candidates ?? [])],
     actions: resetSearchState ? [] : [...(input.runtimeState?.actions ?? [])],
@@ -342,6 +347,25 @@ function createInitialContext(input: AgentInput, goal: UserGoal, resetSearchStat
     maxActions: (resetSearchState ? 0 : (input.runtimeState?.actions?.length ?? 0)) + 8,
     maxSearchCalls: previousAttempts.length + DEFAULT_AGENT_MAX_SEARCH_CALLS,
     targetCount: 8,
+  };
+}
+
+function hydrateGoalSearchTargets(goal: UserGoal): UserGoal {
+  return {
+    ...goal,
+    relatedTargets: (goal.relatedTargets?.length ?? 0) > 0
+      ? goal.relatedTargets
+      : goal.relatedKeywords.map((keyword) => buildGoalSearchTarget(goal, keyword)),
+    broadenedTargets: (goal.broadenedTargets?.length ?? 0) > 0
+      ? goal.broadenedTargets
+      : goal.broadenedKeywords.map((keyword) => buildGoalSearchTarget(goal, keyword)),
+  };
+}
+
+function buildGoalSearchTarget(goal: UserGoal, keyword: string): SearchKeywordTarget {
+  return {
+    keyword,
+    poiTypes: inferPoiTypesForGoalKeyword(goal, keyword)?.split('|'),
   };
 }
 
@@ -454,6 +478,11 @@ async function guardSearchAction(
     };
   }
 
+  const guardedKeywords = keywords.slice(0, 1);
+  if (keywords.length > guardedKeywords.length) {
+    guardrails.push('多关键词搜索计划已拆为单关键词执行，避免多个搜索意图共用同一个窄 POI type。');
+  }
+
   const strictMax = getStrictDistanceMaxMeters(context.goal);
   const requestedRadius = Number.isFinite(action.plan.radiusMeters)
     ? action.plan.radiusMeters
@@ -475,7 +504,7 @@ async function guardSearchAction(
 
   const planBeforePoiType = SearchPlanSchema.safeParse({
     ...action.plan,
-    keywords,
+    keywords: guardedKeywords,
     poiType: undefined,
     radiusMeters: Math.max(300, Math.min(5000, Math.round(radiusMeters))),
     allowedForPrimary,
@@ -488,21 +517,15 @@ async function guardSearchAction(
     };
   }
 
-  const poiTypeSelection = await runPoiTypeSelectionAgent({
-    goal: context.goal,
-    plan: planBeforePoiType.data,
-  });
-  const selectedPoiType = poiTypeSelection.typeCodes.length > 0
-    ? poiTypeSelection.typeCodes.join('|')
-    : undefined;
-
-  if (action.plan.poiType && action.plan.poiType !== selectedPoiType) {
-    guardrails.push('已用 PoiTypeSelectionAgent 的官方分类表选择结果替换模型/旧词表 poiType。');
-  }
+  const selectedPoiType = resolveSearchActionPoiType(
+    planBeforePoiType.data.keywords[0],
+    action.plan.poiType,
+    context.goal
+  );
 
   const parsed = SearchPlanSchema.safeParse({
     ...planBeforePoiType.data,
-    poiType: selectedPoiType,
+    poiType: selectedPoiType === DEFAULT_POI_TYPE ? undefined : selectedPoiType,
   });
 
   if (!parsed.success) {
@@ -576,23 +599,23 @@ function buildExpansionSearchBeforeFinish(context: AgentV3Context): AgentAction 
     return null;
   }
 
-  const relatedKeywords = untriedGoalKeywords(context, context.goal.relatedKeywords);
-  if (relatedKeywords.length > 0) {
+  const relatedTarget = nextUntriedGoalTarget(context, context.goal.relatedTargets, context.goal.relatedKeywords);
+  if (relatedTarget) {
     return {
       type: 'search',
-      plan: buildRuntimePlan(context, relatedKeywords, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
+      plan: buildRuntimePlan(context, relatedTarget, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
     };
   }
 
-  const broadenedKeywords = primaryCandidates.length === 0
-    ? untriedGoalKeywords(context, context.goal.broadenedKeywords)
-    : [];
-  if (broadenedKeywords.length > 0) {
+  const broadenedTarget = primaryCandidates.length === 0
+    ? nextUntriedGoalTarget(context, context.goal.broadenedTargets, context.goal.broadenedKeywords)
+    : null;
+  if (broadenedTarget) {
     return {
       type: 'search',
       plan: buildRuntimePlan(
         context,
-        broadenedKeywords,
+        broadenedTarget,
         'broadened',
         context.goal.allowBroaden,
         context.goal.allowBroaden
@@ -836,10 +859,19 @@ function hasTriedPlan(context: AgentV3Context, plan: SearchPlan): boolean {
   );
 }
 
-function untriedGoalKeywords(context: AgentV3Context, keywords: string[]): string[] {
-  return keywords.filter((keyword) =>
-    !hasTriedKeyword(context, keyword)
-  );
+function nextUntriedGoalTarget(
+  context: AgentV3Context,
+  targets: SearchKeywordTarget[] | undefined,
+  fallbackKeywords: string[]
+): SearchKeywordTarget | null {
+  const baseTargets = targets && targets.length > 0
+    ? targets
+    : fallbackKeywords.map((keyword) => ({
+        keyword,
+        poiTypes: lookupFoodPoiTypes(keyword)?.split('|'),
+      }));
+
+  return baseTargets.find((target) => !hasTriedKeyword(context, target.keyword)) ?? null;
 }
 
 function hasTriedKeyword(context: AgentV3Context, keyword: string): boolean {
@@ -851,14 +883,16 @@ function hasTriedKeyword(context: AgentV3Context, keyword: string): boolean {
 
 function buildRuntimePlan(
   context: AgentV3Context,
-  keywords: string[],
+  target: string[] | SearchKeywordTarget,
   searchIntent: SearchPlan['searchIntent'],
   allowedForPrimary: boolean,
   reason: string
 ): SearchPlan {
-  const normalizedKeywords = normalizeSearchKeywords(keywords);
+  const targetKeywords = Array.isArray(target) ? target : [target.keyword];
+  const normalizedKeywords = normalizeSearchKeywords(targetKeywords);
+  const targetPoiTypes = Array.isArray(target) ? undefined : target.poiTypes;
   const poiType = normalizedKeywords.length === 1
-    ? lookupFoodPoiTypes(normalizedKeywords[0]) ?? context.goal.poiType
+    ? resolveRuntimePlanPoiType(normalizedKeywords[0], targetPoiTypes, context.goal)
     : undefined;
 
   return SearchPlanSchema.parse({
@@ -869,6 +903,72 @@ function buildRuntimePlan(
     allowedForPrimary,
     reason,
   });
+}
+
+function resolveRuntimePlanPoiType(
+  keyword: string,
+  targetPoiTypes: string[] | undefined,
+  goal: UserGoal
+): string | undefined {
+  const sanitizedTargetPoiTypes = Array.from(new Set(targetPoiTypes ?? []))
+    .filter((code) => Boolean(getAmapFoodPoiType(code)))
+    .filter((code) => code !== DEFAULT_POI_TYPE);
+  if (sanitizedTargetPoiTypes.length > 0) {
+    return sanitizedTargetPoiTypes.join('|');
+  }
+
+  return inferPoiTypesForGoalKeyword(goal, keyword) ?? goal.poiType;
+}
+
+function resolveSearchActionPoiType(
+  keyword: string,
+  planPoiType: string | undefined,
+  goal: UserGoal
+): string | undefined {
+  const keywordPoiType = inferPoiTypesForGoalKeyword(goal, keyword);
+  if (keywordPoiType) {
+    return keywordPoiType;
+  }
+
+  const sanitizedPlanPoiTypes = sanitizePoiTypeCodes(planPoiType);
+  if (sanitizedPlanPoiTypes.length > 0) {
+    return sanitizedPlanPoiTypes.join('|');
+  }
+
+  return sanitizePoiTypeCodes(goal.poiType).join('|') || undefined;
+}
+
+function inferPoiTypesForGoalKeyword(goal: UserGoal | undefined, keyword: string): string | undefined {
+  const direct = lookupFoodPoiTypes(keyword);
+  if (direct && direct !== DEFAULT_POI_TYPE) {
+    return direct;
+  }
+
+  if (!goal) {
+    return direct;
+  }
+
+  const relatedTerms = [
+    ...goal.requestedItems
+      .filter((item) => item.name === keyword || item.aliases.includes(keyword))
+      .flatMap((item) => [item.name, ...item.aliases]),
+    ...goal.acceptableCategories.map((category) => category.name),
+  ];
+  for (const term of relatedTerms) {
+    const inferred = lookupFoodPoiTypes(term);
+    if (inferred && inferred !== DEFAULT_POI_TYPE) {
+      return inferred;
+    }
+  }
+
+  return direct;
+}
+
+function sanitizePoiTypeCodes(poiType: string | undefined): string[] {
+  return Array.from(new Set((poiType ?? '').split('|')))
+    .filter((code) => Boolean(getAmapFoodPoiType(code)))
+    .filter((code) => code !== DEFAULT_POI_TYPE)
+    .slice(0, 5);
 }
 
 function nextRuntimeRadius(context: AgentV3Context): number {

@@ -65,6 +65,13 @@ export interface GoalPatch {
   reason: string;
 }
 
+export interface SearchKeywordTarget {
+  keyword: string;
+  poiTypes?: string[];
+  confidence?: number;
+  reason?: string;
+}
+
 export interface ClarificationEffect {
   replaceRequestedItems?: string[];
   replaceCategories?: string[];
@@ -99,6 +106,8 @@ export interface UserGoal {
   primaryKeywords: string[];
   relatedKeywords: string[];
   broadenedKeywords: string[];
+  relatedTargets?: SearchKeywordTarget[];
+  broadenedTargets?: SearchKeywordTarget[];
   hardConstraints: Constraint[];
   softPreferences: Preference[];
   exclusions: string[];

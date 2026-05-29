@@ -83,7 +83,7 @@ describe('amapPoiSearch', () => {
     const requests = requestUrls.map((url) => new URL(url).searchParams);
     expect(requests).toHaveLength(2);
     expect(requests.map((params) => params.get('keywords'))).toEqual(['川菜', '咖啡']);
-    expect(requests.map((params) => params.get('types'))).toEqual(['050102', '050401']);
+    expect(requests.map((params) => params.get('types'))).toEqual(['050102', '050500']);
     expect(requests.some((params) => params.get('keywords')?.includes('|'))).toBe(false);
     expect(restaurants.map((restaurant) => restaurant.name)).toEqual(['咖啡店', '川菜馆']);
   });
@@ -138,7 +138,7 @@ describe('amapPoiSearch', () => {
               id: 'steak',
               name: '牛排馆',
               type: '餐饮服务;外国餐厅;西餐厅',
-              typecode: '050203',
+              typecode: '050201',
             })],
           }),
         };
@@ -150,7 +150,7 @@ describe('amapPoiSearch', () => {
 
     const params = new URL(requestUrls[0]).searchParams;
     expect(params.get('keywords')).toBe('牛排');
-    expect(params.get('types')).toBe('050203');
+    expect(params.get('types')).toBe('050201|050211');
   });
 
   it('caches successful Amap POI pages to avoid duplicate quota usage', async () => {
