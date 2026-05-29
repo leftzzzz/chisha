@@ -24,12 +24,14 @@ export interface KeywordExpansionOutput {
 const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你只负责为已结构化的 UserGoal 生成高德 POI keywords 搜索联想词，不调用外部工具。
 
 规则：
-1. 只能从 primarySearchTargets 中的正向餐饮目标生成联想词。primarySearchTargets 为空时，relatedKeywords 和 broadenedKeywords 必须都为空。
+1. primarySearchTargets 有值时，只能从其中的正向餐饮目标生成联想词。
+1a. primarySearchTargets 为空且 openExplorationAllowed=false 时，relatedKeywords 和 broadenedKeywords 必须都为空。
+1b. primarySearchTargets 为空且 openExplorationAllowed=true 时，表示用户明确授权开放推荐；relatedKeywords 必须为空，broadenedKeywords 可生成 3-5 个多样、具体、可单独用于高德 keywords 的餐饮探索词。
 2. relatedKeywords 是同一用户目标下的同义词、常见叫法、代表菜品或更容易命中 POI 的单个餐饮意图词。
 3. broadenedKeywords 是结果不足时才尝试的相邻大类或兼容品类。
-4. rawQuery、hardConstraints、softPreferences、exclusions、allowBroaden 只能作为边界和排除依据，不能作为生成关键词的来源。
+4. primarySearchTargets 有值时，rawQuery、hardConstraints、softPreferences、exclusions、allowBroaden 只能作为边界和排除依据，不能作为生成关键词的来源；openExplorationAllowed=true 时，可结合 rawQuery、softPreferences、preferenceSummary 生成开放探索词。
 5. 否定条件、口味限制、开放授权、体验偏好不能转写成搜索词；不要把“不辣/少辣/清淡/都可以/随便”等非餐饮目标当成高德 keywords。
-6. 如果用户只有排除项或开放推荐授权、没有正向餐饮目标，不要猜测餐饮品类，输出空数组。
+6. 如果用户只有排除项、约束或软偏好且没有开放推荐授权，不要猜测餐饮品类，输出空数组。
 7. 每个关键词必须能单独作为高德 keywords 使用，例如“寿司”“刺身”“居酒屋”；不要输出整句，不要用“|”“、”“或者”合并多个意图。
 8. 不要重复 primaryKeywords、已尝试 keywords、排除项，也不要输出非餐饮词、体验偏好或无法用于 POI 搜索的形容词。
 9. 用户没有 allowBroaden 时仍可输出 broadenedKeywords，但它们只能作为候补搜索，不能自动进入主推荐。
@@ -61,7 +63,7 @@ const KEYWORD_EXPANSION_FUNCTION = {
 export async function runKeywordExpansionAgent(
   input: KeywordExpansionAgentInput
 ): Promise<KeywordExpansionOutput> {
-  if (goalKeywords(input.goal).length === 0) {
+  if (goalKeywords(input.goal).length === 0 && !isOpenExplorationGoal(input.goal)) {
     return {
       relatedKeywords: [],
       broadenedKeywords: [],
@@ -129,7 +131,9 @@ function buildModelInput(input: KeywordExpansionAgentInput) {
 
   return {
     primarySearchTargets,
+    openExplorationAllowed: isOpenExplorationGoal(input.goal),
     goalContext: {
+      rawQuery: input.goal.rawQuery,
       requestedItems: input.goal.requestedItems,
       acceptableCategories: input.goal.acceptableCategories,
       alternativeGroups: input.goal.alternativeGroups,
@@ -154,7 +158,10 @@ function sanitizeExpansion(
     ...goal.exclusions,
     ...attempts.flatMap((attempt) => attempt.keywords),
   ].map((keyword) => keyword.trim()).filter(Boolean));
-  const relatedKeywords = sanitizeKeywords(expansion.relatedKeywords ?? [], blockedKeywords).slice(0, 5);
+  const allowsRelatedKeywords = goalKeywords(goal).length > 0;
+  const relatedKeywords = allowsRelatedKeywords
+    ? sanitizeKeywords(expansion.relatedKeywords ?? [], blockedKeywords).slice(0, 5)
+    : [];
   const broadenedKeywords = sanitizeKeywords(expansion.broadenedKeywords ?? [], blockedKeywords).slice(0, 5);
 
   return KeywordExpansionOutputSchema.parse({
@@ -179,6 +186,12 @@ function goalKeywords(goal: UserGoal): string[] {
     ...goal.requestedItems.map((item) => item.name),
     ...goal.acceptableCategories.map((category) => category.name),
   ].filter(Boolean);
+}
+
+function isOpenExplorationGoal(goal: UserGoal): boolean {
+  return goal.allowBroaden
+    && goal.clarificationNeeded.length === 0
+    && goalKeywords(goal).length === 0;
 }
 
 function mergeKeywords(left: string[], right: string[]): string[] {

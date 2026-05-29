@@ -61,14 +61,10 @@ export async function runSearchAgentV3(
   emit({ type: 'thinking', message: '正在理解你的需求...' });
   emit({ type: 'status', message: 'SearchSupervisorAgent 正在维护目标并选择下一步动作...' });
 
-  const supervisorOutput = normalizeExplicitOpenRecommendation(input, await runSearchSupervisor({
-    message: input.query,
-    previousGoal: input.runtimeState?.goal,
-    pendingQuestion: input.runtimeState?.pendingQuestion,
-    messages: input.messages,
-    preferenceSummary: input.preferenceSummary,
-    attempts: input.runtimeState?.attempts,
-  }));
+  const supervisorOutput = normalizeExplicitOpenRecommendation(
+    input,
+    await getSearchSupervisorOutput(input)
+  );
   const baseGoal = resolveSupervisorGoal(input, supervisorOutput);
   const resetSearchState = shouldResetSearchStateAfterGoalUpdate(input, baseGoal);
   let goal = baseGoal;
@@ -199,6 +195,30 @@ function resolveSupervisorGoal(
   throw new Error('SearchSupervisorAgent returned no goal or patch');
 }
 
+async function getSearchSupervisorOutput(
+  input: AgentInput
+): Promise<Awaited<ReturnType<typeof runSearchSupervisor>>> {
+  try {
+    return await runSearchSupervisor({
+      message: input.query,
+      previousGoal: input.runtimeState?.goal,
+      pendingQuestion: input.runtimeState?.pendingQuestion,
+      messages: input.messages,
+      preferenceSummary: input.preferenceSummary,
+      attempts: input.runtimeState?.attempts,
+    });
+  } catch (error) {
+    if (isInitialExplicitOpenRecommendation(input) && isTruncatedFunctionArgumentsError(error)) {
+      return {
+        goal: buildOpenRecommendationGoal(input.query),
+        nextAction: 'plan',
+      };
+    }
+
+    throw error;
+  }
+}
+
 function normalizeExplicitOpenRecommendation(
   input: AgentInput,
   output: Awaited<ReturnType<typeof runSearchSupervisor>>
@@ -221,6 +241,12 @@ function normalizeExplicitOpenRecommendation(
   };
 }
 
+function isInitialExplicitOpenRecommendation(input: AgentInput): boolean {
+  return !input.runtimeState?.pendingQuestion
+    && !input.runtimeState?.goal
+    && isExplicitOpenRecommendationQuery(input.query);
+}
+
 function isExplicitOpenRecommendationQuery(query: string): boolean {
   const normalized = query.trim();
   if (!normalized) {
@@ -231,8 +257,13 @@ function isExplicitOpenRecommendationQuery(query: string): boolean {
     return false;
   }
 
-  return /(随便|随意|随机|都行|都可以|无所谓|你决定|你看着办|帮我决定|直接推荐|不知道吃啥|不知道吃什么|不知道吃啥好|不知道吃什么好)/u
+  return /(随便|随意|随机|都行|都可以|无所谓|你决定|你看着办|帮我决定|直接推荐|不知道吃啥|不知道吃什么|不知道吃啥好|不知道吃什么好|没有具体|没具体)/u
     .test(normalized);
+}
+
+function isTruncatedFunctionArgumentsError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.includes('returned truncated function arguments');
 }
 
 function buildOpenRecommendationGoal(query: string, modelGoal?: UserGoal): UserGoal {

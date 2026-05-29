@@ -43,6 +43,70 @@ describe('SearchSupervisorAgent', () => {
     }
   });
 
+  it('retries once with a larger token budget when function arguments are truncated', async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'test-key';
+    jest.resetModules();
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const fetchWithTimeout = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            finish_reason: 'length',
+            message: {
+              function_call: {
+                name: 'superviseRestaurantSearch',
+                arguments: '{"goal":{"intent":"find_restaurants","rawQuery":"想吃日料"',
+              },
+            },
+          }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              function_call: {
+                name: 'superviseRestaurantSearch',
+                arguments: JSON.stringify({
+                  goal: {
+                    intent: 'find_restaurants',
+                    rawQuery: '想吃日料',
+                    primaryKeywords: ['日料'],
+                  },
+                  nextAction: 'plan',
+                }),
+              },
+            },
+          }],
+        }),
+      });
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    try {
+      const { runSearchSupervisor } = await import('@/lib/agent/supervisor');
+      const output = await runSearchSupervisor({ message: '想吃日料' });
+      const initialRequest = JSON.parse(fetchWithTimeout.mock.calls[0][1].body as string);
+      const retryRequest = JSON.parse(fetchWithTimeout.mock.calls[1][1].body as string);
+
+      expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
+      expect(initialRequest.max_tokens).toBe(4096);
+      expect(retryRequest.max_tokens).toBe(8192);
+      expect(output.goal?.primaryKeywords).toEqual(['日料']);
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      warnSpy.mockRestore();
+      jest.dontMock('@/lib/withTimeout');
+    }
+  });
+
   it('applies goal patches without overwriting existing hard constraints', () => {
     const patched = applyGoalPatch(
       goal({

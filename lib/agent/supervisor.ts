@@ -22,6 +22,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const SUPERVISOR_TIMEOUT = 18000;
+const SUPERVISOR_MAX_TOKENS = 4096;
+const SUPERVISOR_RETRY_MAX_TOKENS = 8192;
 
 export interface SearchSupervisorInput {
   message: string;
@@ -52,9 +54,9 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
 7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
 7a. 如果追问给出选项，必须尽量给每个选项设置 optionEffects；选项只是分类说明时，effect 要指向被澄清的原始目标，不能把选项标签当搜索词。
-8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，可加入“默认多样性”软偏好，进入 plan 走 fallback；不要 ask_user，也不要把这些词当 keywords。
+8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么/没有具体想吃的”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，加入“默认多样性”软偏好，进入 plan 后由 KeywordExpansionAgent 生成开放探索词；不要 ask_user，也不要把这些词当 keywords。
 8a. 用户只是“附近有什么/吃点/清淡点/健康点/便宜点/环境好/人气高”等软偏好或开放询问、但没有明确授权随意/随机推荐且没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
-9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true 并进入 plan，不要再次 ask_user。
+9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true，加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
 10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
 11. primaryKeywords 只能放用户正向想吃的、适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
 12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords 和 broadenedKeywords 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
@@ -95,6 +97,23 @@ export async function runSearchSupervisor(
   try {
     return normalizeSupervisorOutput(input, await callSupervisorModel(input));
   } catch (error) {
+    if (isTruncatedFunctionArgumentsError(error)) {
+      try {
+        logger.warn('SearchSupervisorAgent response was truncated, retrying with a larger token budget', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return normalizeSupervisorOutput(
+          input,
+          await callSupervisorModel(input, SUPERVISOR_RETRY_MAX_TOKENS)
+        );
+      } catch (retryError) {
+        logger.warn('SearchSupervisorAgent retry unavailable', {
+          error: retryError instanceof Error ? retryError.message : String(retryError),
+        });
+        throw retryError;
+      }
+    }
+
     logger.warn('SearchSupervisorAgent unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -326,7 +345,10 @@ function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatc
   });
 }
 
-async function callSupervisorModel(input: SearchSupervisorInput): Promise<SearchSupervisorOutput> {
+async function callSupervisorModel(
+  input: SearchSupervisorInput,
+  maxTokens = SUPERVISOR_MAX_TOKENS
+): Promise<SearchSupervisorOutput> {
   return callJsonFunctionAgent({
     agentName: 'SearchSupervisorAgent',
     apiKey: OPENAI_API_KEY!,
@@ -347,9 +369,14 @@ async function callSupervisorModel(input: SearchSupervisorInput): Promise<Search
     functionName: 'superviseRestaurantSearch',
     schema: SearchSupervisorOutputSchema,
     temperature: 0,
-    maxTokens: 2400,
+    maxTokens,
     timeoutMs: SUPERVISOR_TIMEOUT,
   }) as Promise<SearchSupervisorOutput>;
+}
+
+function isTruncatedFunctionArgumentsError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.includes('returned truncated function arguments');
 }
 
 function mergeStrings(left: string[], right: string[]): string[] {

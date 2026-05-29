@@ -125,6 +125,7 @@ jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
 }));
 
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
+import { runSearchSupervisor } from '@/lib/agent/supervisor';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 
@@ -305,10 +306,12 @@ describe('runSearchAgentV3', () => {
   });
 
   it('uses fallback search when the user explicitly asks for a random recommendation', async () => {
+    const supervisorMock = runSearchSupervisor as jest.Mock;
+    supervisorMock.mockClear();
     const searchedPlans: SearchPlan[] = [];
     const result = await runSearchAgentV3(
       {
-        query: '随便推荐个附近好吃的',
+        query: '没有具体想吃的，你来选',
         location,
         runtimeState: {
           attempts: [],
@@ -329,9 +332,40 @@ describe('runSearchAgentV3', () => {
     );
 
     expect(result.paused).not.toBe(true);
+    expect(supervisorMock).toHaveBeenCalledTimes(1);
     expect(searchedPlans.some((plan) => plan.searchIntent === 'fallback')).toBe(true);
     expect(searchedPlans[0].keywords).toEqual(['餐厅', '美食']);
     expect(result.restaurants.length).toBeGreaterThan(0);
+  });
+
+  it('falls back to an open recommendation goal if Supervisor truncates an explicit random request', async () => {
+    const supervisorMock = runSearchSupervisor as jest.Mock;
+    supervisorMock.mockRejectedValueOnce(
+      new Error('SearchSupervisorAgent returned truncated function arguments')
+    );
+    const searchedPlans: SearchPlan[] = [];
+
+    const result = await runSearchAgentV3(
+      {
+        query: '没有具体想吃的，你来选',
+        location,
+        runtimeState: {
+          attempts: [],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      async (plan) => {
+        searchedPlans.push(plan);
+        return [restaurant('r1', '社区餐厅', '餐饮', 300)];
+      }
+    );
+
+    expect(result.paused).not.toBe(true);
+    expect(searchedPlans[0].searchIntent).toBe('fallback');
+    expect(searchedPlans[0].keywords).toEqual(['餐厅', '美食']);
   });
 
   it('records the observed provider when search falls back to OSM results', async () => {
