@@ -37,8 +37,8 @@ describe('KeywordExpansionAgent', () => {
       '日本料理',
       '寿司',
       '刺身',
-      '拉面',
     ]));
+    expect(expansion.relatedKeywords).toHaveLength(3);
     expect(expansion.relatedKeywords).not.toContain('日料');
     expect(expansion.broadenedKeywords).toEqual(expect.arrayContaining(['亚洲料理']));
   });
@@ -102,7 +102,7 @@ describe('KeywordExpansionAgent', () => {
               name: 'expandRestaurantSearchKeywords',
               arguments: JSON.stringify({
                 relatedKeywords: ['寿司'],
-                broadenedKeywords: ['简餐', '面馆', '餐厅'],
+                broadenedKeywords: ['简餐', '面馆', '小吃', '餐厅'],
                 rationale: '用户授权开放推荐，生成多样的餐饮探索词。',
               }),
             },
@@ -134,7 +134,7 @@ describe('KeywordExpansionAgent', () => {
       expect(modelInput.openExplorationAllowed).toBe(true);
       expect(modelInput.goalContext.rawQuery).toBe('随意，你来选择');
       expect(expansion.relatedKeywords).toEqual([]);
-      expect(expansion.broadenedKeywords).toEqual(['简餐', '面馆']);
+      expect(expansion.broadenedKeywords).toEqual(['简餐', '面馆', '小吃']);
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
       process.env.OPENAI_API_KEY = originalApiKey;

@@ -8,6 +8,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const KEYWORD_EXPANSION_TIMEOUT = 12000;
+const KEYWORD_EXPANSION_LIMIT = 3;
 
 export interface KeywordExpansionAgentInput {
   goal: UserGoal;
@@ -26,7 +27,7 @@ const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你�
 规则：
 1. primarySearchTargets 有值时，只能从其中的正向餐饮目标生成联想词。
 1a. primarySearchTargets 为空且 openExplorationAllowed=false 时，relatedKeywords 和 broadenedKeywords 必须都为空。
-1b. primarySearchTargets 为空且 openExplorationAllowed=true 时，表示用户明确授权开放推荐；relatedKeywords 必须为空，broadenedKeywords 可生成 3-5 个多样、具体、可单独用于高德 keywords 的餐饮探索词。
+1b. primarySearchTargets 为空且 openExplorationAllowed=true 时，表示用户明确授权开放推荐；relatedKeywords 必须为空，broadenedKeywords 可生成 1-3 个多样、具体、可单独用于高德 keywords 的餐饮探索词。
 2. relatedKeywords 是同一用户目标下的同义词、常见叫法、代表菜品或更容易命中 POI 的单个餐饮意图词。
 3. broadenedKeywords 是结果不足时才尝试的相邻大类或兼容品类。
 4. primarySearchTargets 有值时，rawQuery、hardConstraints、softPreferences、exclusions、allowBroaden 只能作为边界和排除依据，不能作为生成关键词的来源；openExplorationAllowed=true 时，可结合 rawQuery、softPreferences、preferenceSummary 生成开放探索词。
@@ -35,7 +36,7 @@ const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你�
 7. 每个关键词必须能单独作为高德 keywords 使用，例如“寿司”“刺身”“居酒屋”；不要输出整句，不要用“|”“、”“或者”合并多个意图。
 8. 不要重复 primaryKeywords、已尝试 keywords、排除项，也不要输出非餐饮词、体验偏好或无法用于 POI 搜索的形容词。
 9. 用户没有 allowBroaden 时仍可输出 broadenedKeywords，但它们只能作为候补搜索，不能自动进入主推荐。
-10. 结合用户具体上下文生成，不要机械套用固定词表。`;
+10. 每个数组最多输出 3 个关键词；结合用户具体上下文生成，不要机械套用固定词表。`;
 
 const KEYWORD_EXPANSION_FUNCTION = {
   name: 'expandRestaurantSearchKeywords',
@@ -46,12 +47,12 @@ const KEYWORD_EXPANSION_FUNCTION = {
     properties: {
       relatedKeywords: {
         type: 'array',
-        description: '同义词、常见叫法、代表菜品或更容易命中 POI 的单意图搜索词。',
+        description: '同义词、常见叫法、代表菜品或更容易命中 POI 的单意图搜索词，最多 3 个。',
         items: { type: 'string' },
       },
       broadenedKeywords: {
         type: 'array',
-        description: '结果不足时才尝试的相邻品类或更宽泛目标。',
+        description: '结果不足时才尝试的相邻品类或更宽泛目标，最多 3 个。',
         items: { type: 'string' },
       },
       rationale: { type: 'string' },
@@ -101,9 +102,11 @@ export function applyKeywordExpansion(goal: UserGoal, expansion: KeywordExpansio
   return {
     ...goal,
     relatedKeywords: mergeKeywords(goal.relatedKeywords, expansion.relatedKeywords)
-      .filter((keyword) => !goal.primaryKeywords.includes(keyword)),
+      .filter((keyword) => !goal.primaryKeywords.includes(keyword))
+      .slice(0, KEYWORD_EXPANSION_LIMIT),
     broadenedKeywords: mergeKeywords(goal.broadenedKeywords, expansion.broadenedKeywords)
-      .filter((keyword) => !goal.primaryKeywords.includes(keyword)),
+      .filter((keyword) => !goal.primaryKeywords.includes(keyword))
+      .slice(0, KEYWORD_EXPANSION_LIMIT),
   };
 }
 
@@ -160,9 +163,10 @@ function sanitizeExpansion(
   ].map((keyword) => keyword.trim()).filter(Boolean));
   const allowsRelatedKeywords = goalKeywords(goal).length > 0;
   const relatedKeywords = allowsRelatedKeywords
-    ? sanitizeKeywords(expansion.relatedKeywords ?? [], blockedKeywords).slice(0, 5)
+    ? sanitizeKeywords(expansion.relatedKeywords ?? [], blockedKeywords).slice(0, KEYWORD_EXPANSION_LIMIT)
     : [];
-  const broadenedKeywords = sanitizeKeywords(expansion.broadenedKeywords ?? [], blockedKeywords).slice(0, 5);
+  const broadenedKeywords = sanitizeKeywords(expansion.broadenedKeywords ?? [], blockedKeywords)
+    .slice(0, KEYWORD_EXPANSION_LIMIT);
 
   return KeywordExpansionOutputSchema.parse({
     relatedKeywords,
