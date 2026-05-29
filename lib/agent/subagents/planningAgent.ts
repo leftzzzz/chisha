@@ -242,6 +242,10 @@ async function callPlanningModel(input: PlanningAgentInput): Promise<PlanningAge
     throw new Error('PlanningAgent returned no function arguments');
   }
 
+  if (data.choices?.[0]?.finish_reason === 'length' || !hasCompleteJsonStructure(args)) {
+    throw new Error('PlanningAgent returned truncated function arguments');
+  }
+
   const parsed = PlanningAgentOutputSchema.safeParse(
     parseModelJsonArguments(args, 'PlanningAgent')
   );
@@ -254,6 +258,7 @@ async function callPlanningModel(input: PlanningAgentInput): Promise<PlanningAge
 
 function extractFunctionArguments(data: {
   choices?: Array<{
+    finish_reason?: string;
     message?: {
       content?: string;
       function_call?: { name: string; arguments: string };
@@ -297,4 +302,43 @@ function extractJsonObjectFromText(content: string): string | null {
   }
 
   return null;
+}
+
+function hasCompleteJsonStructure(content: string): boolean {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (const char of content.trim()) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === '{') {
+      stack.push('}');
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === '}' || char === ']') {
+      if (stack.pop() !== char) {
+        return false;
+      }
+    }
+  }
+
+  return !inString && stack.length === 0;
 }

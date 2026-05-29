@@ -14,6 +14,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const EVALUATION_TIMEOUT = 18000;
+const MIN_EVALUATION_MAX_TOKENS = 1600;
+const MAX_EVALUATION_MAX_TOKENS = 4096;
 
 export interface EvaluationAgentInput {
   goal: UserGoal;
@@ -91,6 +93,25 @@ export async function runEvaluationAgent(input: EvaluationAgentInput): Promise<E
 }
 
 async function callEvaluationModel(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
+  const initialMaxTokens = evaluationMaxTokens(input.restaurants.length);
+  const first = await requestEvaluationModel(input, initialMaxTokens);
+  const firstArgs = extractFunctionArguments(first);
+
+  if (
+    shouldRetryEvaluationParse(first, firstArgs)
+    && initialMaxTokens < MAX_EVALUATION_MAX_TOKENS
+  ) {
+    const second = await requestEvaluationModel(input, MAX_EVALUATION_MAX_TOKENS);
+    return parseEvaluationModelOutput(second);
+  }
+
+  return parseEvaluationModelOutput(first);
+}
+
+async function requestEvaluationModel(
+  input: EvaluationAgentInput,
+  maxTokens: number
+): Promise<ChatCompletionFunctionResponse> {
   const response = await fetchWithTimeout(
     `${OPENAI_BASE_URL}/chat/completions`,
     {
@@ -126,7 +147,7 @@ async function callEvaluationModel(input: EvaluationAgentInput): Promise<Evaluat
         functions: [EVALUATION_FUNCTION],
         function_call: { name: 'evaluateRestaurantCandidates' },
         temperature: 0,
-        max_tokens: 1600,
+        max_tokens: maxTokens,
       }),
     },
     EVALUATION_TIMEOUT
@@ -136,10 +157,18 @@ async function callEvaluationModel(input: EvaluationAgentInput): Promise<Evaluat
     throw new Error(`EvaluationAgent API failed: ${response.status}`);
   }
 
-  const data = await response.json();
+  return response.json();
+}
+
+function parseEvaluationModelOutput(data: ChatCompletionFunctionResponse): EvaluationAgentOutput {
   const args = extractFunctionArguments(data);
   if (!args) {
     throw new Error('EvaluationAgent returned no function arguments');
+  }
+
+  const finishReason = getFinishReason(data);
+  if (finishReason === 'length' || !hasCompleteJsonStructure(args)) {
+    throw new Error('EvaluationAgent returned truncated function arguments');
   }
 
   const parsed = EvaluationAgentOutputSchema.safeParse(
@@ -152,18 +181,26 @@ async function callEvaluationModel(input: EvaluationAgentInput): Promise<Evaluat
   return parsed.data;
 }
 
-function extractFunctionArguments(data: {
-  choices?: Array<{
-    message?: {
-      content?: string;
-      function_call?: { name: string; arguments: string };
-      tool_calls?: Array<{
-        type: string;
-        function: { name: string; arguments: string };
-      }>;
-    };
-  }>;
-}): string | null {
+function evaluationMaxTokens(restaurantCount: number): number {
+  return Math.min(
+    MAX_EVALUATION_MAX_TOKENS,
+    Math.max(MIN_EVALUATION_MAX_TOKENS, 600 + restaurantCount * 220)
+  );
+}
+
+function shouldRetryEvaluationParse(
+  data: ChatCompletionFunctionResponse,
+  args: string | null
+): boolean {
+  return getFinishReason(data) === 'length'
+    || Boolean(args && !hasCompleteJsonStructure(args));
+}
+
+function getFinishReason(data: ChatCompletionFunctionResponse): string | undefined {
+  return data.choices?.[0]?.finish_reason;
+}
+
+function extractFunctionArguments(data: ChatCompletionFunctionResponse): string | null {
   const message = data.choices?.[0]?.message;
   if (message?.function_call?.arguments) {
     return message.function_call.arguments;
@@ -175,6 +212,20 @@ function extractFunctionArguments(data: {
   }
 
   return extractJsonObjectFromText(message?.content ?? '');
+}
+
+interface ChatCompletionFunctionResponse {
+  choices?: Array<{
+    finish_reason?: string;
+    message?: {
+      content?: string;
+      function_call?: { name: string; arguments: string };
+      tool_calls?: Array<{
+        type: string;
+        function: { name: string; arguments: string };
+      }>;
+    };
+  }>;
 }
 
 function extractJsonObjectFromText(content: string): string | null {
@@ -197,4 +248,43 @@ function extractJsonObjectFromText(content: string): string | null {
   }
 
   return null;
+}
+
+function hasCompleteJsonStructure(content: string): boolean {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (const char of content.trim()) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === '{') {
+      stack.push('}');
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === '}' || char === ']') {
+      if (stack.pop() !== char) {
+        return false;
+      }
+    }
+  }
+
+  return !inString && stack.length === 0;
 }

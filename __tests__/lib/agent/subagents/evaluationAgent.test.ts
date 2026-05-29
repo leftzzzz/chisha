@@ -60,6 +60,32 @@ function mockEvaluationResponse(argumentsJson: unknown): void {
   })) as jest.Mock;
 }
 
+function mockEvaluationResponses(responses: Array<{
+  arguments: string;
+  finishReason?: string;
+}>): void {
+  const fetchMock = jest.fn();
+
+  for (const response of responses) {
+    fetchMock.mockImplementationOnce(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          finish_reason: response.finishReason ?? 'stop',
+          message: {
+            function_call: {
+              name: 'evaluateRestaurantCandidates',
+              arguments: response.arguments,
+            },
+          },
+        }],
+      }),
+    }));
+  }
+
+  global.fetch = fetchMock as jest.Mock;
+}
+
 describe('EvaluationAgent', () => {
   beforeEach(() => {
     jest.resetModules();
@@ -173,5 +199,48 @@ describe('EvaluationAgent', () => {
     expect(output.selectedIds).toEqual(['r1']);
     expect(output.candidateIds).toEqual([]);
     expect(output.unmetConstraints).toEqual([]);
+  });
+
+  it('retries when model function arguments are truncated before schema parsing', async () => {
+    mockEvaluationResponses([
+      {
+        finishReason: 'length',
+        arguments: '{"verdicts":[{"restaurantId":"r1","status":"passed","primaryEligible":true',
+      },
+      {
+        arguments: JSON.stringify({
+          verdicts: [{
+            restaurantId: 'r1',
+            status: 'passed',
+            primaryEligible: true,
+            confidence: 0.87,
+            matchedItems: ['牛排'],
+            matchedCategories: ['西餐'],
+            conflicts: [],
+            evidence: ['Agent 判定符合。'],
+            warnings: [],
+          }],
+          selectedIds: ['r1'],
+          candidateIds: [],
+          explanation: 'retry ok',
+          unmetConstraints: [],
+        }),
+      },
+    ]);
+
+    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
+    const output = await runEvaluationAgent({
+      goal: goal(),
+      plan: exactPlan,
+      restaurants: [restaurant('r1', '城中牛排馆', '西餐厅', 300)],
+      targetCount: 8,
+    });
+
+    expect(output.verdicts[0].confidence).toBe(0.87);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+
+    const firstBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+    const secondBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
+    expect(firstBody.max_tokens).toBeLessThan(secondBody.max_tokens);
   });
 });
