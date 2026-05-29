@@ -1,12 +1,21 @@
 import type { z } from 'zod';
+import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
-import { parseModelJsonArguments } from './modelJson';
+import {
+  extractModelFunctionArguments,
+  isModelFunctionOutputTruncated,
+  parseModelJsonArguments,
+  type ChatCompletionFunctionResponse,
+} from './modelJson';
 
 interface ChatFunctionDefinition {
   name: string;
   description?: string;
   parameters: unknown;
 }
+
+export const JSON_FUNCTION_MAX_TOKENS = 4096;
+export const JSON_FUNCTION_RETRY_MAX_TOKENS = 8192;
 
 export interface JsonFunctionAgentOptions<T> {
   agentName: string;
@@ -17,15 +26,127 @@ export interface JsonFunctionAgentOptions<T> {
   input: unknown;
   functionDefinition: ChatFunctionDefinition;
   functionName: string;
-  schema: z.ZodType<T>;
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   temperature: number;
   maxTokens: number;
+  retryMaxTokens?: number;
   timeoutMs: number;
+}
+
+export interface JsonFunctionParsingOptions<T> {
+  agentName: string;
+  functionName: string;
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
+}
+
+export interface JsonFunctionParseResult<T> {
+  ok: boolean;
+  truncated: boolean;
+  data?: T;
+  error?: Error;
 }
 
 export async function callJsonFunctionAgent<T>(
   options: JsonFunctionAgentOptions<T>
 ): Promise<T> {
+  const first = parseJsonFunctionAgentResponse(
+    await requestJsonFunctionAgent(options, options.maxTokens),
+    options
+  );
+
+  if (first.ok && !first.truncated) {
+    return first.data as T;
+  }
+
+  if (shouldRetryTruncatedFunctionArguments(options, first)) {
+    logger.warn(`${options.agentName} response was truncated, retrying with a larger token budget`, {
+      maxTokens: options.maxTokens,
+      retryMaxTokens: options.retryMaxTokens,
+    });
+
+    const retry = parseJsonFunctionAgentResponse(
+      await requestJsonFunctionAgent(options, options.retryMaxTokens!),
+      options
+    );
+
+    if (retry.ok) {
+      if (retry.truncated) {
+        logger.warn(`${options.agentName} retry response was still truncated; using repaired function arguments`, {
+          retryMaxTokens: options.retryMaxTokens,
+        });
+      }
+      return retry.data as T;
+    }
+
+    if (first.ok) {
+      logger.warn(`${options.agentName} retry failed; using repaired first function arguments`, {
+        error: retry.error?.message,
+      });
+      return first.data as T;
+    }
+
+    throw retry.error ?? first.error ?? truncatedFunctionArgumentsError(options.agentName);
+  }
+
+  if (first.ok) {
+    return first.data as T;
+  }
+
+  throw first.error ?? new Error(`${options.agentName} returned invalid function arguments`);
+}
+
+export function parseJsonFunctionAgentResponse<T>(
+  data: ChatCompletionFunctionResponse,
+  options: JsonFunctionParsingOptions<T>
+): JsonFunctionParseResult<T> {
+  const args = extractModelFunctionArguments(data, options.functionName);
+  const truncated = isModelFunctionOutputTruncated(data, args);
+
+  if (!args) {
+    return {
+      ok: false,
+      truncated,
+      error: truncated
+        ? truncatedFunctionArgumentsError(options.agentName)
+        : new Error(`${options.agentName} returned no function arguments`),
+    };
+  }
+
+  let parsedArgs: unknown;
+  try {
+    parsedArgs = parseModelJsonArguments(args, options.agentName);
+  } catch (error) {
+    return {
+      ok: false,
+      truncated,
+      error: truncated
+        ? truncatedFunctionArgumentsError(options.agentName)
+        : asError(error),
+    };
+  }
+
+  const parsed = options.schema.safeParse(parsedArgs);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      truncated,
+      error: truncated
+        ? truncatedFunctionArgumentsError(options.agentName)
+        : new Error(`${options.agentName} returned invalid schema: ${parsed.error.message}`),
+    };
+  }
+
+  return {
+    ok: true,
+    truncated,
+    data: parsed.data,
+  };
+}
+
+async function requestJsonFunctionAgent<T>(
+  options: JsonFunctionAgentOptions<T>,
+  maxTokens: number
+): Promise<ChatCompletionFunctionResponse> {
   const response = await fetchWithTimeout(
     `${options.baseUrl}/chat/completions`,
     {
@@ -45,7 +166,7 @@ export async function callJsonFunctionAgent<T>(
         functions: [options.functionDefinition],
         function_call: { name: options.functionName },
         temperature: options.temperature,
-        max_tokens: options.maxTokens,
+        max_tokens: maxTokens,
       }),
     },
     options.timeoutMs
@@ -55,131 +176,22 @@ export async function callJsonFunctionAgent<T>(
     throw new Error(`${options.agentName} API failed: ${response.status}`);
   }
 
-  const data = await response.json();
-  const args = extractFunctionArguments(data);
-  if (!args) {
-    throw new Error(`${options.agentName} returned no function arguments`);
-  }
-
-  if (data.choices?.[0]?.finish_reason === 'length' || !hasCompleteJsonStructure(args)) {
-    throw new Error(`${options.agentName} returned truncated function arguments`);
-  }
-
-  const parsed = options.schema.safeParse(
-    parseModelJsonArguments(args, options.agentName)
-  );
-  if (!parsed.success) {
-    throw new Error(`${options.agentName} returned invalid schema: ${parsed.error.message}`);
-  }
-
-  return parsed.data;
+  return response.json();
 }
 
-function extractFunctionArguments(data: {
-  choices?: Array<{
-    finish_reason?: string;
-    message?: {
-      content?: string;
-      function_call?: { name: string; arguments: string };
-      tool_calls?: Array<{
-        type: string;
-        function: { name: string; arguments: string };
-      }>;
-    };
-  }>;
-}): string | null {
-  const message = data.choices?.[0]?.message;
-  if (message?.function_call?.arguments) {
-    return message.function_call.arguments;
-  }
-
-  const toolCall = message?.tool_calls?.find((item) => item.type === 'function');
-  if (toolCall?.function.arguments) {
-    return toolCall.function.arguments;
-  }
-
-  return extractJsonObjectFromText(message?.content ?? '');
+function shouldRetryTruncatedFunctionArguments<T>(
+  options: JsonFunctionAgentOptions<T>,
+  result: JsonFunctionParseResult<T>
+): boolean {
+  return result.truncated
+    && typeof options.retryMaxTokens === 'number'
+    && options.retryMaxTokens > options.maxTokens;
 }
 
-function hasCompleteJsonStructure(content: string): boolean {
-  const stack: string[] = [];
-  let inString = false;
-  let escaped = false;
-
-  for (const char of content.trim()) {
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-
-    if (char === '\\' && inString) {
-      escaped = true;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) {
-      continue;
-    }
-
-    if (char === '{') {
-      stack.push('}');
-    } else if (char === '[') {
-      stack.push(']');
-    } else if (char === '}' || char === ']') {
-      if (stack.pop() !== char) {
-        return false;
-      }
-    }
-  }
-
-  return !inString && stack.length === 0;
+function truncatedFunctionArgumentsError(agentName: string): Error {
+  return new Error(`${agentName} returned truncated function arguments`);
 }
 
-function extractJsonObjectFromText(content: string): string | null {
-  const start = content.indexOf('{');
-  if (start === -1) {
-    return null;
-  }
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let index = start; index < content.length; index++) {
-    const char = content[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-
-    if (char === '\\' && inString) {
-      escaped = true;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) {
-      continue;
-    }
-
-    if (char === '{') {
-      depth++;
-    } else if (char === '}') {
-      depth--;
-      if (depth === 0) {
-        return content.slice(start, index + 1);
-      }
-    }
-  }
-
-  return null;
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

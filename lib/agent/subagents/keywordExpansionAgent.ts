@@ -1,5 +1,9 @@
 import { logger } from '@/lib/logger';
-import { callJsonFunctionAgent } from '../modelClient';
+import {
+  callJsonFunctionAgent,
+  JSON_FUNCTION_MAX_TOKENS,
+  JSON_FUNCTION_RETRY_MAX_TOKENS,
+} from '../modelClient';
 import {
   expandPoiSearchKeywords,
   isGenericSearchKeyword,
@@ -14,6 +18,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const KEYWORD_EXPANSION_TIMEOUT = 60000;
+const KEYWORD_EXPANSION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
+const KEYWORD_EXPANSION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 const KEYWORD_EXPANSION_LIMIT = 3;
 
 export interface KeywordExpansionAgentInput {
@@ -164,7 +170,8 @@ async function callKeywordExpansionModel(
     functionName: 'expandRestaurantSearchKeywords',
     schema: KeywordExpansionOutputSchema,
     temperature: 0.2,
-    maxTokens: 700,
+    maxTokens: KEYWORD_EXPANSION_MAX_TOKENS,
+    retryMaxTokens: KEYWORD_EXPANSION_RETRY_MAX_TOKENS,
     timeoutMs: KEYWORD_EXPANSION_TIMEOUT,
   }) as Promise<KeywordExpansionOutput>;
 }

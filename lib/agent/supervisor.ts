@@ -1,5 +1,9 @@
 import { logger } from '@/lib/logger';
-import { callJsonFunctionAgent } from './modelClient';
+import {
+  callJsonFunctionAgent,
+  JSON_FUNCTION_MAX_TOKENS,
+  JSON_FUNCTION_RETRY_MAX_TOKENS,
+} from './modelClient';
 import { promoteAuthorizedBroadenedResults } from './broadenAdmission';
 import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
 import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
@@ -23,8 +27,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const SUPERVISOR_TIMEOUT = 60000;
-const SUPERVISOR_MAX_TOKENS = 4096;
-const SUPERVISOR_RETRY_MAX_TOKENS = 8192;
+const SUPERVISOR_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
+const SUPERVISOR_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 
 export interface SearchSupervisorInput {
   message: string;
@@ -91,6 +95,11 @@ const SUPERVISOR_FUNCTION = {
 export async function runSearchSupervisor(
   input: SearchSupervisorInput
 ): Promise<SearchSupervisorOutput> {
+  const deterministicOutput = deterministicClarificationAnswer(input);
+  if (deterministicOutput) {
+    return deterministicOutput;
+  }
+
   if (!OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is required for SearchSupervisorAgent');
   }
@@ -98,23 +107,6 @@ export async function runSearchSupervisor(
   try {
     return normalizeSupervisorOutput(input, await callSupervisorModel(input));
   } catch (error) {
-    if (isTruncatedFunctionArgumentsError(error)) {
-      try {
-        logger.warn('SearchSupervisorAgent response was truncated, retrying with a larger token budget', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return normalizeSupervisorOutput(
-          input,
-          await callSupervisorModel(input, SUPERVISOR_RETRY_MAX_TOKENS)
-        );
-      } catch (retryError) {
-        logger.warn('SearchSupervisorAgent retry unavailable', {
-          error: retryError instanceof Error ? retryError.message : String(retryError),
-        });
-        throw retryError;
-      }
-    }
-
     logger.warn('SearchSupervisorAgent unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -174,6 +166,110 @@ function normalizePendingAnswerPatch(previousGoal: UserGoal, patch: GoalPatch): 
     addRequestedItems: undefined,
     addCategories: undefined,
   });
+}
+
+function deterministicClarificationAnswer(
+  input: SearchSupervisorInput
+): SearchSupervisorOutput | null {
+  if (!input.previousGoal) {
+    return null;
+  }
+
+  const normalizedAnswer = input.message.trim();
+  if (!normalizedAnswer) {
+    return null;
+  }
+
+  const exactEffect = input.pendingQuestion?.optionEffects?.[normalizedAnswer];
+  if (isBroadeningAnswer(normalizedAnswer)) {
+    const broadeningEffect = mergeBroadeningEffect(
+      input.previousGoal,
+      exactEffect ?? findBroadeningEffect(input.pendingQuestion)
+    );
+    return deterministicPatchOutput(
+      input.previousGoal,
+      goalPatchFromClarificationEffect(broadeningEffect, input.previousGoal)
+    );
+  }
+
+  if (exactEffect) {
+    return deterministicPatchOutput(
+      input.previousGoal,
+      goalPatchFromClarificationEffect(exactEffect, input.previousGoal)
+    );
+  }
+
+  if (isOpenRecommendationAnswer(normalizedAnswer)) {
+    return deterministicPatchOutput(
+      input.previousGoal,
+      buildOpenRecommendationPatch(input.previousGoal)
+    );
+  }
+
+  return null;
+}
+
+function deterministicPatchOutput(previousGoal: UserGoal, patch: GoalPatch): SearchSupervisorOutput {
+  return {
+    patch: normalizePendingAnswerPatch(previousGoal, patch),
+    nextAction: 'plan',
+  };
+}
+
+function findBroadeningEffect(
+  pendingQuestion: PendingQuestion | undefined
+): ClarificationEffect | undefined {
+  return Object.values(pendingQuestion?.optionEffects ?? {}).find((effect) =>
+    effect.allowBroaden === true || effect.setDistanceMaxMeters !== undefined
+  );
+}
+
+function buildBroadeningEffect(goal: UserGoal): ClarificationEffect {
+  const strictDistance = goal.hardConstraints.find((constraint) =>
+    constraint.kind === 'distance' && constraint.strict
+  );
+
+  return {
+    allowBroaden: true,
+    setDistanceMaxMeters: strictDistance ? 5000 : undefined,
+  };
+}
+
+function mergeBroadeningEffect(
+  goal: UserGoal,
+  effect: ClarificationEffect | undefined
+): ClarificationEffect {
+  const fallback = buildBroadeningEffect(goal);
+
+  return {
+    ...effect,
+    allowBroaden: effect?.allowBroaden ?? fallback.allowBroaden,
+    setDistanceMaxMeters: effect?.setDistanceMaxMeters ?? fallback.setDistanceMaxMeters,
+  };
+}
+
+function buildOpenRecommendationPatch(goal: UserGoal): GoalPatch {
+  const hasDefaultDiversity = goal.softPreferences.some((preference) =>
+    preference.name === '默认多样性'
+  );
+
+  return GoalPatchSchema.parse({
+    allowBroaden: true,
+    addSoftPreferences: hasDefaultDiversity
+      ? undefined
+      : [{ name: '默认多样性', weight: 1, verifiable: true }],
+    reason: '用户授权开放推荐。',
+  });
+}
+
+function isBroadeningAnswer(answer: string): boolean {
+  return /^(允许放宽|可以放宽|放宽|放宽范围|扩大范围|扩大搜索|扩大一点|扩大点|范围大点|远一点|可以远一点|搜远一点|再远点|周边也行)$/u
+    .test(answer);
+}
+
+function isOpenRecommendationAnswer(answer: string): boolean {
+  return /^(都行|都可以|随便|随意|随机|无所谓|你决定|你看着办|帮我决定|直接推荐|按你推荐|你推荐吧|看着办吧)$/u
+    .test(answer);
 }
 
 export async function understandSearchGoal(input: AgentInput): Promise<UserGoal> {
@@ -260,7 +356,7 @@ export function applySupervisorClarifyingAnswer(session: AgentSession, answer: s
     return;
   }
 
-  const patch = goalPatchFromClarificationEffect(effect);
+  const patch = goalPatchFromClarificationEffect(effect, goal);
   const rawQuery = normalized && !goal.rawQuery.includes(normalized)
     ? `${goal.rawQuery}，${normalized}`
     : goal.rawQuery;
@@ -295,7 +391,10 @@ function hasPrimaryTargets(goal: UserGoal): boolean {
   ].some((item) => item.trim().length > 0);
 }
 
-function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatch {
+function goalPatchFromClarificationEffect(
+  effect: ClarificationEffect,
+  previousGoal?: UserGoal
+): GoalPatch {
   const addConstraints: Constraint[] = [];
   const replaceRequestedItems = effect.replaceRequestedItems?.filter(Boolean);
   const replaceCategories = effect.replaceCategories?.filter(Boolean);
@@ -344,11 +443,20 @@ function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatc
     addSoftPreferences: effect.addSoftPreferences,
     addConstraints,
     removeConstraints: effect.setDistanceMaxMeters !== undefined
-      ? ['楼下500米内', '步行1公里内']
+      ? strictDistanceConstraintLabels(previousGoal)
       : undefined,
     allowBroaden: effect.allowBroaden,
     reason: '根据用户追问选项更新目标。',
   });
+}
+
+function strictDistanceConstraintLabels(goal: UserGoal | undefined): string[] {
+  const labels = goal?.hardConstraints
+    .filter((constraint) => constraint.kind === 'distance' && constraint.strict)
+    .map((constraint) => constraint.label)
+    .filter(Boolean);
+
+  return labels && labels.length > 0 ? labels : ['楼下500米内', '步行1公里内'];
 }
 
 async function callSupervisorModel(
@@ -376,13 +484,9 @@ async function callSupervisorModel(
     schema: SearchSupervisorOutputSchema,
     temperature: 0,
     maxTokens,
+    retryMaxTokens: SUPERVISOR_RETRY_MAX_TOKENS,
     timeoutMs: SUPERVISOR_TIMEOUT,
   }) as Promise<SearchSupervisorOutput>;
-}
-
-function isTruncatedFunctionArgumentsError(error: unknown): boolean {
-  return error instanceof Error
-    && error.message.includes('returned truncated function arguments');
 }
 
 function mergeStrings(left: string[], right: string[]): string[] {

@@ -1,6 +1,13 @@
 import type { Restaurant } from '@/types';
+import type { z } from 'zod';
 import { fetchWithTimeout } from '@/lib/withTimeout';
-import { parseModelJsonArguments } from '../modelJson';
+import {
+  JSON_FUNCTION_MAX_TOKENS,
+  JSON_FUNCTION_RETRY_MAX_TOKENS,
+  parseJsonFunctionAgentResponse,
+  type JsonFunctionParseResult,
+} from '../modelClient';
+import type { ChatCompletionFunctionResponse } from '../modelJson';
 import { EvaluationAgentOutputSchema } from '../schemas/verdict';
 import type {
   CandidateVerdict,
@@ -14,8 +21,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const EVALUATION_TIMEOUT = 60000;
-const MIN_EVALUATION_MAX_TOKENS = 1600;
-const MAX_EVALUATION_MAX_TOKENS = 4096;
+const EVALUATION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
+const EVALUATION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 
 export interface EvaluationAgentInput {
   goal: UserGoal;
@@ -93,19 +100,28 @@ export async function runEvaluationAgent(input: EvaluationAgentInput): Promise<E
 }
 
 async function callEvaluationModel(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
-  const initialMaxTokens = evaluationMaxTokens(input.restaurants.length);
-  const first = await requestEvaluationModel(input, initialMaxTokens);
-  const firstArgs = extractFunctionArguments(first);
+  const first = await requestEvaluationModel(input, EVALUATION_MAX_TOKENS);
+  const firstResult = parseEvaluationModelResult(first);
 
-  if (
-    shouldRetryEvaluationParse(first, firstArgs)
-    && initialMaxTokens < MAX_EVALUATION_MAX_TOKENS
-  ) {
-    const second = await requestEvaluationModel(input, MAX_EVALUATION_MAX_TOKENS);
-    return parseEvaluationModelOutput(second);
+  if (firstResult.truncated) {
+    const second = await requestEvaluationModel(input, EVALUATION_RETRY_MAX_TOKENS);
+    const secondResult = parseEvaluationModelResult(second);
+    if (secondResult.ok) {
+      return secondResult.data as EvaluationAgentOutput;
+    }
+
+    if (firstResult.ok) {
+      return firstResult.data as EvaluationAgentOutput;
+    }
+
+    throw secondResult.error ?? firstResult.error ?? new Error('EvaluationAgent returned invalid function arguments');
   }
 
-  return parseEvaluationModelOutput(first);
+  if (!firstResult.ok) {
+    throw firstResult.error ?? new Error('EvaluationAgent returned invalid function arguments');
+  }
+
+  return firstResult.data as EvaluationAgentOutput;
 }
 
 async function requestEvaluationModel(
@@ -160,131 +176,12 @@ async function requestEvaluationModel(
   return response.json();
 }
 
-function parseEvaluationModelOutput(data: ChatCompletionFunctionResponse): EvaluationAgentOutput {
-  const args = extractFunctionArguments(data);
-  if (!args) {
-    throw new Error('EvaluationAgent returned no function arguments');
-  }
-
-  const finishReason = getFinishReason(data);
-  if (finishReason === 'length' || !hasCompleteJsonStructure(args)) {
-    throw new Error('EvaluationAgent returned truncated function arguments');
-  }
-
-  const parsed = EvaluationAgentOutputSchema.safeParse(
-    parseModelJsonArguments(args, 'EvaluationAgent')
-  );
-  if (!parsed.success) {
-    throw new Error(`EvaluationAgent returned invalid schema: ${parsed.error.message}`);
-  }
-
-  return parsed.data;
-}
-
-function evaluationMaxTokens(restaurantCount: number): number {
-  return Math.min(
-    MAX_EVALUATION_MAX_TOKENS,
-    Math.max(MIN_EVALUATION_MAX_TOKENS, 600 + restaurantCount * 220)
-  );
-}
-
-function shouldRetryEvaluationParse(
-  data: ChatCompletionFunctionResponse,
-  args: string | null
-): boolean {
-  return getFinishReason(data) === 'length'
-    || Boolean(args && !hasCompleteJsonStructure(args));
-}
-
-function getFinishReason(data: ChatCompletionFunctionResponse): string | undefined {
-  return data.choices?.[0]?.finish_reason;
-}
-
-function extractFunctionArguments(data: ChatCompletionFunctionResponse): string | null {
-  const message = data.choices?.[0]?.message;
-  if (message?.function_call?.arguments) {
-    return message.function_call.arguments;
-  }
-
-  const toolCall = message?.tool_calls?.find((item) => item.type === 'function');
-  if (toolCall?.function.arguments) {
-    return toolCall.function.arguments;
-  }
-
-  return extractJsonObjectFromText(message?.content ?? '');
-}
-
-interface ChatCompletionFunctionResponse {
-  choices?: Array<{
-    finish_reason?: string;
-    message?: {
-      content?: string;
-      function_call?: { name: string; arguments: string };
-      tool_calls?: Array<{
-        type: string;
-        function: { name: string; arguments: string };
-      }>;
-    };
-  }>;
-}
-
-function extractJsonObjectFromText(content: string): string | null {
-  const start = content.indexOf('{');
-  if (start === -1) {
-    return null;
-  }
-
-  let depth = 0;
-  for (let index = start; index < content.length; index++) {
-    const char = content[index];
-    if (char === '{') {
-      depth++;
-    } else if (char === '}') {
-      depth--;
-      if (depth === 0) {
-        return content.slice(start, index + 1);
-      }
-    }
-  }
-
-  return null;
-}
-
-function hasCompleteJsonStructure(content: string): boolean {
-  const stack: string[] = [];
-  let inString = false;
-  let escaped = false;
-
-  for (const char of content.trim()) {
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-
-    if (char === '\\' && inString) {
-      escaped = true;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) {
-      continue;
-    }
-
-    if (char === '{') {
-      stack.push('}');
-    } else if (char === '[') {
-      stack.push(']');
-    } else if (char === '}' || char === ']') {
-      if (stack.pop() !== char) {
-        return false;
-      }
-    }
-  }
-
-  return !inString && stack.length === 0;
+function parseEvaluationModelResult(
+  data: ChatCompletionFunctionResponse
+): JsonFunctionParseResult<EvaluationAgentOutput> {
+  return parseJsonFunctionAgentResponse<EvaluationAgentOutput>(data, {
+    agentName: 'EvaluationAgent',
+    functionName: 'evaluateRestaurantCandidates',
+    schema: EvaluationAgentOutputSchema as z.ZodType<EvaluationAgentOutput>,
+  });
 }

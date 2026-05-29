@@ -1,6 +1,10 @@
 import { logger } from '@/lib/logger';
 import { AgentActionSchema } from './schemas/action';
-import { callJsonFunctionAgent } from './modelClient';
+import {
+  callJsonFunctionAgent,
+  JSON_FUNCTION_MAX_TOKENS,
+  JSON_FUNCTION_RETRY_MAX_TOKENS,
+} from './modelClient';
 import { DEFAULT_POI_TYPE, lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
@@ -21,6 +25,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const SUPERVISOR_ACTION_TIMEOUT = 60000;
+const SUPERVISOR_ACTION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
+const SUPERVISOR_ACTION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 const MIN_PRIMARY_BEFORE_OPTIONAL_EXPANSION = 6;
 
 export interface SearchSupervisorActionInput {
@@ -129,6 +135,10 @@ export async function decideSearchSupervisorAction(
   input: SearchSupervisorActionInput,
   context: AgentContext
 ): Promise<AgentAction> {
+  if (shouldForceOpenExplorationSearch(input, context)) {
+    return deterministicSupervisorAction(input, context);
+  }
+
   if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
     return deterministicSupervisorAction(input, context);
   }
@@ -273,6 +283,30 @@ function deterministicSupervisorAction(
   }
 
   return buildFailureQuestionAction(context);
+}
+
+function shouldForceOpenExplorationSearch(
+  input: SearchSupervisorActionInput,
+  context: AgentContext
+): boolean {
+  if (
+    !context.goal.allowBroaden
+    || input.limits.remainingSearchCalls <= 0
+    || initialKeywords(context).length > 0
+  ) {
+    return false;
+  }
+
+  const primaryCandidates = context.candidates.some((candidate) =>
+    isPrimaryRecommendationAllowed(candidate, context)
+  );
+  if (primaryCandidates) {
+    return false;
+  }
+
+  return hasUntriedBroadenedKeywords(context)
+    || hasUntriedRelatedKeywords(context)
+    || !hasTriedIntent(context, 'fallback');
 }
 
 function buildFailureQuestionAction(context: AgentContext): AgentAction {
@@ -467,7 +501,8 @@ async function callSupervisorActionModel(input: SearchSupervisorActionInput): Pr
     functionName: 'decideRestaurantSearchAction',
     schema: AgentActionSchema,
     temperature: 0,
-    maxTokens: 900,
+    maxTokens: SUPERVISOR_ACTION_MAX_TOKENS,
+    retryMaxTokens: SUPERVISOR_ACTION_RETRY_MAX_TOKENS,
     timeoutMs: SUPERVISOR_ACTION_TIMEOUT,
   }) as Promise<AgentAction>;
 }

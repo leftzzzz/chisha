@@ -1,6 +1,11 @@
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
-import { parseModelJsonArguments } from '../modelJson';
+import {
+  JSON_FUNCTION_MAX_TOKENS,
+  JSON_FUNCTION_RETRY_MAX_TOKENS,
+  parseJsonFunctionAgentResponse,
+} from '../modelClient';
+import type { ChatCompletionFunctionResponse } from '../modelJson';
 import { normalizeSearchKeywords } from '../poiTaxonomy';
 import { PlanningAgentOutputSchema } from '../schemas/plan';
 import type {
@@ -19,6 +24,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const PLANNING_TIMEOUT = 60000;
+const PLANNING_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
+const PLANNING_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 
 export interface PlanningAgentInput {
   goal: UserGoal;
@@ -202,6 +209,36 @@ function getGoalRadius(goal: UserGoal): number {
 }
 
 async function callPlanningModel(input: PlanningAgentInput): Promise<PlanningAgentOutput> {
+  const first = parsePlanningModelResult(
+    await requestPlanningModel(input, PLANNING_MAX_TOKENS)
+  );
+
+  if (first.truncated) {
+    const retry = parsePlanningModelResult(
+      await requestPlanningModel(input, PLANNING_RETRY_MAX_TOKENS)
+    );
+    if (retry.ok) {
+      return retry.data as PlanningAgentOutput;
+    }
+
+    if (first.ok) {
+      return first.data as PlanningAgentOutput;
+    }
+
+    throw retry.error ?? first.error ?? new Error('PlanningAgent returned invalid function arguments');
+  }
+
+  if (!first.ok) {
+    throw first.error ?? new Error('PlanningAgent returned invalid function arguments');
+  }
+
+  return first.data as PlanningAgentOutput;
+}
+
+async function requestPlanningModel(
+  input: PlanningAgentInput,
+  maxTokens: number
+): Promise<ChatCompletionFunctionResponse> {
   const response = await fetchWithTimeout(
     `${OPENAI_BASE_URL}/chat/completions`,
     {
@@ -226,7 +263,7 @@ async function callPlanningModel(input: PlanningAgentInput): Promise<PlanningAge
         functions: [PLANNING_FUNCTION],
         function_call: { name: 'planRestaurantSearchTargets' },
         temperature: 0,
-        max_tokens: 900,
+        max_tokens: maxTokens,
       }),
     },
     PLANNING_TIMEOUT
@@ -236,109 +273,13 @@ async function callPlanningModel(input: PlanningAgentInput): Promise<PlanningAge
     throw new Error(`PlanningAgent API failed: ${response.status}`);
   }
 
-  const data = await response.json();
-  const args = extractFunctionArguments(data);
-  if (!args) {
-    throw new Error('PlanningAgent returned no function arguments');
-  }
-
-  if (data.choices?.[0]?.finish_reason === 'length' || !hasCompleteJsonStructure(args)) {
-    throw new Error('PlanningAgent returned truncated function arguments');
-  }
-
-  const parsed = PlanningAgentOutputSchema.safeParse(
-    parseModelJsonArguments(args, 'PlanningAgent')
-  );
-  if (!parsed.success) {
-    throw new Error(`PlanningAgent returned invalid schema: ${parsed.error.message}`);
-  }
-
-  return parsed.data;
+  return response.json();
 }
 
-function extractFunctionArguments(data: {
-  choices?: Array<{
-    finish_reason?: string;
-    message?: {
-      content?: string;
-      function_call?: { name: string; arguments: string };
-      tool_calls?: Array<{
-        type: string;
-        function: { name: string; arguments: string };
-      }>;
-    };
-  }>;
-}): string | null {
-  const message = data.choices?.[0]?.message;
-  if (message?.function_call?.arguments) {
-    return message.function_call.arguments;
-  }
-
-  const toolCall = message?.tool_calls?.find((item) => item.type === 'function');
-  if (toolCall?.function.arguments) {
-    return toolCall.function.arguments;
-  }
-
-  return extractJsonObjectFromText(message?.content ?? '');
-}
-
-function extractJsonObjectFromText(content: string): string | null {
-  const start = content.indexOf('{');
-  if (start === -1) {
-    return null;
-  }
-
-  let depth = 0;
-  for (let index = start; index < content.length; index++) {
-    const char = content[index];
-    if (char === '{') {
-      depth++;
-    } else if (char === '}') {
-      depth--;
-      if (depth === 0) {
-        return content.slice(start, index + 1);
-      }
-    }
-  }
-
-  return null;
-}
-
-function hasCompleteJsonStructure(content: string): boolean {
-  const stack: string[] = [];
-  let inString = false;
-  let escaped = false;
-
-  for (const char of content.trim()) {
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-
-    if (char === '\\' && inString) {
-      escaped = true;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) {
-      continue;
-    }
-
-    if (char === '{') {
-      stack.push('}');
-    } else if (char === '[') {
-      stack.push(']');
-    } else if (char === '}' || char === ']') {
-      if (stack.pop() !== char) {
-        return false;
-      }
-    }
-  }
-
-  return !inString && stack.length === 0;
+function parsePlanningModelResult(data: ChatCompletionFunctionResponse) {
+  return parseJsonFunctionAgentResponse<PlanningAgentOutput>(data, {
+    agentName: 'PlanningAgent',
+    functionName: 'planRestaurantSearchTargets',
+    schema: PlanningAgentOutputSchema,
+  });
 }

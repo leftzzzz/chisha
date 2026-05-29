@@ -1,3 +1,17 @@
+export interface ChatCompletionFunctionResponse {
+  choices?: Array<{
+    finish_reason?: string;
+    message?: {
+      content?: string;
+      function_call?: { name?: string; arguments?: string };
+      tool_calls?: Array<{
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+  }>;
+}
+
 export function parseModelJsonArguments(args: string, agentName: string): unknown {
   const candidates = Array.from(new Set([
     args.trim(),
@@ -15,6 +29,97 @@ export function parseModelJsonArguments(args: string, agentName: string): unknow
   }
 
   throw new Error(`${agentName} returned malformed function arguments JSON`);
+}
+
+export function extractModelFunctionArguments(
+  data: ChatCompletionFunctionResponse,
+  functionName?: string
+): string | null {
+  const message = data.choices?.[0]?.message;
+  const functionCall = message?.function_call;
+  if (hasArguments(functionCall) && matchesFunctionName(functionCall.name, functionName)) {
+    return functionCall.arguments;
+  }
+
+  const toolCalls = message?.tool_calls ?? [];
+  const matchingToolCall = toolCalls.find((item) =>
+    item.type === 'function'
+    && hasArguments(item.function)
+    && matchesFunctionName(item.function.name, functionName)
+  );
+  if (matchingToolCall?.function?.arguments) {
+    return matchingToolCall.function.arguments;
+  }
+
+  const fallbackToolCall = toolCalls.find((item) =>
+    item.type === 'function' && hasArguments(item.function)
+  );
+  if (fallbackToolCall?.function?.arguments) {
+    return fallbackToolCall.function.arguments;
+  }
+
+  return extractJsonObject(message?.content ?? '');
+}
+
+export function getModelFinishReason(data: ChatCompletionFunctionResponse): string | undefined {
+  return data.choices?.[0]?.finish_reason;
+}
+
+export function isModelFunctionOutputTruncated(
+  data: ChatCompletionFunctionResponse,
+  args = extractModelFunctionArguments(data)
+): boolean {
+  return getModelFinishReason(data) === 'length'
+    || Boolean(args && !hasCompleteJsonStructure(args));
+}
+
+export function hasCompleteJsonStructure(content: string): boolean {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (const char of content.trim()) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === '{') {
+      stack.push('}');
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === '}' || char === ']') {
+      if (stack.pop() !== char) {
+        return false;
+      }
+    }
+  }
+
+  return !inString && stack.length === 0;
+}
+
+function hasArguments<T extends { arguments?: string } | undefined>(
+  functionCall: T
+): functionCall is T & { arguments: string } {
+  return typeof functionCall?.arguments === 'string' && functionCall.arguments.length > 0;
+}
+
+function matchesFunctionName(actual: string | undefined, expected: string | undefined): boolean {
+  return !expected || actual === expected;
 }
 
 function repairJson(input: string | null): string | null {

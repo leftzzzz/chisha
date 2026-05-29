@@ -36,6 +36,7 @@ export const Map: React.FC<MapProps> = ({
   const markersRef = useRef<AMap.Marker[]>([]);
   const userMarkerRef = useRef<AMap.Marker | null>(null);
   const infoWindowRef = useRef<AMap.InfoWindow | null>(null);
+  const initialMapOptionsRef = useRef({ center, userLocation, restaurants, zoom });
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,10 +82,14 @@ export const Map: React.FC<MapProps> = ({
 
         if (!mapContainerRef.current) return;
 
-        const mapCenter = center || userLocation || restaurants[0]?.location || { lng: 114.05, lat: 22.55 };
+        const initialOptions = initialMapOptionsRef.current;
+        const mapCenter = initialOptions.center
+          || initialOptions.userLocation
+          || initialOptions.restaurants[0]?.location
+          || { lng: 114.05, lat: 22.55 };
 
         mapRef.current = new window.AMap.Map(mapContainerRef.current, {
-          zoom,
+          zoom: initialOptions.zoom,
           center: [mapCenter.lng, mapCenter.lat],
           viewMode: '2D',
           resizeEnable: true,

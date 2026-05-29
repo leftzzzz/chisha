@@ -43,6 +43,81 @@ describe('SearchSupervisorAgent', () => {
     }
   });
 
+  it('handles open pending answers deterministically without the model', async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    jest.resetModules();
+
+    try {
+      const { runSearchSupervisor } = await import('@/lib/agent/supervisor');
+      const output = await runSearchSupervisor({
+        message: '你看着办',
+        previousGoal: goal({
+          requestedItems: [],
+          acceptableCategories: [],
+          primaryKeywords: [],
+        }),
+        pendingQuestion: {
+          question: '你想找哪类餐厅，或具体想吃什么？',
+          allowFreeText: true,
+        },
+      });
+
+      expect(output.nextAction).toBe('plan');
+      expect(output.patch).toEqual(expect.objectContaining({
+        allowBroaden: true,
+        addSoftPreferences: [{ name: '默认多样性', weight: 1, verifiable: true }],
+      }));
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
+  });
+
+  it('handles broaden pending answers deterministically without the model', async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    jest.resetModules();
+
+    try {
+      const { runSearchSupervisor } = await import('@/lib/agent/supervisor');
+      const output = await runSearchSupervisor({
+        message: '扩大范围',
+        previousGoal: goal({
+          hardConstraints: [{
+            kind: 'distance',
+            label: '300米内',
+            value: 300,
+            maxMeters: 300,
+            strict: true,
+          }],
+        }),
+        pendingQuestion: {
+          question: '当前距离范围内没有找到合适餐厅，要扩大范围再搜吗？',
+          allowFreeText: true,
+        },
+      });
+
+      expect(output.nextAction).toBe('plan');
+      expect(output.patch).toEqual(expect.objectContaining({
+        allowBroaden: true,
+        removeConstraints: ['300米内'],
+      }));
+      expect(output.patch?.addConstraints).toEqual(
+        expect.arrayContaining([expect.objectContaining({ maxMeters: 5000, strict: false })])
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
+  });
+
   it('retries once with a larger token budget when function arguments are truncated', async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = 'test-key';

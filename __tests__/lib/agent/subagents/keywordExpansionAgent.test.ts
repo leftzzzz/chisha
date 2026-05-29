@@ -154,6 +154,7 @@ describe('KeywordExpansionAgent', () => {
       const modelInput = JSON.parse(content.slice(content.lastIndexOf('\n\n') + 2));
 
       expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
+      expect(requestBody.max_tokens).toBe(4096);
       expect(modelInput.openExplorationAllowed).toBe(true);
       expect(modelInput.goalContext.rawQuery).toBe('随意，你来选择');
       expect(expansion.relatedKeywords).toEqual([]);

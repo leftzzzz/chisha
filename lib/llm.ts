@@ -9,6 +9,7 @@ import { ApiError } from '@/types';
 import { logger } from './logger';
 import { withTimeout, fetchWithTimeout } from './withTimeout';
 import { ErrorCode } from './apiResponse';
+import { JSON_FUNCTION_MAX_TOKENS } from './agent/modelClient';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
@@ -254,7 +255,7 @@ export async function callOpenAI(
             functions: FUNCTIONS,
             function_call: { name: 'parseRestaurantSearchQuery' },
             temperature: 0,
-            max_tokens: 500,
+            max_tokens: JSON_FUNCTION_MAX_TOKENS,
           }),
         },
         LLM_TIMEOUT
@@ -299,7 +300,7 @@ export async function callOpenAI(
       };
       try {
         data = await response.json();
-      } catch (jsonError) {
+      } catch {
         const responseText = await response.text();
         logger.error('Failed to parse JSON response', {
           statusCode: response.status,
@@ -444,12 +445,14 @@ export async function callOpenAI(
 
     return result;
   } catch (error) {
+    const errorCode = error instanceof ApiError ? error.code : undefined;
+
     // 改进错误捕获和日志
     if (error instanceof Error) {
       logger.error('OpenAI call failed', {
         name: error.name,
         message: error.message,
-        code: (error as any).code,
+        code: errorCode,
       });
     } else {
       logger.error('OpenAI call failed', { error: String(error) });
@@ -458,11 +461,11 @@ export async function callOpenAI(
     // 如果是超时、API 错误或解析错误，尝试降级解析
     if (error instanceof Error &&
         (error.name === 'TimeoutError' ||
-         (error as ApiError).code === ErrorCode.LLM_API_ERROR ||
-         (error as ApiError).code === ErrorCode.LLM_PARSE_ERROR)) {
+         errorCode === ErrorCode.LLM_API_ERROR ||
+         errorCode === ErrorCode.LLM_PARSE_ERROR)) {
       logger.warn('Falling back to simple parsing', {
         errorName: error.name,
-        errorCode: (error as ApiError).code,
+        errorCode,
       });
       return fallbackParse(query);
     }

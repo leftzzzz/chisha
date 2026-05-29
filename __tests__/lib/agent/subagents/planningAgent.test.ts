@@ -67,4 +67,56 @@ describe('PlanningAgent', () => {
       allowedForPrimary: false,
     }));
   });
+
+  it('uses the unified token budget when model planning is enabled', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.NODE_ENV = 'production';
+    process.env.OPENAI_API_KEY = 'test-key';
+    jest.resetModules();
+
+    const fetchWithTimeout = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            function_call: {
+              name: 'planRestaurantSearchTargets',
+              arguments: JSON.stringify({
+                plans: [{
+                  targets: [{ label: '日料', kind: 'cuisine', strictness: 'exact' }],
+                  radiusMeters: 1800,
+                  searchIntent: 'exact',
+                  allowedForPrimary: true,
+                  reason: '按用户明确目标搜索。',
+                }],
+              }),
+            },
+          },
+        }],
+      }),
+    }));
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    try {
+      const { runPlanningAgent } = await import('@/lib/agent/subagents/planningAgent');
+      await runPlanningAgent({
+        goal: goal(),
+        attempts: [],
+        targetCount: 8,
+      });
+
+      const requestBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
+      expect(requestBody.max_tokens).toBe(4096);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      jest.dontMock('@/lib/withTimeout');
+      jest.resetModules();
+    }
+  });
 });
