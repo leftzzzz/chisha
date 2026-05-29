@@ -296,6 +296,68 @@ describe('SearchSupervisorAgent', () => {
     ).toEqual(['川菜']);
   });
 
+  it('drops malformed clarification entries instead of rejecting supervisor output', () => {
+    const parsed = SearchSupervisorOutputSchema.parse({
+      goal: {
+        ...goal({
+          rawQuery: '想吃清淡点',
+          primaryKeywords: [],
+          clarificationNeeded: [],
+        }),
+        clarificationNeeded: [
+          {
+            reason: '用户需求缺少明确餐饮目标。',
+            question: '你想找哪类餐厅，或具体想吃什么？',
+            allowFreeText: true,
+          },
+          { label: '正餐', value: 'meal' },
+          { label: '小吃', value: 'snack' },
+          { reason: '缺少可展示问题。' },
+        ],
+      },
+      nextAction: 'ask_user',
+    });
+
+    expect(parsed.goal?.clarificationNeeded).toEqual([{
+      reason: '用户需求缺少明确餐饮目标。',
+      question: '你想找哪类餐厅，或具体想吃什么？',
+      allowFreeText: true,
+    }]);
+  });
+
+  it('normalizes malformed clarification options without dropping the question', () => {
+    const parsed = SearchSupervisorOutputSchema.parse({
+      goal: {
+        ...goal({
+          rawQuery: '附近有什么吃的',
+          primaryKeywords: [],
+          clarificationNeeded: [],
+        }),
+        clarificationNeeded: [{
+          question: '你想找哪类餐厅？',
+          options: [
+            '正餐',
+            { label: '小吃' },
+            { label: '咖啡', value: 'coffee' },
+            { value: 'missing-label' },
+          ],
+        }],
+      },
+      nextAction: 'ask_user',
+    });
+
+    expect(parsed.goal?.clarificationNeeded[0]).toEqual({
+      reason: '需要补充信息。',
+      question: '你想找哪类餐厅？',
+      allowFreeText: true,
+      options: [
+        { label: '正餐', value: '正餐' },
+        { label: '小吃', value: '小吃' },
+        { label: '咖啡', value: 'coffee' },
+      ],
+    });
+  });
+
   it('defaults omitted goal arrays from model output', () => {
     const parsed = SearchSupervisorOutputSchema.parse({
       goal: {

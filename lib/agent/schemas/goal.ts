@@ -83,18 +83,74 @@ export const ClarificationEffectSchema = z.object({
   allowBroaden: z.boolean().optional(),
 });
 
-export const ClarificationOptionSchema = z.object({
+export const ClarificationOptionSchema = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    return { label: value, value };
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (typeof record.label === 'string' && record.value === undefined) {
+      return {
+        ...record,
+        value: record.label,
+      };
+    }
+  }
+
+  return value;
+}, z.object({
   label: z.string().min(1),
   value: z.string().min(1),
   effect: ClarificationEffectSchema.optional(),
-});
+}));
 
-export const ClarificationNeedSchema = z.object({
+const ClarificationOptionListSchema = z.preprocess((value) => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  return Array.isArray(value) ? value : undefined;
+}, z.array(z.unknown()).optional())
+  .transform((items) => {
+    if (!items) {
+      return undefined;
+    }
+
+    const options = items.flatMap((item) => {
+      const parsed = ClarificationOptionSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    });
+
+    return options.length > 0 ? options : undefined;
+  });
+
+export const ClarificationNeedSchema = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    return { question: value };
+  }
+
+  return value;
+}, z.object({
   reason: z.string().min(1).default('需要补充信息。'),
   question: z.string().min(1),
-  options: z.array(ClarificationOptionSchema).optional(),
+  options: ClarificationOptionListSchema,
   allowFreeText: z.boolean().default(true),
-});
+}));
+
+const ClarificationNeedListSchema = z.preprocess((value) => {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [];
+}, z.array(z.unknown()).default([]).catch([]))
+  .transform((items) =>
+    items.flatMap((item) => {
+      const parsed = ClarificationNeedSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    })
+  );
 
 export const UserGoalSchema = z.object({
   intent: z.literal('find_restaurants'),
@@ -112,7 +168,7 @@ export const UserGoalSchema = z.object({
   softPreferences: z.array(PreferenceSchema).default([]),
   exclusions: z.array(z.string()).default([]),
   ambiguity: z.array(z.string()).default([]),
-  clarificationNeeded: z.array(ClarificationNeedSchema).default([]),
+  clarificationNeeded: ClarificationNeedListSchema,
   allowBroaden: z.boolean().default(false),
 });
 
@@ -141,6 +197,6 @@ export const AgentGoalDraftSchema = z.object({
   poiType: z.string().regex(/^\d{6}$/).optional(),
   softPreferences: z.array(PreferenceSchema).default([]),
   ambiguity: z.array(z.string()).default([]),
-  clarificationNeeded: z.array(ClarificationNeedSchema).default([]),
+  clarificationNeeded: ClarificationNeedListSchema,
   allowBroaden: z.boolean().default(false),
 });
