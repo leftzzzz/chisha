@@ -125,6 +125,7 @@ jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
 }));
 
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
+import { runEvaluationAgent } from '@/lib/agent/subagents/evaluationAgent';
 import { runSearchSupervisor } from '@/lib/agent/supervisor';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
@@ -366,6 +367,59 @@ describe('runSearchAgentV3', () => {
     expect(result.paused).not.toBe(true);
     expect(searchedPlans[0].searchIntent).toBe('fallback');
     expect(searchedPlans[0].keywords).toEqual(['餐厅', '美食']);
+  });
+
+  it('falls back to local food-term parsing when the Supervisor times out', async () => {
+    const supervisorMock = runSearchSupervisor as jest.Mock;
+    supervisorMock.mockRejectedValueOnce(
+      Object.assign(new Error('Request timed out after 18000ms'), { name: 'TimeoutError' })
+    );
+    const searchedPlans: SearchPlan[] = [];
+
+    const result = await runSearchAgentV3(
+      {
+        query: '想吃日料',
+        location,
+        runtimeState: {
+          attempts: [],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      async (plan) => {
+        searchedPlans.push(plan);
+        return [restaurant('r1', '日料小馆', '日本料理', 300)];
+      }
+    );
+
+    expect(result.paused).not.toBe(true);
+    expect(searchedPlans[0].keywords).toEqual(['日料']);
+    expect(result.restaurants.map((item) => item.name)).toEqual(['日料小馆']);
+  });
+
+  it('falls back to local candidate ranking when EvaluationAgent times out', async () => {
+    const evaluationMock = runEvaluationAgent as jest.Mock;
+    evaluationMock.mockRejectedValueOnce(
+      Object.assign(new Error('Request timed out after 18000ms'), { name: 'TimeoutError' })
+    );
+    const events: AgentEvent[] = [];
+
+    const result = await runSearchAgentV3(
+      input(goal()),
+      (event) => events.push(event),
+      async () => [restaurant('r1', '寿司店', '日本料理', 300)]
+    );
+
+    expect(result.paused).not.toBe(true);
+    expect(result.restaurants.map((item) => item.name)).toEqual(['寿司店']);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'guardrail',
+        message: expect.stringContaining('EvaluationAgent 响应超时'),
+      }),
+    ]));
   });
 
   it('records the observed provider when search falls back to OSM results', async () => {
