@@ -8,28 +8,10 @@ export interface ConstraintEvaluation {
   message: string;
 }
 
-const SPICY_RISK_TERMS = [
-  '川菜',
-  '湘菜',
-  '火锅',
-  '麻辣',
-  '香辣',
-  '串串',
-  '冒菜',
-  '烧烤',
-  '烤鱼',
-  '小龙虾',
-  '酸菜鱼',
-  '干锅',
-  '辣',
-];
-
 export function evaluateConstraint(
   restaurant: Restaurant,
   constraint: Constraint
 ): ConstraintEvaluation {
-  const text = restaurantText(restaurant);
-
   if (constraint.kind === 'distance') {
     const maxMeters = getConstraintMaxMeters(constraint);
     if (maxMeters === undefined) {
@@ -50,22 +32,6 @@ export function evaluateConstraint(
     }
 
     return { status: 'passed', message: '' };
-  }
-
-  if (constraint.kind === 'avoid_spicy') {
-    return SPICY_RISK_TERMS.some((term) => textContains(text, term))
-      ? { status: 'failed', message: `${restaurant.name}疑似重辣或辣味风险品类。` }
-      : { status: 'passed', message: '' };
-  }
-
-  if (constraint.kind === 'exclude_category') {
-    const excludedValues = constraint.values
-      ?? (Array.isArray(constraint.value) ? constraint.value : typeof constraint.value === 'string' ? [constraint.value] : []);
-    const matchedValue = excludedValues.find((value) => textContains(text, value));
-
-    return matchedValue
-      ? { status: 'failed', message: `${restaurant.name}命中排除品类「${matchedValue}」。` }
-      : { status: 'passed', message: '' };
   }
 
   if (constraint.kind === 'budget') {
@@ -125,12 +91,4 @@ function getBudgetRange(constraint: Constraint): { min?: number; max?: number } 
   return typeof constraint.value === 'object' && !Array.isArray(constraint.value)
     ? constraint.value
     : null;
-}
-
-function restaurantText(restaurant: Restaurant): string {
-  return `${restaurant.name} ${restaurant.cuisineType} ${restaurant.address}`;
-}
-
-function textContains(text: string, keyword: string): boolean {
-  return text.toLowerCase().includes(keyword.toLowerCase());
 }

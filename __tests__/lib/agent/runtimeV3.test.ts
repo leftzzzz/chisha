@@ -80,6 +80,50 @@ jest.mock('@/lib/agent/supervisor', () => {
   };
 });
 
+jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
+  runEvaluationAgent: jest.fn(async (input: {
+    plan: import('@/lib/agent/types').SearchPlan;
+    restaurants: Restaurant[];
+    targetCount: number;
+  }) => {
+    const verdicts = input.restaurants.map((item) => {
+      const matchesSearchKeyword = input.plan.keywords.some((keyword) =>
+        item.name.includes(keyword) || item.cuisineType.includes(keyword)
+      );
+      const openFallback = input.plan.searchIntent === 'fallback';
+      const accepted = matchesSearchKeyword || openFallback;
+
+      return {
+        restaurantId: item.id,
+        status: accepted ? 'passed' : 'failed',
+        primaryEligible: accepted && input.plan.allowedForPrimary,
+        confidence: accepted ? 0.9 : 0.2,
+        matchedItems: matchesSearchKeyword ? input.plan.keywords : [],
+        matchedCategories: matchesSearchKeyword ? [item.cuisineType] : [],
+        conflicts: accepted ? [] : ['Agent 语义验证未通过。'],
+        evidence: accepted ? [`Agent 验证「${item.name}」符合搜索意图。`] : [],
+        warnings: [],
+      };
+    });
+    const selectedIds = verdicts
+      .filter((verdict) => verdict.status === 'passed' && verdict.primaryEligible)
+      .slice(0, input.targetCount)
+      .map((verdict) => verdict.restaurantId);
+    const selectedIdSet = new Set(selectedIds);
+    const candidateIds = verdicts
+      .filter((verdict) => !selectedIdSet.has(verdict.restaurantId) && verdict.status !== 'failed')
+      .map((verdict) => verdict.restaurantId);
+
+    return {
+      verdicts,
+      selectedIds,
+      candidateIds,
+      explanation: 'Agent mock evaluation.',
+      unmetConstraints: verdicts.flatMap((verdict) => verdict.conflicts),
+    };
+  }),
+}));
+
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';

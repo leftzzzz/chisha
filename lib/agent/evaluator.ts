@@ -1,42 +1,39 @@
 import type { Restaurant } from '@/types';
 import type {
   AgentContext,
+  CandidateVerdict,
+  EvaluationAgentOutput,
   Observation,
   RestaurantCandidate,
   SearchPlan,
 } from './types';
-import { hasBlockingHardFailure, verificationSummary, verifyCandidate } from './verifier';
-
-const LIGHT_TERMS = ['粤菜', '江浙', '日料', '寿司', '轻食', '沙拉', '粥', '素食', '茶餐厅'];
-const FAST_TERMS = ['快餐', '简餐', '面馆', '小吃', '汉堡', '披萨'];
-const GATHERING_TERMS = ['中餐', '粤菜', '海鲜', '东北菜', '餐厅', '酒楼'];
-const DATE_TERMS = ['西餐', '日料', '日本料理', '咖啡', '甜品', '意大利'];
 
 export function evaluateSearchResult(
   restaurants: Restaurant[],
   context: AgentContext,
   plan: SearchPlan,
-  sourceAttempt: number
+  sourceAttempt: number,
+  evaluation: EvaluationAgentOutput
 ): Observation {
-  const acceptedCandidates: RestaurantCandidate[] = [];
-  let rejected = 0;
-
-  for (const restaurant of restaurants) {
-    const candidate = evaluateRestaurant(restaurant, context, plan, sourceAttempt);
-    if (candidate) {
-      acceptedCandidates.push(candidate);
-    } else {
-      rejected++;
-    }
-  }
-
-  acceptedCandidates.sort((a, b) => b.score - a.score);
+  const restaurantById = new Map(restaurants.map((restaurant) => [restaurant.id, restaurant]));
+  const selectedIds = new Set(evaluation.selectedIds);
+  const candidateIds = new Set(evaluation.candidateIds);
+  const acceptedCandidates = evaluation.verdicts
+    .filter((verdict) => verdict.status !== 'failed')
+    .map((verdict) => {
+      const restaurant = restaurantById.get(verdict.restaurantId);
+      return restaurant
+        ? buildCandidate(restaurant, verdict, context, plan, sourceAttempt, selectedIds, candidateIds)
+        : null;
+    })
+    .filter((candidate): candidate is RestaurantCandidate => Boolean(candidate))
+    .sort((a, b) => b.score - a.score);
 
   return {
     plan,
     found: restaurants.length,
     acceptedCandidates,
-    rejected,
+    rejected: Math.max(0, restaurants.length - acceptedCandidates.length),
     reason: buildObservationReason(restaurants.length, acceptedCandidates.length, plan),
   };
 }
@@ -68,199 +65,81 @@ export function mergeCandidates(
     .sort((a, b) => b.score - a.score);
 }
 
-export function isGoodEnough(context: AgentContext): boolean {
-  const primaryEligibleCandidates = context.candidates.filter((candidate) =>
-    isPrimaryEligible(candidate, context)
-  );
-
-  if (primaryEligibleCandidates.length < context.targetCount) {
-    return false;
-  }
-
-  const strongCandidates = primaryEligibleCandidates.filter((candidate) => candidate.score >= 55);
-  const hasExactOrSynonymAttempt = context.attempts.some((attempt) =>
-    attempt.searchIntent === 'exact' || attempt.searchIntent === 'synonym'
-  );
-
-  if (hasExactOrSynonymAttempt && strongCandidates.length >= context.targetCount) {
-    return true;
-  }
-
-  return context.attempts.length >= 2 && strongCandidates.length >= Math.ceil(context.targetCount * 0.75);
-}
-
-function isPrimaryEligible(candidate: RestaurantCandidate, context: AgentContext): boolean {
-  const attempt = context.attempts[candidate.sourceAttempt - 1];
-  return candidate.verification.status === 'passed' && attempt?.allowedForPrimary !== false;
-}
-
-function evaluateRestaurant(
+function buildCandidate(
   restaurant: Restaurant,
+  verdict: CandidateVerdict,
   context: AgentContext,
   plan: SearchPlan,
-  sourceAttempt: number
-): RestaurantCandidate | null {
-  const verification = verifyCandidate(restaurant, context.goal, plan);
-  if (hasBlockingHardFailure(verification)) {
-    return null;
-  }
-
-  if (verification.status === 'failed') {
-    return null;
-  }
-
-  const matched: string[] = [];
-  const warnings = [...context.goal.ambiguity, ...verificationSummary(verification)];
-  let score = plan.searchIntent === 'fallback' ? 18 : 32;
-  const searchableText = restaurantText(restaurant);
-  const requiresOpenNow = context.goal.hardConstraints.some((constraint) => constraint.kind === 'open_now');
-
-  if (requiresOpenNow) {
-    if (restaurant.businessStatus === 'open') {
-      score += 8;
-      matched.push('数据源标记营业中');
-    } else if (!restaurant.businessStatus || restaurant.businessStatus === 'unknown') {
-      warnings.push('营业状态未知，请出发前确认。');
-    }
-  }
-
-  for (const keyword of plan.keywords) {
-    if (textContains(searchableText, keyword)) {
-      score += 18;
-      matched.push(`匹配${keyword}`);
-    }
-  }
-
-  for (const keyword of context.goal.primaryKeywords) {
-    if (textContains(searchableText, keyword)) {
-      score += 20;
-      matched.push(`符合原始需求${keyword}`);
-    }
-  }
-
-  for (const keyword of context.goal.relatedKeywords) {
-    if (textContains(searchableText, keyword)) {
-      score += 8;
-      matched.push(`相关品类${keyword}`);
-    }
-  }
-
-  for (const itemMatch of verification.itemMatches) {
-    score += Math.round(itemMatch.confidence * 18);
-    matched.push(`验证命中${itemMatch.requestedItem}`);
-  }
-
-  for (const category of verification.categoryMatches) {
-    score += 10;
-    matched.push(`验证品类${category}`);
-  }
-
-  if (verification.status === 'unverified') {
-    score -= 8;
-  } else {
-    score += Math.round(verification.confidence * 8);
-  }
-
-  if (matched.length === 0 && plan.searchIntent !== 'fallback') {
-    score -= 16;
-  }
-
-  score += distanceScore(restaurant.distance);
-  score += softPreferenceScore(restaurant, context.goal.softPreferences, matched, warnings);
-  score += historyPreferenceScore(restaurant, context, matched, warnings);
-
-  if (plan.searchIntent === 'exact') {
-    score += 6;
-  } else if (plan.searchIntent === 'broadened') {
-    warnings.push('这是放宽品类后的候选。');
-  } else if (plan.searchIntent === 'fallback') {
-    warnings.push('这是兜底搜索候选，相关性可能较弱。');
-  }
-
-  const acceptedThreshold = plan.searchIntent === 'fallback' ? 28 : 38;
-  if (score < acceptedThreshold) {
-    return null;
-  }
+  sourceAttempt: number,
+  selectedIds: Set<string>,
+  candidateIds: Set<string>
+): RestaurantCandidate {
+  const warnings = mergeStrings(
+    context.goal.ambiguity,
+    [...verdict.conflicts, ...verdict.warnings]
+  );
+  const score = calculateScore(restaurant, verdict, plan, selectedIds, candidateIds);
 
   return {
     restaurant,
     score,
-    matched: mergeStrings(matched, []),
-    warnings: mergeStrings(warnings, []),
-    verification,
+    matched: mergeStrings(verdict.evidence, [
+      ...verdict.matchedItems.map((item) => `Agent 验证菜品${item}`),
+      ...verdict.matchedCategories.map((category) => `Agent 验证品类${category}`),
+    ]),
+    warnings,
+    verification: {
+      restaurantId: verdict.restaurantId,
+      status: verdict.status,
+      primaryEligible: verdict.primaryEligible,
+      hardFailures: verdict.conflicts.map((message) => ({
+        kind: 'category',
+        message,
+      })),
+      itemMatches: verdict.matchedItems.map((item) => ({
+        requestedItem: item,
+        matchedBy: 'llm_semantic',
+        confidence: verdict.confidence,
+      })),
+      categoryMatches: verdict.matchedCategories,
+      warnings: verdict.warnings,
+      confidence: verdict.confidence,
+    },
     sourceAttempt,
   };
 }
 
-function softPreferenceScore(
+function calculateScore(
   restaurant: Restaurant,
-  preferences: AgentContext['goal']['softPreferences'],
-  matched: string[],
-  warnings: string[]
+  verdict: CandidateVerdict,
+  plan: SearchPlan,
+  selectedIds: Set<string>,
+  candidateIds: Set<string>
 ): number {
-  const text = restaurantText(restaurant);
-  let score = 0;
+  let score = Math.round(verdict.confidence * 100);
 
-  for (const preference of preferences) {
-    if (preference.name === '清淡' && LIGHT_TERMS.some((term) => textContains(text, term))) {
-      score += 10 * preference.weight;
-      matched.push('偏清淡');
-    }
-
-    if (preference.name === '适合聚餐' && GATHERING_TERMS.some((term) => textContains(text, term))) {
-      score += 5 * preference.weight;
-      matched.push('类型较适合聚餐');
-    }
-
-    if (preference.name === '适合约会' && DATE_TERMS.some((term) => textContains(text, term))) {
-      score += 5 * preference.weight;
-      matched.push('类型较适合约会');
-    }
-
-    if (preference.name === '默认多样性' && FAST_TERMS.concat(GATHERING_TERMS).some((term) => textContains(text, term))) {
-      score += 6 * preference.weight;
-      matched.push('适合作为默认推荐');
-    }
-
-    if (!preference.verifiable) {
-      warnings.push(`${preference.name}缺少可靠字段，只能弱推断。`);
-    }
+  if (selectedIds.has(verdict.restaurantId)) {
+    score += 30;
+  } else if (candidateIds.has(verdict.restaurantId)) {
+    score += 10;
   }
 
-  return score;
-}
-
-function historyPreferenceScore(
-  restaurant: Restaurant,
-  context: AgentContext,
-  matched: string[],
-  warnings: string[]
-): number {
-  const text = restaurantText(restaurant);
-  let score = 0;
-
-  for (const favorite of context.preferenceSummary?.favoriteCuisines ?? []) {
-    if (textContains(text, favorite.name)) {
-      score += Math.min(18, favorite.weight * 4);
-      matched.push(`历史偏好${favorite.name}`);
-    }
+  if (verdict.status === 'unverified') {
+    score -= 20;
   }
 
-  for (const avoided of context.preferenceSummary?.avoidedCuisines ?? []) {
-    if (textContains(text, avoided.name)) {
-      score -= Math.min(20, avoided.weight * 5);
-      warnings.push(`历史上较少选择${avoided.name}`);
-    }
+  if (!verdict.primaryEligible || !plan.allowedForPrimary) {
+    score -= 25;
   }
 
-  if (context.preferenceSummary?.recentSelectedRestaurants?.includes(restaurant.name)) {
+  score += Math.min(20, verdict.matchedItems.length * 8);
+  score += Math.min(16, verdict.matchedCategories.length * 6);
+  score += distanceScore(restaurant.distance);
+
+  if (plan.searchIntent === 'exact') {
     score += 8;
-    matched.push('最近选中过');
-  }
-
-  if (context.preferenceSummary?.recentRejectedRestaurants?.includes(restaurant.name)) {
-    score -= 16;
-    warnings.push('最近手动删除过');
+  } else if (plan.searchIntent === 'fallback') {
+    score -= 8;
   }
 
   return score;
@@ -284,22 +163,14 @@ function buildObservationReason(found: number, accepted: number, plan: SearchPla
   }
 
   if (accepted === 0) {
-    return `搜索「${plan.keywords.join('、')}」返回 ${found} 家，但都未通过硬约束或相关性过滤。`;
+    return `搜索「${plan.keywords.join('、')}」返回 ${found} 家，但都未通过 Agent 语义验证。`;
   }
 
   if (accepted < found) {
-    return `搜索「${plan.keywords.join('、')}」返回 ${found} 家，接受 ${accepted} 家。`;
+    return `搜索「${plan.keywords.join('、')}」返回 ${found} 家，Agent 接受 ${accepted} 家。`;
   }
 
   return `搜索「${plan.keywords.join('、')}」接受 ${accepted} 家候选。`;
-}
-
-function restaurantText(restaurant: Restaurant): string {
-  return `${restaurant.name} ${restaurant.cuisineType} ${restaurant.address}`;
-}
-
-function textContains(text: string, keyword: string): boolean {
-  return text.toLowerCase().includes(keyword.toLowerCase());
 }
 
 function candidateKey(restaurant: Restaurant): string {

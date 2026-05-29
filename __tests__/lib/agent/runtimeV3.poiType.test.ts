@@ -82,6 +82,42 @@ describe('runSearchAgentV3 POI type selection', () => {
         rationale: '港式奶茶应使用冷饮店。',
       })),
     }));
+    jest.doMock('@/lib/agent/subagents/evaluationAgent', () => ({
+      runEvaluationAgent: jest.fn(async (evaluationInput: {
+        plan: SearchPlan;
+        restaurants: Restaurant[];
+        targetCount: number;
+      }) => {
+        const allowedPoiTypes = evaluationInput.plan.poiType?.split('|') ?? [];
+        const verdicts = evaluationInput.restaurants.map((item) => {
+          const accepted = allowedPoiTypes.includes(item.poiTypeCode ?? '');
+
+          return {
+            restaurantId: item.id,
+            status: accepted ? 'passed' : 'failed',
+            primaryEligible: accepted && evaluationInput.plan.allowedForPrimary,
+            confidence: accepted ? 0.9 : 0.2,
+            matchedItems: accepted ? ['港式奶茶'] : [],
+            matchedCategories: accepted ? ['奶茶'] : [],
+            conflicts: accepted ? [] : ['Agent 语义验证未通过。'],
+            evidence: accepted ? ['Agent 验证为港式奶茶相关候选。'] : [],
+            warnings: [],
+          };
+        });
+        const selectedIds = verdicts
+          .filter((verdict) => verdict.status === 'passed' && verdict.primaryEligible)
+          .slice(0, evaluationInput.targetCount)
+          .map((verdict) => verdict.restaurantId);
+
+        return {
+          verdicts,
+          selectedIds,
+          candidateIds: [],
+          explanation: 'Agent mock evaluation.',
+          unmetConstraints: verdicts.flatMap((verdict) => verdict.conflicts),
+        };
+      }),
+    }));
 
     const { runSearchAgentV3 } = await import('@/lib/agent/runtimeV3');
     const searchedPlans: SearchPlan[] = [];

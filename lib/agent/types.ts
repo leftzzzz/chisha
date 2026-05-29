@@ -179,6 +179,7 @@ export interface ItemMatch {
 export interface CandidateVerification {
   restaurantId: string;
   status: 'passed' | 'failed' | 'unverified';
+  primaryEligible: boolean;
   hardFailures: VerificationFailure[];
   itemMatches: ItemMatch[];
   categoryMatches: string[];

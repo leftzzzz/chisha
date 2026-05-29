@@ -5,7 +5,7 @@ import {
   runSearchSupervisor,
 } from './supervisor';
 import { evaluateSearchResult, mergeCandidates } from './evaluator';
-import { applyHardConstraintGuard } from './guards';
+import { applyHardConstraintGuard, applyVerdictGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import { UserGoalSchema } from './schemas/goal';
 import { SearchPlanSchema } from './schemas/plan';
@@ -18,6 +18,7 @@ import {
 } from './poiTaxonomy';
 import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
 import { runPoiTypeSelectionAgent } from './subagents/poiTypeSelectionAgent';
+import { runEvaluationAgent } from './subagents/evaluationAgent';
 import {
   createActionRecord,
   decideSearchSupervisorAction,
@@ -564,6 +565,18 @@ async function executeSearchAction(
   emit({ type: 'tool_start', tool: 'search_restaurants', args: plan });
 
   const restaurants = await searchPlaces(plan);
+  const agentEvaluation = await runEvaluationAgent({
+    goal: context.goal,
+    plan,
+    restaurants,
+    existingCandidates: context.candidates.map((candidate) => ({
+      restaurant: candidate.restaurant,
+      verdict: candidateToVerdict(candidate),
+      sourceAttempt: candidate.sourceAttempt,
+    })),
+    targetCount: context.targetCount,
+    preferenceSummary: context.preferenceSummary,
+  });
   const hardGuard = applyHardConstraintGuard(restaurants, context.goal);
   const hardRejectedReasons = hardGuard.rejected.flatMap((item) => item.reasons);
   context.unmetConstraints.push(...hardRejectedReasons);
@@ -571,7 +584,20 @@ async function executeSearchAction(
     context.unmetConstraints.push('未授权放宽或兜底结果只作为候补，不进入主推荐。');
   }
 
-  const evaluated = evaluateSearchResult(hardGuard.passed, context, plan, round);
+  const verdictGuard = applyVerdictGuard(
+    agentEvaluation,
+    restaurants,
+    context.goal,
+    plan,
+    context.targetCount
+  );
+  const evaluated = evaluateSearchResult(
+    restaurants,
+    context,
+    plan,
+    round,
+    verdictGuard.output
+  );
   mergeCandidates(context, evaluated.acceptedCandidates);
   context.attempts.push({
     keywords: plan.keywords,
@@ -584,21 +610,23 @@ async function executeSearchAction(
     accepted: evaluated.acceptedCandidates.length,
   });
 
-  const verdicts = evaluated.acceptedCandidates.map(candidateToVerdict);
+  const verdicts = verdictGuard.output.verdicts;
   const acceptedPrimaryIds = evaluated.acceptedCandidates
     .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
     .map((candidate) => candidate.restaurant.id);
   const candidateIds = evaluated.acceptedCandidates
-    .filter((candidate) => candidate.verification.status !== 'failed')
     .map((candidate) => candidate.restaurant.id);
   const unmetConstraints = Array.from(new Set([
     ...hardRejectedReasons,
-    ...evaluated.acceptedCandidates.flatMap((candidate) =>
-      [
-        ...candidate.verification.hardFailures.map((failure) => failure.message),
-        ...candidate.verification.warnings,
-      ]
-    ),
+    ...verdictGuard.output.unmetConstraints,
+    ...verdictGuard.rejectedVerdicts.flatMap((verdict) => [
+      ...verdict.conflicts,
+      ...verdict.warnings,
+    ]),
+    ...evaluated.acceptedCandidates.flatMap((candidate) => [
+      ...candidate.verification.hardFailures.map((failure) => failure.message),
+      ...candidate.verification.warnings,
+    ]),
   ]));
 
   emit({
@@ -818,7 +846,7 @@ function candidateToVerdict(candidate: RestaurantCandidate): CandidateVerdict {
   return {
     restaurantId: candidate.restaurant.id,
     status: candidate.verification.status,
-    primaryEligible: candidate.verification.status === 'passed',
+    primaryEligible: candidate.verification.primaryEligible,
     confidence: candidate.verification.confidence,
     matchedItems: candidate.verification.itemMatches.map((match) => match.requestedItem),
     matchedCategories: candidate.verification.categoryMatches,

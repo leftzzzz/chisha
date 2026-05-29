@@ -1,8 +1,8 @@
-import { deterministicEvaluation } from '@/lib/agent/subagents/evaluationAgent';
 import type { SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 
 const location: Location = { lat: 31.2304, lng: 121.4737 };
+const originalApiKey = process.env.OPENAI_API_KEY;
 
 function restaurant(id: string, name: string, cuisineType: string, distance = 500): Restaurant {
   return {
@@ -44,97 +44,102 @@ const exactPlan: SearchPlan = {
   reason: 'exact',
 };
 
+function mockEvaluationResponse(argumentsJson: unknown): void {
+  global.fetch = jest.fn(async () => ({
+    ok: true,
+    json: async () => ({
+      choices: [{
+        message: {
+          function_call: {
+            name: 'evaluateRestaurantCandidates',
+            arguments: JSON.stringify(argumentsJson),
+          },
+        },
+      }],
+    }),
+  })) as jest.Mock;
+}
+
 describe('EvaluationAgent', () => {
-  it('keeps dish-level requests out of unrelated primary recommendations', () => {
-    const output = deterministicEvaluation({
+  beforeEach(() => {
+    jest.resetModules();
+    process.env.OPENAI_API_KEY = 'test-key';
+  });
+
+  afterEach(() => {
+    process.env.OPENAI_API_KEY = originalApiKey;
+    jest.restoreAllMocks();
+  });
+
+  it('returns model verdicts without deterministic semantic correction', async () => {
+    mockEvaluationResponse({
+      verdicts: [
+        {
+          restaurantId: 'r1',
+          status: 'failed',
+          primaryEligible: false,
+          confidence: 0.2,
+          matchedItems: [],
+          matchedCategories: [],
+          conflicts: ['Agent 判定未验证到牛排。'],
+          evidence: [],
+          warnings: [],
+        },
+        {
+          restaurantId: 'r2',
+          status: 'passed',
+          primaryEligible: true,
+          confidence: 0.92,
+          matchedItems: ['牛排'],
+          matchedCategories: ['西餐'],
+          conflicts: [],
+          evidence: ['Agent 认为名称明确命中牛排。'],
+          warnings: [],
+        },
+      ],
+      selectedIds: ['r2'],
+      candidateIds: [],
+      explanation: 'Agent 已完成候选验证。',
+      unmetConstraints: ['Agent 判定未验证到牛排。'],
+    });
+
+    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
+    const output = await runEvaluationAgent({
       goal: goal(),
       plan: exactPlan,
       restaurants: [
-        restaurant('r1', '城中牛排馆', '西餐厅', 300),
-        restaurant('r2', '韩式烤肉', '韩国料理', 200),
+        restaurant('r1', '社区西餐厅', '西餐厅', 300),
+        restaurant('r2', '城中牛排馆', '西餐厅', 400),
       ],
       targetCount: 8,
     });
 
-    expect(output.selectedIds).toEqual(['r1']);
-    expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r2')).toEqual(
+    expect(output.selectedIds).toEqual(['r2']);
+    expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r1')).toEqual(
       expect.objectContaining({
         status: 'failed',
         primaryEligible: false,
+        conflicts: ['Agent 判定未验证到牛排。'],
+      })
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.openai.com/v1/chat/completions',
+      expect.objectContaining({
+        method: 'POST',
       })
     );
   });
 
-  it('puts broadened but unverified candidates into the backup pool only', () => {
-    const output = deterministicEvaluation({
-      goal: goal({ allowBroaden: true }),
-      plan: {
-        ...exactPlan,
-        keywords: ['西餐'],
-        searchIntent: 'broadened',
-        allowedForPrimary: false,
-      },
-      restaurants: [
-        restaurant('r1', '社区西餐厅', '西餐厅', 300),
-      ],
-      targetCount: 8,
-    });
+  it('requires OPENAI_API_KEY instead of falling back to hardcoded validation', async () => {
+    delete process.env.OPENAI_API_KEY;
 
-    expect(output.selectedIds).toEqual([]);
-    expect(output.candidateIds).toEqual(['r1']);
-    expect(output.verdicts[0]).toEqual(expect.objectContaining({
-      status: 'unverified',
-      primaryEligible: false,
-    }));
-  });
+    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
 
-  it('accepts exact dish search results when the provider category is compatible', () => {
-    const output = deterministicEvaluation({
+    await expect(runEvaluationAgent({
       goal: goal(),
       plan: exactPlan,
-      restaurants: [
-        restaurant('r1', '社区西餐厅', '西餐厅', 300),
-      ],
+      restaurants: [restaurant('r1', '城中牛排馆', '西餐厅', 300)],
       targetCount: 8,
-    });
-
-    expect(output.selectedIds).toEqual(['r1']);
-    expect(output.verdicts[0]).toEqual(expect.objectContaining({
-      status: 'passed',
-      primaryEligible: true,
-      matchedItems: ['牛排'],
-      matchedCategories: ['西餐'],
-    }));
-  });
-
-  it('uses POI type evidence to verify category matches when display fields are generic', () => {
-    const output = deterministicEvaluation({
-      goal: goal({
-        rawQuery: '想吃火锅，人多的地方',
-        requestedItems: [],
-        acceptableCategories: [{ name: '火锅', confidence: 0.9 }],
-        primaryKeywords: ['火锅'],
-        softPreferences: [{ name: '人气高', weight: 1, verifiable: false }],
-      }),
-      plan: {
-        keywords: ['火锅'],
-        radiusMeters: 1800,
-        poiType: '050117',
-        searchIntent: 'exact',
-        allowedForPrimary: true,
-        reason: 'exact',
-      },
-      restaurants: [
-        { ...restaurant('r1', '聚福楼', '中餐厅', 300), poiTypeCode: '050117' },
-      ],
-      targetCount: 8,
-    });
-
-    expect(output.selectedIds).toEqual(['r1']);
-    expect(output.verdicts[0]).toEqual(expect.objectContaining({
-      status: 'passed',
-      primaryEligible: true,
-      matchedCategories: ['火锅'],
-    }));
+    })).rejects.toThrow('EvaluationAgent requires OPENAI_API_KEY');
   });
 });

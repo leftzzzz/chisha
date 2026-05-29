@@ -45,7 +45,7 @@ const exactPlan: SearchPlan = {
 };
 
 describe('Runtime verdict guard', () => {
-  it('corrects failed LLM verdicts when deterministic facts support the exact request', () => {
+  it('does not correct failed Agent verdicts with deterministic semantic matching', () => {
     const evaluation: EvaluationAgentOutput = {
       verdicts: [{
         restaurantId: 'r1',
@@ -72,17 +72,17 @@ describe('Runtime verdict guard', () => {
       8
     ).output;
 
-    expect(guarded.selectedIds).toEqual(['r1']);
+    expect(guarded.selectedIds).toEqual([]);
     expect(guarded.verdicts[0]).toEqual(expect.objectContaining({
-      status: 'passed',
-      primaryEligible: true,
-      matchedItems: ['牛排'],
-      matchedCategories: ['西餐'],
-      conflicts: [],
+      status: 'failed',
+      primaryEligible: false,
+      matchedItems: [],
+      matchedCategories: [],
+      conflicts: ['未验证到明确菜品「牛排」。'],
     }));
   });
 
-  it('fills missing verdicts from deterministic evaluation', () => {
+  it('does not fill missing verdicts from deterministic evaluation', () => {
     const guarded = applyVerdictGuard(
       {
         verdicts: [],
@@ -97,17 +97,27 @@ describe('Runtime verdict guard', () => {
       8
     ).output;
 
-    expect(guarded.selectedIds).toEqual(['r1']);
-    expect(guarded.verdicts).toHaveLength(1);
+    expect(guarded.selectedIds).toEqual([]);
+    expect(guarded.verdicts).toHaveLength(0);
   });
 
-  it('does not fill missing verdicts past hard constraints', () => {
+  it('keeps Agent verdicts from passing hard constraints', () => {
     const guarded = applyVerdictGuard(
       {
-        verdicts: [],
-        selectedIds: [],
+        verdicts: [{
+          restaurantId: 'r1',
+          status: 'passed',
+          primaryEligible: true,
+          confidence: 0.9,
+          matchedItems: ['牛排'],
+          matchedCategories: ['西餐'],
+          conflicts: [],
+          evidence: ['Agent 判断符合牛排需求。'],
+          warnings: [],
+        }],
+        selectedIds: ['r1'],
         candidateIds: [],
-        explanation: '模型未返回候选。',
+        explanation: 'Agent 判断通过。',
         unmetConstraints: [],
       },
       [restaurant('r1', '社区西餐厅', '西餐厅', 1200)],

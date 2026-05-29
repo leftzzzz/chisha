@@ -39,6 +39,10 @@ export function isPrimaryRecommendationAllowed(
     return false;
   }
 
+  if (!candidate.verification.primaryEligible) {
+    return false;
+  }
+
   if (candidate.verification.hardFailures.length > 0) {
     return false;
   }
@@ -50,7 +54,7 @@ export function isPrimaryRecommendationAllowed(
 
   if (hasRequiredItems(context)) {
     return candidate.verification.itemMatches.length > 0
-      || context.goal.allowBroaden === true;
+      || (context.goal.allowBroaden === true && candidate.verification.primaryEligible);
   }
 
   return true;
