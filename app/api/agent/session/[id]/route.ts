@@ -1,12 +1,15 @@
-import { deleteAgentSession, getAgentSession } from '@/lib/agent/session';
+import { configureCloudflareAgentSessionStore } from '@/lib/agent/cloudflareSessionStore';
+import { deleteAgentSessionAsync, getAgentSessionAsync } from '@/lib/agent/session';
 
 interface RouteContext {
   params: Promise<{ id: string }> | { id: string };
 }
 
 export async function GET(_request: Request, context: RouteContext) {
+  await configureCloudflareAgentSessionStore();
+
   const { id } = await context.params;
-  const session = getAgentSession(id);
+  const session = await getAgentSessionAsync(id);
 
   if (!session) {
     return jsonResponse({ error: 'Session not found' }, 404);
@@ -50,8 +53,10 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 export async function DELETE(_request: Request, context: RouteContext) {
+  await configureCloudflareAgentSessionStore();
+
   const { id } = await context.params;
-  deleteAgentSession(id);
+  await deleteAgentSessionAsync(id);
   return jsonResponse({ ok: true });
 }
 

@@ -13,12 +13,14 @@
 	"observability": {
 		"enabled": true
 	},
+	"build": {
+		"command": "npm run wrangler:build"
+	},
 	"d1_databases": [
 		{
-			"binding": "chisha",
+			"binding": "CHISHA_DB",
 			"database_name": "chisha",
-			"database_id": "899b64a6-84a0-4eda-8a19-7613c83427b1",
-			"remote": true
+			"database_id": "899b64a6-84a0-4eda-8a19-7613c83427b1"
 		}
 	]
 }

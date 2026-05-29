@@ -1,4 +1,5 @@
 import type { AgentRuntimeState, AgentSession } from './types';
+import type { Location } from '@/types';
 
 export interface AgentSessionD1Row {
   id: string;
@@ -43,15 +44,15 @@ export function agentSessionFromD1Row(row: AgentSessionD1Row): AgentSession {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,
-    location: JSON.parse(row.location_json),
-    messages: JSON.parse(row.messages_json),
+    location: JSON.parse(row.location_json) as Location,
+    messages: JSON.parse(row.messages_json) as AgentSession['messages'],
     goal: runtimeState.goal,
     attempts: runtimeState.attempts ?? [],
     candidates: runtimeState.candidates ?? [],
     actions: runtimeState.actions ?? [],
     observations: runtimeState.observations ?? [],
     pendingQuestion: row.pending_question_json
-      ? JSON.parse(row.pending_question_json)
+      ? JSON.parse(row.pending_question_json) as AgentSession['pendingQuestion']
       : undefined,
   };
 }

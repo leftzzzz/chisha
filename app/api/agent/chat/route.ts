@@ -16,13 +16,14 @@ import type {
 } from '@/lib/agent/types';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
 import {
-  applyRuntimeStateToSession,
-  appendAssistantMessage,
-  appendUserMessage,
-  createAgentSession,
-  getAgentSession,
-  saveAgentSession,
+  applyRuntimeStateToSessionAsync,
+  appendAssistantMessageAsync,
+  appendUserMessageAsync,
+  createAgentSessionAsync,
+  getAgentSessionAsync,
+  saveAgentSessionAsync,
 } from '@/lib/agent/session';
+import { configureCloudflareAgentSessionStore } from '@/lib/agent/cloudflareSessionStore';
 import { applySupervisorClarifyingAnswer } from '@/lib/agent/supervisor';
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
@@ -70,21 +71,21 @@ function sendEvent(controller: ReadableStreamDefaultController, event: AgentEven
   controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
 }
 
-function pauseSessionWithQuestion(
+async function pauseSessionWithQuestion(
   controller: ReadableStreamDefaultController,
   session: AgentSession,
   question: PendingQuestion,
   resultState?: AgentInput['runtimeState']
-) {
+): Promise<void> {
   if (resultState) {
-    applyRuntimeStateToSession(session, {
+    await applyRuntimeStateToSessionAsync(session, {
       ...resultState,
       pendingQuestion: question,
     });
   }
   session.pendingQuestion = question;
-  appendAssistantMessage(session, question.question);
-  saveAgentSession(session);
+  await appendAssistantMessageAsync(session, question.question);
+  await saveAgentSessionAsync(session);
   sendEvent(controller, {
     type: 'question',
     sessionId: session.id,
@@ -107,6 +108,8 @@ function sendSessionUpdated(
 }
 
 export async function POST(request: Request) {
+  await configureCloudflareAgentSessionStore();
+
   const ip = getClientIP(request);
   const rateLimitResult = rateLimit(ip, 6, 60 * 1000);
 
@@ -136,7 +139,7 @@ export async function POST(request: Request) {
     async start(controller) {
       try {
         const resumableSession = requestData.sessionId
-          ? getAgentSession(requestData.sessionId)
+          ? await getAgentSessionAsync(requestData.sessionId)
           : null;
 
         if (requestData.sessionId && !resumableSession) {
@@ -151,7 +154,7 @@ export async function POST(request: Request) {
         const shouldResumeSession = Boolean(resumableSession?.pendingQuestion);
         let session = shouldResumeSession && resumableSession
           ? resumableSession
-          : createAgentSession(requestData.message, requestData.location);
+          : await createAgentSessionAsync(requestData.message, requestData.location);
 
         if (!session) {
           sendEvent(controller, {
@@ -167,10 +170,11 @@ export async function POST(request: Request) {
           && session.pendingQuestion?.optionEffects?.[requestData.message.trim()]
         ) {
           applySupervisorClarifyingAnswer(session, requestData.message);
+          await saveAgentSessionAsync(session);
         }
 
         if (shouldResumeSession) {
-          appendUserMessage(session, requestData.message);
+          await appendUserMessageAsync(session, requestData.message);
           sendEvent(controller, {
             type: 'session_resumed',
             sessionId: session.id,
@@ -227,17 +231,17 @@ export async function POST(request: Request) {
         );
 
         if (result.runtimeState) {
-          applyRuntimeStateToSession(session, result.runtimeState);
+          await applyRuntimeStateToSessionAsync(session, result.runtimeState);
         }
 
         if (result.paused && result.question) {
-          pauseSessionWithQuestion(controller, session, result.question, result.runtimeState);
+          await pauseSessionWithQuestion(controller, session, result.question, result.runtimeState);
           return;
         }
 
         session.pendingQuestion = undefined;
-        appendAssistantMessage(session, result.explanation);
-        saveAgentSession(session);
+        await appendAssistantMessageAsync(session, result.explanation);
+        await saveAgentSessionAsync(session);
         sendSessionUpdated(controller, session);
         controller.close();
       } catch (error) {

@@ -13,6 +13,10 @@ export interface AgentSessionStore {
   get(sessionId: string): AgentSession | null;
   save(session: AgentSession): AgentSession;
   delete(sessionId: string): boolean;
+  createAsync?: (message: string, location: Location) => Promise<AgentSession>;
+  getAsync?: (sessionId: string) => Promise<AgentSession | null>;
+  saveAsync?: (session: AgentSession) => Promise<AgentSession>;
+  deleteAsync?: (sessionId: string) => Promise<boolean>;
 }
 
 export const inMemoryAgentSessionStore: AgentSessionStore = {
@@ -36,16 +40,40 @@ export function createAgentSession(message: string, location: Location): AgentSe
   return activeAgentSessionStore.create(message, location);
 }
 
+export async function createAgentSessionAsync(message: string, location: Location): Promise<AgentSession> {
+  return activeAgentSessionStore.createAsync
+    ? activeAgentSessionStore.createAsync(message, location)
+    : activeAgentSessionStore.create(message, location);
+}
+
 export function getAgentSession(sessionId: string): AgentSession | null {
   return activeAgentSessionStore.get(sessionId);
+}
+
+export async function getAgentSessionAsync(sessionId: string): Promise<AgentSession | null> {
+  return activeAgentSessionStore.getAsync
+    ? activeAgentSessionStore.getAsync(sessionId)
+    : activeAgentSessionStore.get(sessionId);
 }
 
 export function deleteAgentSession(sessionId: string): boolean {
   return activeAgentSessionStore.delete(sessionId);
 }
 
+export async function deleteAgentSessionAsync(sessionId: string): Promise<boolean> {
+  return activeAgentSessionStore.deleteAsync
+    ? activeAgentSessionStore.deleteAsync(sessionId)
+    : activeAgentSessionStore.delete(sessionId);
+}
+
 export function saveAgentSession(session: AgentSession): AgentSession {
   return activeAgentSessionStore.save(session);
+}
+
+export async function saveAgentSessionAsync(session: AgentSession): Promise<AgentSession> {
+  return activeAgentSessionStore.saveAsync
+    ? activeAgentSessionStore.saveAsync(session)
+    : activeAgentSessionStore.save(session);
 }
 
 function createInMemoryAgentSession(message: string, location: Location): AgentSession {
@@ -85,6 +113,11 @@ export function appendUserMessage(session: AgentSession, content: string): Agent
   return saveAgentSession(session);
 }
 
+export async function appendUserMessageAsync(session: AgentSession, content: string): Promise<AgentSession> {
+  session.messages.push(createUserMessage(content));
+  return saveAgentSessionAsync(session);
+}
+
 export function appendAssistantMessage(session: AgentSession, content: string): AgentSession {
   session.messages.push({
     role: 'assistant',
@@ -92,6 +125,15 @@ export function appendAssistantMessage(session: AgentSession, content: string): 
     createdAt: Date.now(),
   });
   return saveAgentSession(session);
+}
+
+export async function appendAssistantMessageAsync(session: AgentSession, content: string): Promise<AgentSession> {
+  session.messages.push({
+    role: 'assistant',
+    content,
+    createdAt: Date.now(),
+  });
+  return saveAgentSessionAsync(session);
 }
 
 function saveInMemoryAgentSession(session: AgentSession): AgentSession {
@@ -115,6 +157,21 @@ export function applyRuntimeStateToSession(
   session.observations = state.observations ?? [];
   session.pendingQuestion = state.pendingQuestion;
   return saveAgentSession(session);
+}
+
+export async function applyRuntimeStateToSessionAsync(
+  session: AgentSession,
+  state: AgentRuntimeState
+): Promise<AgentSession> {
+  if (state.goal) {
+    session.goal = state.goal;
+  }
+  session.attempts = state.attempts;
+  session.candidates = state.candidates;
+  session.actions = state.actions ?? [];
+  session.observations = state.observations ?? [];
+  session.pendingQuestion = state.pendingQuestion;
+  return saveAgentSessionAsync(session);
 }
 
 function createUserMessage(content: string, createdAt: number = Date.now()): AgentMessage {
