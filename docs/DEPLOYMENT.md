@@ -627,6 +627,78 @@ pm2 restart chisha
    - 配置 CORS
    - API 限流
 
+## Cloudflare D1 会话存储与迁移
+
+Agent 多轮会话需要持久化到 D1，避免 Cloudflare Workers 多实例、冷启动或重新部署后丢失追问状态。
+
+### 首次创建 D1 数据库
+
+每个 Cloudflare 账号/环境只需要创建一次数据库：
+
+```bash
+npx wrangler d1 create chisha
+```
+
+命令会输出 `database_id`。将它加入 `wrangler.jsonc`：
+
+```jsonc
+{
+  "d1_databases": [
+    {
+      "binding": "CHISHA_DB",
+      "database_name": "chisha",
+      "database_id": "<cloudflare-created-id>"
+    }
+  ]
+}
+```
+
+不要手动建表。表结构由 `migrations/` 下的 SQL 迁移管理。
+
+### 本地和远程迁移
+
+本地开发数据库：
+
+```bash
+npm run db:migrate:local
+```
+
+远程生产数据库：
+
+```bash
+npm run db:migrate:remote
+```
+
+当前迁移会创建 `agent_sessions` 表，并建立 `expires_at`、`updated_at` 索引。迁移文件使用 `IF NOT EXISTS`，搬环境后重复执行是安全的。
+
+### 自动部署迁移
+
+`npm run deploy` 已配置为先执行远程 D1 迁移，再部署 Worker：
+
+```bash
+npm run deploy
+```
+
+等价于：
+
+```bash
+npm run db:migrate:remote && npx wrangler deploy
+```
+
+Wrangler 在 CI/CD 或其它非交互命令行中会跳过迁移确认提示；本地终端可能会要求确认。需要紧急跳过迁移时使用：
+
+```bash
+npm run deploy:skip-migrations
+```
+
+### 搬环境检查清单
+
+- 创建目标环境 D1 数据库：`npx wrangler d1 create chisha`
+- 将新的 `database_id` 写入 `wrangler.jsonc`
+- 配置环境变量：`OPENAI_API_KEY`、`AMAP_API_KEY`
+- 执行：`npm run deploy`
+- 确认迁移已应用：`npx wrangler d1 migrations list chisha --remote`
+
 ## 成本估算
 
 ### Vercel（推荐）

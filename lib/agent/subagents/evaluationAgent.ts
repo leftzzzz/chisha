@@ -12,6 +12,12 @@ import type {
   UserPreferenceSummary,
 } from '../types';
 
+/**
+ * @deprecated Runtime V3 evaluates candidates with deterministic verifier,
+ * scorer, and FinalGuard. This model-based evaluator is retained for legacy
+ * tests and comparison only.
+ */
+
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';

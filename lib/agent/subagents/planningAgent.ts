@@ -10,6 +10,11 @@ import type {
   UserGoal,
 } from '../types';
 
+/**
+ * @deprecated Runtime V3 uses SearchSupervisorAction plus runtime guards for
+ * planning. This module is retained for legacy tests and design comparison.
+ */
+
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';

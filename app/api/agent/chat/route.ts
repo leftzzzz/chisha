@@ -23,9 +23,11 @@ import {
   getAgentSession,
   saveAgentSession,
 } from '@/lib/agent/session';
+import { applySupervisorClarifyingAnswer } from '@/lib/agent/supervisor';
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
+import { osmSearch } from '@/lib/osm';
 import { getClientIP, rateLimit } from '@/lib/rateLimit';
 
 const AGENT_POI_PAGES_PER_SEARCH = parsePositiveInt(process.env.AGENT_POI_PAGES_PER_SEARCH, 2);
@@ -160,6 +162,13 @@ export async function POST(request: Request) {
           return;
         }
 
+        if (
+          shouldResumeSession
+          && session.pendingQuestion?.optionEffects?.[requestData.message.trim()]
+        ) {
+          applySupervisorClarifyingAnswer(session, requestData.message);
+        }
+
         if (shouldResumeSession) {
           appendUserMessage(session, requestData.message);
           sendEvent(controller, {
@@ -171,6 +180,7 @@ export async function POST(request: Request) {
         const input: AgentInput = {
           query: requestData.message,
           location: requestData.location,
+          sessionId: session.id,
           messages: session.messages,
           preferenceSummary: mergeUserPreferenceSummaries([
             requestData.preferenceSummary,
@@ -196,15 +206,23 @@ export async function POST(request: Request) {
           input,
           (event) => sendEvent(controller, event),
           async (plan: SearchPlan) => {
-            const restaurants = await amapPoiSearch(
-              plan.keywords,
-              input.location,
-              plan.radiusMeters,
-              plan.poiType,
-              AGENT_POI_PAGES_PER_SEARCH,
-              { preferProvidedPoiType: Boolean(plan.poiType) }
-            );
-            return enrichRestaurantsWithAmapDetails(restaurants, AGENT_DETAIL_ENRICH_LIMIT);
+            try {
+              const restaurants = await amapPoiSearch(
+                plan.keywords,
+                input.location,
+                plan.radiusMeters,
+                plan.poiType,
+                AGENT_POI_PAGES_PER_SEARCH,
+                { preferProvidedPoiType: Boolean(plan.poiType) }
+              );
+              return enrichRestaurantsWithAmapDetails(restaurants, AGENT_DETAIL_ENRICH_LIMIT);
+            } catch (error) {
+              logger.warn('Amap Agent search failed, falling back to OSM', {
+                error: error instanceof Error ? error.message : String(error),
+                plan,
+              });
+              return osmSearch(plan.keywords, input.location, plan.radiusMeters);
+            }
           }
         );
 

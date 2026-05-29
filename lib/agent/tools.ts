@@ -2,6 +2,12 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { FinishRecommendation, PendingQuestion } from './types';
 
+/**
+ * @deprecated Runtime V3 no longer uses AI SDK tool calling directly. Keep
+ * these schemas only for migration/reference tests until the old tool loop is
+ * removed.
+ */
+
 const LocationSchema = z.object({
   lat: z.number(),
   lng: z.number(),
@@ -25,7 +31,7 @@ export const RestaurantSchema = z.object({
 export const SearchRestaurantsInputSchema = z.object({
   keywords: z.array(z.string().min(1)).min(1).max(5),
   radiusMeters: z.number().int().min(300).max(5000),
-  poiType: z.string().regex(/^\d{6}$/).optional(),
+  poiType: z.string().regex(/^\d{6}(?:\|\d{6})*$/).optional(),
   searchIntent: z.enum(['exact', 'synonym', 'broadened', 'fallback']),
   allowedForPrimary: z.boolean().default(false),
   reason: z.string().min(1).max(120),

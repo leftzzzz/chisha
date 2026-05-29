@@ -1,7 +1,6 @@
 import { logger } from '@/lib/logger';
-import { fetchWithTimeout } from '@/lib/withTimeout';
 import { AgentActionSchema } from './schemas/action';
-import { parseModelJsonArguments } from './modelJson';
+import { callJsonFunctionAgent } from './modelClient';
 import { DEFAULT_POI_TYPE, lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import type {
@@ -371,49 +370,20 @@ function nextRadius(context: AgentContext): number {
 }
 
 async function callSupervisorActionModel(input: SearchSupervisorActionInput): Promise<AgentAction> {
-  const response = await fetchWithTimeout(
-    `${OPENAI_BASE_URL}/chat/completions`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: `${SYSTEM_PROMPT}\n\n${JSON.stringify(buildModelInput(input))}`,
-          },
-        ],
-        functions: [ACTION_FUNCTION],
-        function_call: { name: 'decideRestaurantSearchAction' },
-        temperature: 0,
-        max_tokens: 900,
-      }),
-    },
-    SUPERVISOR_ACTION_TIMEOUT
-  );
-
-  if (!response.ok) {
-    throw new Error(`SearchSupervisorAgent action API failed: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const args = extractFunctionArguments(data);
-  if (!args) {
-    throw new Error('SearchSupervisorAgent action returned no function arguments');
-  }
-
-  const parsed = AgentActionSchema.safeParse(
-    parseModelJsonArguments(args, 'SearchSupervisorAgent action')
-  );
-  if (!parsed.success) {
-    throw new Error(`SearchSupervisorAgent action returned invalid schema: ${parsed.error.message}`);
-  }
-
-  return parsed.data;
+  return callJsonFunctionAgent({
+    agentName: 'SearchSupervisorAgent action',
+    apiKey: OPENAI_API_KEY!,
+    baseUrl: OPENAI_BASE_URL,
+    model: OPENAI_MODEL,
+    systemPrompt: SYSTEM_PROMPT,
+    input: buildModelInput(input),
+    functionDefinition: ACTION_FUNCTION,
+    functionName: 'decideRestaurantSearchAction',
+    schema: AgentActionSchema,
+    temperature: 0,
+    maxTokens: 900,
+    timeoutMs: SUPERVISOR_ACTION_TIMEOUT,
+  }) as Promise<AgentAction>;
 }
 
 function buildModelInput(input: SearchSupervisorActionInput) {
@@ -443,53 +413,6 @@ function buildModelInput(input: SearchSupervisorActionInput) {
     preferenceSummary: input.preferenceSummary,
     limits: input.limits,
   };
-}
-
-function extractFunctionArguments(data: {
-  choices?: Array<{
-    message?: {
-      content?: string;
-      function_call?: { name: string; arguments: string };
-      tool_calls?: Array<{
-        type: string;
-        function: { name: string; arguments: string };
-      }>;
-    };
-  }>;
-}): string | null {
-  const message = data.choices?.[0]?.message;
-  if (message?.function_call?.arguments) {
-    return message.function_call.arguments;
-  }
-
-  const toolCall = message?.tool_calls?.find((item) => item.type === 'function');
-  if (toolCall?.function.arguments) {
-    return toolCall.function.arguments;
-  }
-
-  return extractJsonObjectFromText(message?.content ?? '');
-}
-
-function extractJsonObjectFromText(content: string): string | null {
-  const start = content.indexOf('{');
-  if (start === -1) {
-    return null;
-  }
-
-  let depth = 0;
-  for (let index = start; index < content.length; index++) {
-    const char = content[index];
-    if (char === '{') {
-      depth++;
-    } else if (char === '}') {
-      depth--;
-      if (depth === 0) {
-        return content.slice(start, index + 1);
-      }
-    }
-  }
-
-  return null;
 }
 
 function createActionId(): string {

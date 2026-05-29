@@ -253,6 +253,7 @@ export interface AgentObservation {
 export interface AgentInput {
   query: string;
   location: Location;
+  sessionId?: string;
   messages?: AgentMessage[];
   preferenceSummary?: UserPreferenceSummary;
   runtimeState?: AgentRuntimeState;
@@ -304,6 +305,7 @@ export type AgentEvent =
   | { type: 'filtering'; message: string; total: number }
   | {
       type: 'done';
+      sessionId?: string;
       restaurants: Restaurant[];
       candidates: Restaurant[];
       explanation?: string;
@@ -330,6 +332,7 @@ export type AgentEvent =
   | { type: 'session_updated'; sessionId: string }
   | {
       type: 'final';
+      sessionId?: string;
       restaurants: Restaurant[];
       candidates: Restaurant[];
       explanation: string;

@@ -16,13 +16,39 @@ export interface AgentSessionStore {
 }
 
 export const inMemoryAgentSessionStore: AgentSessionStore = {
-  create: createAgentSession,
-  get: getAgentSession,
-  save: saveAgentSession,
-  delete: deleteAgentSession,
+  create: createInMemoryAgentSession,
+  get: getInMemoryAgentSession,
+  save: saveInMemoryAgentSession,
+  delete: deleteInMemoryAgentSession,
 };
 
+let activeAgentSessionStore: AgentSessionStore = inMemoryAgentSessionStore;
+
+export function setAgentSessionStore(store: AgentSessionStore): void {
+  activeAgentSessionStore = store;
+}
+
+export function resetAgentSessionStore(): void {
+  activeAgentSessionStore = inMemoryAgentSessionStore;
+}
+
 export function createAgentSession(message: string, location: Location): AgentSession {
+  return activeAgentSessionStore.create(message, location);
+}
+
+export function getAgentSession(sessionId: string): AgentSession | null {
+  return activeAgentSessionStore.get(sessionId);
+}
+
+export function deleteAgentSession(sessionId: string): boolean {
+  return activeAgentSessionStore.delete(sessionId);
+}
+
+export function saveAgentSession(session: AgentSession): AgentSession {
+  return activeAgentSessionStore.save(session);
+}
+
+function createInMemoryAgentSession(message: string, location: Location): AgentSession {
   cleanupExpiredSessions();
 
   const now = Date.now();
@@ -44,12 +70,12 @@ export function createAgentSession(message: string, location: Location): AgentSe
   return session;
 }
 
-export function getAgentSession(sessionId: string): AgentSession | null {
+function getInMemoryAgentSession(sessionId: string): AgentSession | null {
   cleanupExpiredSessions();
   return sessions.get(sessionId) ?? null;
 }
 
-export function deleteAgentSession(sessionId: string): boolean {
+function deleteInMemoryAgentSession(sessionId: string): boolean {
   cleanupExpiredSessions();
   return sessions.delete(sessionId);
 }
@@ -68,7 +94,7 @@ export function appendAssistantMessage(session: AgentSession, content: string): 
   return saveAgentSession(session);
 }
 
-export function saveAgentSession(session: AgentSession): AgentSession {
+function saveInMemoryAgentSession(session: AgentSession): AgentSession {
   const now = Date.now();
   session.updatedAt = now;
   session.expiresAt = now + SESSION_TTL_MS;

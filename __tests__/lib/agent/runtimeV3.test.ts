@@ -238,11 +238,11 @@ describe('runSearchAgentV3', () => {
     expect(result.restaurants).toEqual([]);
   });
 
-  it('clarifies vague initial requests before searching', async () => {
+  it('clarifies soft-preference-only initial requests before searching', async () => {
     const searchPlaces = jest.fn(async () => [restaurant('r1', '测试餐厅', '餐饮')]);
     const result = await runSearchAgentV3(
       {
-        query: '随便推荐个附近好吃的',
+        query: '想吃清淡点',
         location,
         runtimeState: {
           attempts: [],
@@ -260,10 +260,53 @@ describe('runSearchAgentV3', () => {
     expect(searchPlaces).not.toHaveBeenCalled();
   });
 
+  it('uses fallback search when the user explicitly asks for a random recommendation', async () => {
+    const searchedPlans: SearchPlan[] = [];
+    const result = await runSearchAgentV3(
+      {
+        query: '随便推荐个附近好吃的',
+        location,
+        runtimeState: {
+          attempts: [],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      async (plan) => {
+        searchedPlans.push(plan);
+        return [
+          restaurant('r1', '社区餐厅', '餐饮', 300),
+          restaurant('r2', '附近美食广场', '美食', 400),
+          restaurant('r3', '家常饭店', '餐厅', 500),
+        ];
+      }
+    );
+
+    expect(result.paused).not.toBe(true);
+    expect(searchedPlans.some((plan) => plan.searchIntent === 'fallback')).toBe(true);
+    expect(searchedPlans[0].keywords).toEqual(['餐厅', '美食']);
+    expect(result.restaurants.length).toBeGreaterThan(0);
+  });
+
+  it('records the observed provider when search falls back to OSM results', async () => {
+    const result = await runSearchAgentV3(
+      input(goal()),
+      () => undefined,
+      async () => [{
+        ...restaurant('osm_1', 'OSM寿司店', '日本料理', 300),
+        source: 'osm',
+      }]
+    );
+
+    expect(result.runtimeState?.observations?.[0]?.provider).toBe('osm');
+  });
+
   it('continues with fallback search when clarification answer allows any recommendation', async () => {
     const first = await runSearchAgentV3(
       {
-        query: '随便推荐个附近好吃的',
+        query: '想吃健康点',
         location,
         runtimeState: {
           attempts: [],
@@ -308,7 +351,7 @@ describe('runSearchAgentV3', () => {
   it('continues with fallback search when clarification answer is still a soft preference', async () => {
     const first = await runSearchAgentV3(
       {
-        query: '随便推荐个附近好吃的',
+        query: '想吃便宜点',
         location,
         runtimeState: {
           attempts: [],

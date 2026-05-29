@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { logger } from '@/lib/logger';
-import { fetchWithTimeout } from '@/lib/withTimeout';
-import { parseModelJsonArguments } from '../modelJson';
+import { callJsonFunctionAgent } from '../modelClient';
 import { AMAP_FOOD_POI_TYPES, getAmapFoodPoiType } from '../amapPoiTypeCatalog';
 import type { SearchPlan, UserGoal } from '../types';
 
@@ -58,8 +57,13 @@ const POI_TYPE_SELECTION_FUNCTION = {
 export async function runPoiTypeSelectionAgent(
   input: PoiTypeSelectionInput
 ): Promise<PoiTypeSelectionOutput> {
+  const deterministicSelection = deterministicPoiTypeSelection(input);
+  if (deterministicSelection.typeCodes.length > 0) {
+    return deterministicSelection;
+  }
+
   if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
-    return deterministicPoiTypeSelection(input);
+    return deterministicSelection;
   }
 
   try {
@@ -68,7 +72,7 @@ export async function runPoiTypeSelectionAgent(
     logger.warn('PoiTypeSelectionAgent unavailable, using deterministic fallback', {
       error: error instanceof Error ? error.message : String(error),
     });
-    return deterministicPoiTypeSelection(input);
+    return deterministicSelection;
   }
 }
 
@@ -123,49 +127,20 @@ function sanitizeSelection(output: Partial<PoiTypeSelectionOutput>): PoiTypeSele
 async function callPoiTypeSelectionModel(
   input: PoiTypeSelectionInput
 ): Promise<PoiTypeSelectionOutput> {
-  const response = await fetchWithTimeout(
-    `${OPENAI_BASE_URL}/chat/completions`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: `${SYSTEM_PROMPT}\n\n${JSON.stringify(buildModelInput(input))}`,
-          },
-        ],
-        functions: [POI_TYPE_SELECTION_FUNCTION],
-        function_call: { name: 'selectAmapPoiTypes' },
-        temperature: 0,
-        max_tokens: 700,
-      }),
-    },
-    POI_TYPE_SELECTION_TIMEOUT
-  );
-
-  if (!response.ok) {
-    throw new Error(`PoiTypeSelectionAgent API failed: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const args = extractFunctionArguments(data);
-  if (!args) {
-    throw new Error('PoiTypeSelectionAgent returned no function arguments');
-  }
-
-  const parsed = PoiTypeSelectionOutputSchema.safeParse(
-    parseModelJsonArguments(args, 'PoiTypeSelectionAgent')
-  );
-  if (!parsed.success) {
-    throw new Error(`PoiTypeSelectionAgent returned invalid schema: ${parsed.error.message}`);
-  }
-
-  return parsed.data;
+  return callJsonFunctionAgent({
+    agentName: 'PoiTypeSelectionAgent',
+    apiKey: OPENAI_API_KEY!,
+    baseUrl: OPENAI_BASE_URL,
+    model: OPENAI_MODEL,
+    systemPrompt: SYSTEM_PROMPT,
+    input: buildModelInput(input),
+    functionDefinition: POI_TYPE_SELECTION_FUNCTION,
+    functionName: 'selectAmapPoiTypes',
+    schema: PoiTypeSelectionOutputSchema,
+    temperature: 0,
+    maxTokens: 700,
+    timeoutMs: POI_TYPE_SELECTION_TIMEOUT,
+  }) as Promise<PoiTypeSelectionOutput>;
 }
 
 function buildModelInput(input: PoiTypeSelectionInput) {
@@ -219,51 +194,4 @@ function scorePoiTypeEntry(
   }
 
   return score;
-}
-
-function extractFunctionArguments(data: {
-  choices?: Array<{
-    message?: {
-      content?: string;
-      function_call?: { name: string; arguments: string };
-      tool_calls?: Array<{
-        type: string;
-        function: { name: string; arguments: string };
-      }>;
-    };
-  }>;
-}): string | null {
-  const message = data.choices?.[0]?.message;
-  if (message?.function_call?.arguments) {
-    return message.function_call.arguments;
-  }
-
-  const toolCall = message?.tool_calls?.find((item) => item.type === 'function');
-  if (toolCall?.function.arguments) {
-    return toolCall.function.arguments;
-  }
-
-  return extractJsonObjectFromText(message?.content ?? '');
-}
-
-function extractJsonObjectFromText(content: string): string | null {
-  const start = content.indexOf('{');
-  if (start === -1) {
-    return null;
-  }
-
-  let depth = 0;
-  for (let index = start; index < content.length; index++) {
-    const char = content[index];
-    if (char === '{') {
-      depth++;
-    } else if (char === '}') {
-      depth--;
-      if (depth === 0) {
-        return content.slice(start, index + 1);
-      }
-    }
-  }
-
-  return null;
 }

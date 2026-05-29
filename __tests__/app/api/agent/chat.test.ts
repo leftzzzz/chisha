@@ -18,6 +18,7 @@ jest.mock('@/lib/agent/runtimeV3', () => ({
 
 import { POST } from '@/app/api/agent/chat/route';
 import { createAgentSession, saveAgentSession } from '@/lib/agent/session';
+import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import type { UserGoal } from '@/lib/agent/types';
 import type { Location } from '@/types';
 import { ReadableStream } from 'stream/web';
@@ -174,5 +175,35 @@ describe('/api/agent/chat', () => {
     const events = await readSseEvents(response);
 
     expect(events.map((event) => event.type)).toContain('session_resumed');
+  });
+
+  it('applies structured option effects before resuming the runtime', async () => {
+    const pausedSession = createAgentSession('想吃日料', location);
+    pausedSession.goal = goal({
+      hardConstraints: [{ kind: 'distance', label: '500米内', value: 500, maxMeters: 500, strict: true }],
+    });
+    pausedSession.pendingQuestion = {
+      question: '当前距离范围内没有找到合适餐厅，要扩大范围再搜吗？',
+      options: ['扩大范围'],
+      allowFreeText: true,
+      optionEffects: {
+        '扩大范围': { allowBroaden: true, setDistanceMaxMeters: 5000 },
+      },
+    };
+    saveAgentSession(pausedSession);
+
+    const response = await POST(jsonRequest({
+      message: '扩大范围',
+      location,
+      sessionId: pausedSession.id,
+    }));
+    await readSseEvents(response);
+
+    const runtimeInput = (runSearchAgentV3 as jest.Mock).mock.calls.at(-1)?.[0];
+    expect(runtimeInput.runtimeState.pendingQuestion).toBeUndefined();
+    expect(runtimeInput.runtimeState.goal.allowBroaden).toBe(true);
+    expect(runtimeInput.runtimeState.goal.hardConstraints).toEqual(
+      expect.arrayContaining([expect.objectContaining({ maxMeters: 5000, strict: false })])
+    );
   });
 });

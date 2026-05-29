@@ -44,7 +44,7 @@ export type AgentEvent =
   | { type: 'searching'; keywords: string[]; round: number }
   | { type: 'search_result'; found: number; total: number; restaurants: SearchResultRestaurant[] }
   | { type: 'filtering'; message: string; total: number }
-  | { type: 'done'; restaurants: Restaurant[]; candidates: Restaurant[]; explanation?: string; unmetConstraints?: string[] }
+  | { type: 'done'; sessionId?: string; restaurants: Restaurant[]; candidates: Restaurant[]; explanation?: string; unmetConstraints?: string[] }
   | { type: 'error'; message: string }
   | { type: 'status'; message: string }
   | { type: 'tool_start'; tool: string; args: unknown }
@@ -66,6 +66,7 @@ export type AgentEvent =
   | { type: 'session_updated'; sessionId: string }
   | {
       type: 'final';
+      sessionId?: string;
       restaurants: Restaurant[];
       candidates: Restaurant[];
       explanation: string;
@@ -543,6 +544,7 @@ export async function agentSearch(
               case 'final':
                 if (!hasReceivedDone) {
                   hasReceivedDone = true;
+                  currentSessionId = event.sessionId ?? currentSessionId;
                   result = {
                     restaurants: event.restaurants,
                     candidates: event.candidates || [],
@@ -562,6 +564,7 @@ export async function agentSearch(
                 // 只处理第一个 done 事件
                 if (!hasReceivedDone) {
                   hasReceivedDone = true;
+                  currentSessionId = event.sessionId ?? currentSessionId;
                   result = {
                     restaurants: event.restaurants,
                     candidates: event.candidates || [],
@@ -767,6 +770,7 @@ async function requestAgentStream(
             case 'final':
               if (!hasReceivedResult) {
                 hasReceivedResult = true;
+                currentSessionId = event.sessionId ?? currentSessionId;
                 result = {
                   restaurants: event.restaurants,
                   candidates: event.candidates || [],
@@ -785,6 +789,7 @@ async function requestAgentStream(
             case 'done':
               if (!hasReceivedResult) {
                 hasReceivedResult = true;
+                currentSessionId = event.sessionId ?? currentSessionId;
                 result = {
                   restaurants: event.restaurants,
                   candidates: event.candidates || [],

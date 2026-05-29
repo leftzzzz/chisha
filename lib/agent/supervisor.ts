@@ -1,6 +1,5 @@
 import { logger } from '@/lib/logger';
-import { fetchWithTimeout } from '@/lib/withTimeout';
-import { parseModelJsonArguments } from './modelJson';
+import { callJsonFunctionAgent } from './modelClient';
 import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
 import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
 import type {
@@ -53,7 +52,8 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
 7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
 7a. 如果追问给出选项，必须尽量给每个选项设置 optionEffects；选项只是分类说明时，effect 要指向被澄清的原始目标，不能把选项标签当搜索词。
-8. 用户只说“随便/推荐/附近有什么/吃点/不知道/清淡点/健康点/便宜点/环境好/人气高”等开放或软偏好、但没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
+8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，可加入“默认多样性”软偏好，进入 plan 走 fallback；不要 ask_user，也不要把这些词当 keywords。
+8a. 用户只是“附近有什么/吃点/清淡点/健康点/便宜点/环境好/人气高”等软偏好或开放询问、但没有明确授权随意/随机推荐且没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
 9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true 并进入 plan，不要再次 ask_user。
 10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
 11. primaryKeywords 只能放用户正向想吃的、适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
@@ -327,58 +327,29 @@ function goalPatchFromClarificationEffect(effect: ClarificationEffect): GoalPatc
 }
 
 async function callSupervisorModel(input: SearchSupervisorInput): Promise<SearchSupervisorOutput> {
-  const response = await fetchWithTimeout(
-    `${OPENAI_BASE_URL}/chat/completions`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: `${SYSTEM_PROMPT}\n\n${JSON.stringify({
-              message: input.message,
-              previousGoal: input.previousGoal,
-              pendingQuestion: input.pendingQuestion,
-              messages: input.messages?.slice(-8),
-              failureReason: input.failureReason,
-              attempts: input.attempts,
-              verdictSummary: input.verdictSummary,
-              preferenceSummary: input.preferenceSummary,
-            })}`,
-          },
-        ],
-        functions: [SUPERVISOR_FUNCTION],
-        function_call: { name: 'superviseRestaurantSearch' },
-        temperature: 0,
-        max_tokens: 2400,
-      }),
+  return callJsonFunctionAgent({
+    agentName: 'SearchSupervisorAgent',
+    apiKey: OPENAI_API_KEY!,
+    baseUrl: OPENAI_BASE_URL,
+    model: OPENAI_MODEL,
+    systemPrompt: SYSTEM_PROMPT,
+    input: {
+      message: input.message,
+      previousGoal: input.previousGoal,
+      pendingQuestion: input.pendingQuestion,
+      messages: input.messages?.slice(-8),
+      failureReason: input.failureReason,
+      attempts: input.attempts,
+      verdictSummary: input.verdictSummary,
+      preferenceSummary: input.preferenceSummary,
     },
-    SUPERVISOR_TIMEOUT
-  );
-
-  if (!response.ok) {
-    throw new Error(`SearchSupervisorAgent API failed: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const args = extractFunctionArguments(data);
-  if (!args) {
-    throw new Error('SearchSupervisorAgent returned no function arguments');
-  }
-
-  const parsed = SearchSupervisorOutputSchema.safeParse(
-    parseModelJsonArguments(args, 'SearchSupervisorAgent')
-  );
-  if (!parsed.success) {
-    throw new Error(`SearchSupervisorAgent returned invalid schema: ${parsed.error.message}`);
-  }
-
-  return parsed.data as SearchSupervisorOutput;
+    functionDefinition: SUPERVISOR_FUNCTION,
+    functionName: 'superviseRestaurantSearch',
+    schema: SearchSupervisorOutputSchema,
+    temperature: 0,
+    maxTokens: 2400,
+    timeoutMs: SUPERVISOR_TIMEOUT,
+  }) as Promise<SearchSupervisorOutput>;
 }
 
 function mergeStrings(left: string[], right: string[]): string[] {
@@ -705,51 +676,4 @@ function clarificationEffectJsonSchema() {
       allowBroaden: { type: 'boolean' },
     },
   };
-}
-
-function extractFunctionArguments(data: {
-  choices?: Array<{
-    message?: {
-      content?: string;
-      function_call?: { name: string; arguments: string };
-      tool_calls?: Array<{
-        type: string;
-        function: { name: string; arguments: string };
-      }>;
-    };
-  }>;
-}): string | null {
-  const message = data.choices?.[0]?.message;
-  if (message?.function_call?.arguments) {
-    return message.function_call.arguments;
-  }
-
-  const toolCall = message?.tool_calls?.find((item) => item.type === 'function');
-  if (toolCall?.function.arguments) {
-    return toolCall.function.arguments;
-  }
-
-  return extractJsonObjectFromText(message?.content ?? '');
-}
-
-function extractJsonObjectFromText(content: string): string | null {
-  const start = content.indexOf('{');
-  if (start === -1) {
-    return null;
-  }
-
-  let depth = 0;
-  for (let index = start; index < content.length; index++) {
-    const char = content[index];
-    if (char === '{') {
-      depth++;
-    } else if (char === '}') {
-      depth--;
-      if (depth === 0) {
-        return content.slice(start, index + 1);
-      }
-    }
-  }
-
-  return null;
 }

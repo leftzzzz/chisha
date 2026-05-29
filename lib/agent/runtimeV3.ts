@@ -7,9 +7,15 @@ import {
 import { evaluateSearchResult, mergeCandidates } from './evaluator';
 import { applyHardConstraintGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
+import { UserGoalSchema } from './schemas/goal';
 import { SearchPlanSchema } from './schemas/plan';
 import { finalizeRecommendations } from './resultAssembler';
-import { isGenericSearchKeyword, lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
+import {
+  extractKnownFoodTerms,
+  isGenericSearchKeyword,
+  lookupFoodPoiTypes,
+  normalizeSearchKeywords,
+} from './poiTaxonomy';
 import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
 import { runPoiTypeSelectionAgent } from './subagents/poiTypeSelectionAgent';
 import {
@@ -54,14 +60,14 @@ export async function runSearchAgentV3(
   emit({ type: 'thinking', message: '正在理解你的需求...' });
   emit({ type: 'status', message: 'SearchSupervisorAgent 正在维护目标并选择下一步动作...' });
 
-  const supervisorOutput = await runSearchSupervisor({
+  const supervisorOutput = normalizeExplicitOpenRecommendation(input, await runSearchSupervisor({
     message: input.query,
     previousGoal: input.runtimeState?.goal,
     pendingQuestion: input.runtimeState?.pendingQuestion,
     messages: input.messages,
     preferenceSummary: input.preferenceSummary,
     attempts: input.runtimeState?.attempts,
-  });
+  }));
   const baseGoal = resolveSupervisorGoal(input, supervisorOutput);
   const resetSearchState = shouldResetSearchStateAfterGoalUpdate(input, baseGoal);
   let goal = baseGoal;
@@ -190,6 +196,82 @@ function resolveSupervisorGoal(
   }
 
   throw new Error('SearchSupervisorAgent returned no goal or patch');
+}
+
+function normalizeExplicitOpenRecommendation(
+  input: AgentInput,
+  output: Awaited<ReturnType<typeof runSearchSupervisor>>
+): Awaited<ReturnType<typeof runSearchSupervisor>> {
+  if (
+    input.runtimeState?.pendingQuestion
+    || input.runtimeState?.goal
+    || !isExplicitOpenRecommendationQuery(input.query)
+  ) {
+    return output;
+  }
+
+  if (output.goal && hasPrimaryTargets(output.goal)) {
+    return output;
+  }
+
+  return {
+    goal: buildOpenRecommendationGoal(input.query, output.goal),
+    nextAction: 'plan',
+  };
+}
+
+function isExplicitOpenRecommendationQuery(query: string): boolean {
+  const normalized = query.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  if (extractKnownFoodTerms(normalized).length > 0) {
+    return false;
+  }
+
+  return /(随便|随意|随机|都行|都可以|无所谓|你决定|你看着办|帮我决定|直接推荐|不知道吃啥|不知道吃什么|不知道吃啥好|不知道吃什么好)/u
+    .test(normalized);
+}
+
+function buildOpenRecommendationGoal(query: string, modelGoal?: UserGoal): UserGoal {
+  const existingPreferences = modelGoal?.softPreferences ?? [];
+  const hasDefaultDiversity = existingPreferences.some((preference) =>
+    preference.name === '默认多样性'
+  );
+
+  return UserGoalSchema.parse({
+    intent: 'find_restaurants',
+    rawQuery: modelGoal?.rawQuery || query,
+    requestedItems: [],
+    acceptableCategories: [],
+    alternativeGroups: [],
+    primaryKeywords: [],
+    relatedKeywords: [],
+    broadenedKeywords: [],
+    hardConstraints: modelGoal?.hardConstraints ?? [],
+    softPreferences: hasDefaultDiversity
+      ? existingPreferences
+      : [
+          ...existingPreferences,
+          { name: '默认多样性', weight: 1, verifiable: true },
+        ],
+    exclusions: modelGoal?.exclusions ?? [],
+    ambiguity: [
+      ...(modelGoal?.ambiguity ?? []),
+      '用户明确表示随意或随机推荐，已按开放餐饮候选处理。',
+    ],
+    clarificationNeeded: [],
+    allowBroaden: true,
+  });
+}
+
+function hasPrimaryTargets(goal: UserGoal): boolean {
+  return [
+    ...goal.primaryKeywords,
+    ...goal.requestedItems.map((item) => item.name),
+    ...goal.acceptableCategories.map((category) => category.name),
+  ].some((item) => item.trim().length > 0);
 }
 
 function createInitialContext(input: AgentInput, goal: UserGoal, resetSearchState = false): AgentV3Context {
@@ -550,7 +632,7 @@ async function executeSearchAction(
   return {
     actionId,
     plan,
-    provider: 'amap',
+    provider: inferObservationProvider(restaurants),
     rawCount: restaurants.length,
     hardRejected: hardGuard.rejected.map((item) => ({
       restaurantId: item.restaurant.id,
@@ -561,6 +643,10 @@ async function executeSearchAction(
     candidateIds,
     unmetConstraints,
   };
+}
+
+function inferObservationProvider(restaurants: Restaurant[]): AgentObservation['provider'] {
+  return restaurants.some((restaurant) => restaurant.source === 'osm') ? 'osm' : 'amap';
 }
 
 function appendAction(
@@ -598,8 +684,7 @@ function finish(
     return buildPausedResult(context, question);
   }
 
-  emit({ type: 'final', ...finalResult });
-  emit({ type: 'done', ...finalResult });
+  emit({ type: 'final', sessionId: context.sessionId, ...finalResult });
 
   return {
     ...finalResult,

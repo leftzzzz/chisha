@@ -1,12 +1,12 @@
 import type { Restaurant } from '@/types';
 import type {
   CandidateVerdict,
-  Constraint,
   EvaluationAgentOutput,
   SearchPlan,
   UserGoal,
 } from './types';
 import { deterministicEvaluation } from './subagents/evaluationAgent';
+import { evaluateConstraint } from './constraintEvaluator';
 
 export interface HardConstraintGuardResult {
   passed: Restaurant[];
@@ -30,7 +30,7 @@ export function applyHardConstraintGuard(
 
   for (const restaurant of restaurants) {
     const reasons = goal.hardConstraints.flatMap((constraint) =>
-      evaluateHardConstraint(restaurant, constraint)
+      failedConstraintMessage(restaurant, constraint)
     );
 
     if (reasons.length > 0) {
@@ -43,6 +43,10 @@ export function applyHardConstraintGuard(
   return { passed, rejected };
 }
 
+/**
+ * @deprecated Runtime V3 no longer accepts model-generated verdicts on the
+ * active path. Candidate admission now happens through verifier + FinalGuard.
+ */
 export function applyVerdictGuard(
   evaluation: EvaluationAgentOutput,
   restaurants: Restaurant[],
@@ -66,7 +70,7 @@ export function applyVerdictGuard(
     .map((verdict) => {
       const restaurant = restaurantsById.get(verdict.restaurantId)!;
       const hardFailures = goal.hardConstraints.flatMap((constraint) =>
-        evaluateHardConstraint(restaurant, constraint)
+        failedConstraintMessage(restaurant, constraint)
       );
       if (hardFailures.length === 0) {
         return {
@@ -104,7 +108,7 @@ export function applyVerdictGuard(
     .map((verdict) => {
       const restaurant = restaurantsById.get(verdict.restaurantId)!;
       const hardFailures = goal.hardConstraints.flatMap((constraint) =>
-        evaluateHardConstraint(restaurant, constraint)
+        failedConstraintMessage(restaurant, constraint)
       );
       if (hardFailures.length > 0) {
         const failedVerdict: CandidateVerdict = {
@@ -270,65 +274,12 @@ function verdictRank(verdict: CandidateVerdict): number {
   return 1;
 }
 
-function evaluateHardConstraint(restaurant: Restaurant, constraint: Constraint): string[] {
-  if (constraint.kind === 'distance') {
-    const maxMeters = constraint.maxMeters
-      ?? (typeof constraint.value === 'number' ? constraint.value : undefined);
-    if (maxMeters !== undefined && restaurant.distance !== undefined && restaurant.distance > maxMeters) {
-      return [`${restaurant.name}距离 ${restaurant.distance}m，超过${constraint.label} ${maxMeters}m。`];
-    }
-  }
-
-  if (constraint.kind === 'open_now' && restaurant.businessStatus === 'closed') {
-    return [`${restaurant.name}数据源标记为已停业或未营业。`];
-  }
-
-  if (constraint.kind === 'budget') {
-    const range = getBudgetRange(constraint);
-    if (range && restaurant.averagePrice !== undefined) {
-      if (
-        (range.min !== undefined && restaurant.averagePrice < range.min)
-        || (range.max !== undefined && restaurant.averagePrice > range.max)
-      ) {
-        return [`${restaurant.name}人均约 ${restaurant.averagePrice} 元，不满足${constraint.label}。`];
-      }
-    }
-  }
-
-  if (constraint.kind === 'exclude_category') {
-    const excludedValues = constraint.values
-      ?? (Array.isArray(constraint.value) ? constraint.value : typeof constraint.value === 'string' ? [constraint.value] : []);
-    const text = restaurantText(restaurant);
-    const matchedValue = excludedValues.find((value) => textContains(text, value));
-    return matchedValue ? [`${restaurant.name}命中排除项「${matchedValue}」。`] : [];
-  }
-
-  if (constraint.kind === 'avoid_spicy' && /辣|麻辣|香辣/.test(restaurantText(restaurant))) {
-    return [`${restaurant.name}命中明确辣味风险字段。`];
-  }
-
-  return [];
-}
-
-function getBudgetRange(constraint: Constraint): { min?: number; max?: number } | null {
-  if (constraint.min !== undefined || constraint.max !== undefined) {
-    return {
-      min: constraint.min,
-      max: constraint.max,
-    };
-  }
-
-  return typeof constraint.value === 'object' && !Array.isArray(constraint.value)
-    ? constraint.value
-    : null;
-}
-
-function restaurantText(restaurant: Restaurant): string {
-  return `${restaurant.name} ${restaurant.cuisineType} ${restaurant.address}`;
-}
-
-function textContains(text: string, keyword: string): boolean {
-  return text.toLowerCase().includes(keyword.toLowerCase());
+function failedConstraintMessage(
+  restaurant: Restaurant,
+  constraint: UserGoal['hardConstraints'][number]
+): string[] {
+  const result = evaluateConstraint(restaurant, constraint);
+  return result.status === 'failed' ? [result.message] : [];
 }
 
 function mergeStrings(left: string[], right: string[]): string[] {

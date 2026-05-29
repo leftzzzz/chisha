@@ -1,6 +1,5 @@
 import { logger } from '@/lib/logger';
-import { fetchWithTimeout } from '@/lib/withTimeout';
-import { parseModelJsonArguments } from '../modelJson';
+import { callJsonFunctionAgent } from '../modelClient';
 import { expandPoiSearchKeywords, isGenericSearchKeyword, normalizeSearchKeywords } from '../poiTaxonomy';
 import { KeywordExpansionOutputSchema } from '../schemas/keywordExpansion';
 import type { SearchAttempt, UserGoal, UserPreferenceSummary } from '../types';
@@ -109,49 +108,20 @@ export function applyKeywordExpansion(goal: UserGoal, expansion: KeywordExpansio
 async function callKeywordExpansionModel(
   input: KeywordExpansionAgentInput
 ): Promise<KeywordExpansionOutput> {
-  const response = await fetchWithTimeout(
-    `${OPENAI_BASE_URL}/chat/completions`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: `${SYSTEM_PROMPT}\n\n${JSON.stringify(buildModelInput(input))}`,
-          },
-        ],
-        functions: [KEYWORD_EXPANSION_FUNCTION],
-        function_call: { name: 'expandRestaurantSearchKeywords' },
-        temperature: 0.2,
-        max_tokens: 700,
-      }),
-    },
-    KEYWORD_EXPANSION_TIMEOUT
-  );
-
-  if (!response.ok) {
-    throw new Error(`KeywordExpansionAgent API failed: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const args = extractFunctionArguments(data);
-  if (!args) {
-    throw new Error('KeywordExpansionAgent returned no function arguments');
-  }
-
-  const parsed = KeywordExpansionOutputSchema.safeParse(
-    parseModelJsonArguments(args, 'KeywordExpansionAgent')
-  );
-  if (!parsed.success) {
-    throw new Error(`KeywordExpansionAgent returned invalid schema: ${parsed.error.message}`);
-  }
-
-  return parsed.data;
+  return callJsonFunctionAgent({
+    agentName: 'KeywordExpansionAgent',
+    apiKey: OPENAI_API_KEY!,
+    baseUrl: OPENAI_BASE_URL,
+    model: OPENAI_MODEL,
+    systemPrompt: SYSTEM_PROMPT,
+    input: buildModelInput(input),
+    functionDefinition: KEYWORD_EXPANSION_FUNCTION,
+    functionName: 'expandRestaurantSearchKeywords',
+    schema: KeywordExpansionOutputSchema,
+    temperature: 0.2,
+    maxTokens: 700,
+    timeoutMs: KEYWORD_EXPANSION_TIMEOUT,
+  }) as Promise<KeywordExpansionOutput>;
 }
 
 function buildModelInput(input: KeywordExpansionAgentInput) {
@@ -213,51 +183,4 @@ function goalKeywords(goal: UserGoal): string[] {
 
 function mergeKeywords(left: string[], right: string[]): string[] {
   return Array.from(new Set([...left, ...right].map((keyword) => keyword.trim()).filter(Boolean)));
-}
-
-function extractFunctionArguments(data: {
-  choices?: Array<{
-    message?: {
-      content?: string;
-      function_call?: { name: string; arguments: string };
-      tool_calls?: Array<{
-        type: string;
-        function: { name: string; arguments: string };
-      }>;
-    };
-  }>;
-}): string | null {
-  const message = data.choices?.[0]?.message;
-  if (message?.function_call?.arguments) {
-    return message.function_call.arguments;
-  }
-
-  const toolCall = message?.tool_calls?.find((item) => item.type === 'function');
-  if (toolCall?.function.arguments) {
-    return toolCall.function.arguments;
-  }
-
-  return extractJsonObjectFromText(message?.content ?? '');
-}
-
-function extractJsonObjectFromText(content: string): string | null {
-  const start = content.indexOf('{');
-  if (start === -1) {
-    return null;
-  }
-
-  let depth = 0;
-  for (let index = start; index < content.length; index++) {
-    const char = content[index];
-    if (char === '{') {
-      depth++;
-    } else if (char === '}') {
-      depth--;
-      if (depth === 0) {
-        return content.slice(start, index + 1);
-      }
-    }
-  }
-
-  return null;
 }
