@@ -243,6 +243,105 @@ describe('runSearchAgentV3', () => {
     expect(result.unmetConstraints?.join('')).toContain('未授权放宽');
   });
 
+  it('promotes existing broadened candidates after the user authorizes broadening', async () => {
+    const first = await runSearchAgentV3(
+      input(goal({
+        rawQuery: '炸鸡薯条',
+        requestedItems: [
+          { name: '炸鸡', required: true, aliases: ['鸡排', '炸物'] },
+          { name: '薯条', required: true, aliases: ['汉堡'] },
+        ],
+        acceptableCategories: [{ name: '快餐', confidence: 0.8 }],
+        primaryKeywords: ['炸鸡', '薯条'],
+        broadenedKeywords: ['小吃'],
+        allowBroaden: false,
+      })),
+      () => undefined,
+      async (plan) => plan.searchIntent === 'broadened'
+        ? [restaurant('r1', '沙县小吃', '小吃', 200)]
+        : []
+    );
+
+    expect(first.paused).toBe(true);
+    expect(first.runtimeState?.attempts.some((attempt) =>
+      attempt.searchIntent === 'broadened' && attempt.allowedForPrimary === false
+    )).toBe(true);
+
+    const searchPlaces = jest.fn(async () => []);
+    const second = await runSearchAgentV3(
+      {
+        query: '都行',
+        location,
+        runtimeState: first.runtimeState,
+      },
+      () => undefined,
+      searchPlaces
+    );
+
+    expect(searchPlaces).not.toHaveBeenCalled();
+    expect(second.paused).not.toBe(true);
+    expect(second.restaurants.map((item) => item.name)).toEqual(['沙县小吃']);
+    expect(second.runtimeState?.attempts.some((attempt) =>
+      attempt.searchIntent === 'broadened' && attempt.allowedForPrimary === true
+    )).toBe(true);
+  });
+
+  it('finalizes already promoted broadened candidates without asking the Supervisor for another search', async () => {
+    const searchPlaces = jest.fn(async () => []);
+    const result = await runSearchAgentV3(
+      {
+        query: '允许放宽',
+        location,
+        runtimeState: {
+          goal: goal({
+            rawQuery: '炸鸡薯条，允许放宽',
+            requestedItems: [
+              { name: '炸鸡', required: true, aliases: ['鸡排', '炸物'] },
+              { name: '薯条', required: true, aliases: ['汉堡'] },
+            ],
+            acceptableCategories: [{ name: '快餐', confidence: 0.8 }],
+            primaryKeywords: ['炸鸡', '薯条'],
+            allowBroaden: true,
+          }),
+          attempts: [{
+            keywords: ['小吃'],
+            radius: 1800,
+            searchIntent: 'broadened',
+            allowedForPrimary: true,
+            reason: '原始目标不足，搜索相邻品类作为候补。 用户已授权放宽，可进入主推荐。',
+            found: 1,
+            accepted: 1,
+          }],
+          candidates: [{
+            restaurant: restaurant('r1', '沙县小吃', '小吃', 200),
+            score: 95,
+            matched: ['Agent 验证品类小吃'],
+            warnings: [],
+            sourceAttempt: 1,
+            verification: {
+              restaurantId: 'r1',
+              status: 'passed',
+              primaryEligible: true,
+              hardFailures: [],
+              itemMatches: [],
+              categoryMatches: ['小吃'],
+              warnings: [],
+              confidence: 0.9,
+            },
+          }],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      searchPlaces
+    );
+
+    expect(searchPlaces).not.toHaveBeenCalled();
+    expect(result.paused).not.toBe(true);
+    expect(result.restaurants.map((item) => item.name)).toEqual(['沙县小吃']);
+  });
+
   it('allows broadened candidates into primary only after user authorization', async () => {
     const result = await runSearchAgentV3(
       input(goal({
@@ -544,7 +643,7 @@ describe('runSearchAgentV3', () => {
 
         return [
           restaurant('r4', '刺身居酒屋', '日本料理', 450),
-          restaurant('r5', '深夜拉面', '日式拉面', 650),
+          restaurant('r5', '深夜拉面', '日本料理', 650),
           restaurant('r6', '寿司专门店', '寿司', 800),
         ];
       }

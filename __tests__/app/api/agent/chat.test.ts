@@ -19,7 +19,7 @@ jest.mock('@/lib/agent/runtimeV3', () => ({
 import { POST } from '@/app/api/agent/chat/route';
 import { createAgentSession, saveAgentSession } from '@/lib/agent/session';
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
-import type { UserGoal } from '@/lib/agent/types';
+import type { RestaurantCandidate, SearchAttempt, UserGoal } from '@/lib/agent/types';
 import type { Location } from '@/types';
 import { ReadableStream } from 'stream/web';
 import { TextDecoder, TextEncoder } from 'util';
@@ -205,5 +205,64 @@ describe('/api/agent/chat', () => {
     expect(runtimeInput.runtimeState.goal.hardConstraints).toEqual(
       expect.arrayContaining([expect.objectContaining({ maxMeters: 5000, strict: false })])
     );
+  });
+
+  it('promotes existing fallback candidates when structured option effects authorize broadening', async () => {
+    const pausedSession = createAgentSession('随便吃点', location);
+    pausedSession.goal = goal({ allowBroaden: false });
+    pausedSession.attempts = [{
+      keywords: ['餐厅', '美食'],
+      radius: 1800,
+      searchIntent: 'fallback',
+      allowedForPrimary: false,
+      reason: '未授权时作为候补搜索。',
+      found: 1,
+      accepted: 1,
+    }] satisfies SearchAttempt[];
+    pausedSession.candidates = [{
+      restaurant: {
+        id: 'r1',
+        name: '社区餐厅',
+        cuisineType: '餐饮',
+        address: '测试地址',
+        location,
+        source: 'amap',
+        distance: 300,
+      },
+      score: 70,
+      matched: ['Agent 验证符合搜索意图。'],
+      warnings: [],
+      sourceAttempt: 1,
+      verification: {
+        restaurantId: 'r1',
+        status: 'passed',
+        primaryEligible: false,
+        hardFailures: [],
+        itemMatches: [],
+        categoryMatches: ['餐饮'],
+        warnings: [],
+        confidence: 0.9,
+      },
+    }] satisfies RestaurantCandidate[];
+    pausedSession.pendingQuestion = {
+      question: '没有找到符合条件的餐厅，要调整需求或允许放宽吗？',
+      options: ['允许放宽'],
+      allowFreeText: true,
+      optionEffects: {
+        '允许放宽': { allowBroaden: true },
+      },
+    };
+    saveAgentSession(pausedSession);
+
+    const response = await POST(jsonRequest({
+      message: '允许放宽',
+      location,
+      sessionId: pausedSession.id,
+    }));
+    await readSseEvents(response);
+
+    const runtimeInput = (runSearchAgentV3 as jest.Mock).mock.calls.at(-1)?.[0];
+    expect(runtimeInput.runtimeState.attempts[0].allowedForPrimary).toBe(true);
+    expect(runtimeInput.runtimeState.candidates[0].verification.primaryEligible).toBe(true);
   });
 });

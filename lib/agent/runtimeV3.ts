@@ -7,6 +7,10 @@ import {
 import { evaluateSearchResult, mergeCandidates } from './evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
+import {
+  hasPromotedBroadenedPrimaryCandidates,
+  promoteAuthorizedBroadenedResults,
+} from './broadenAdmission';
 import { UserGoalSchema } from './schemas/goal';
 import { SearchPlanSchema } from './schemas/plan';
 import { finalizeRecommendations } from './resultAssembler';
@@ -87,6 +91,23 @@ export async function runSearchAgentV3(
     const action: AgentAction = { type: 'ask_user', question: clarifyingQuestion };
     appendAction(context, action, emit);
     return buildPausedResult(context, clarifyingQuestion);
+  }
+
+  const promotion = promoteAuthorizedBroadenedResults(context);
+  if (
+    hasPrimaryCandidates(context)
+    && (promotion.promotedCandidates > 0 || hasPromotedBroadenedPrimaryCandidates(context))
+  ) {
+    const action: AgentAction = {
+      type: 'finish',
+      selectedIds: context.candidates
+        .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
+        .map((candidate) => candidate.restaurant.id),
+      explanation: '用户已授权放宽，已将上一轮候补结果重新纳入主推荐。',
+      confidence: 0.66,
+    };
+    appendAction(context, action, emit);
+    return finish(context, action, emit);
   }
 
   while (context.actions.length < context.maxActions) {

@@ -1,5 +1,6 @@
 import { logger } from '@/lib/logger';
 import { callJsonFunctionAgent } from './modelClient';
+import { promoteAuthorizedBroadenedResults } from './broadenAdmission';
 import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
 import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
 import type {
@@ -262,6 +263,9 @@ export function applySupervisorClarifyingAnswer(session: AgentSession, answer: s
     ? `${goal.rawQuery}，${normalized}`
     : goal.rawQuery;
   session.goal = applyGoalPatch(goal, patch, rawQuery);
+  if (effect.allowBroaden === true) {
+    promoteAuthorizedBroadenedResults(session);
+  }
   session.pendingQuestion = undefined;
 }
 
