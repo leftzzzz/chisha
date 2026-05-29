@@ -48,14 +48,52 @@ describe('Agent schema defaults', () => {
       verdicts: [{
         restaurantId: 'r1',
         status: 'passed',
-        primaryEligible: true,
-        confidence: 0.8,
       }],
     });
 
     expect(parsed.selectedIds).toEqual([]);
     expect(parsed.candidateIds).toEqual([]);
     expect(parsed.explanation).toBe('已完成候选评估。');
+    expect(parsed.verdicts[0]).toEqual(expect.objectContaining({
+      primaryEligible: false,
+      confidence: 0.5,
+    }));
     expect(parsed.verdicts[0].matchedItems).toEqual([]);
+  });
+
+  it('tolerates common malformed evaluation output fields', () => {
+    const parsed = EvaluationAgentOutputSchema.parse({
+      verdicts: [
+        {
+          id: 'r1',
+          status: 'passed',
+          primaryEligible: 'true',
+          confidence: '0.85',
+          matchedItems: '牛排',
+          matchedCategories: '西餐',
+        },
+        {
+          status: 'passed',
+          confidence: 0.9,
+        },
+      ],
+      selectedIds: 'r1',
+      candidateIds: null,
+      explanation: null,
+      unmetConstraints: '部分字段由 schema 容错默认。',
+    });
+
+    expect(parsed.verdicts).toHaveLength(1);
+    expect(parsed.verdicts[0]).toEqual(expect.objectContaining({
+      restaurantId: 'r1',
+      primaryEligible: true,
+      confidence: 0.85,
+      matchedItems: ['牛排'],
+      matchedCategories: ['西餐'],
+    }));
+    expect(parsed.selectedIds).toEqual(['r1']);
+    expect(parsed.candidateIds).toEqual([]);
+    expect(parsed.explanation).toBe('已完成候选评估。');
+    expect(parsed.unmetConstraints).toEqual(['部分字段由 schema 容错默认。']);
   });
 });

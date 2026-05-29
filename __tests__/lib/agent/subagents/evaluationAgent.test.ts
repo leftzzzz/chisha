@@ -142,4 +142,36 @@ describe('EvaluationAgent', () => {
       targetCount: 8,
     })).rejects.toThrow('EvaluationAgent requires OPENAI_API_KEY');
   });
+
+  it('defaults omitted verdict fields from model output instead of failing the whole response', async () => {
+    mockEvaluationResponse({
+      verdicts: [{
+        restaurantId: 'r1',
+        status: 'passed',
+        primaryEligible: true,
+        matchedItems: ['牛排'],
+        matchedCategories: ['西餐'],
+        evidence: ['Agent 判定符合。'],
+      }],
+      selectedIds: ['r1'],
+    });
+
+    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
+    const output = await runEvaluationAgent({
+      goal: goal(),
+      plan: exactPlan,
+      restaurants: [restaurant('r1', '城中牛排馆', '西餐厅', 300)],
+      targetCount: 8,
+    });
+
+    expect(output.verdicts[0]).toEqual(expect.objectContaining({
+      restaurantId: 'r1',
+      confidence: 0.5,
+      conflicts: [],
+      warnings: [],
+    }));
+    expect(output.selectedIds).toEqual(['r1']);
+    expect(output.candidateIds).toEqual([]);
+    expect(output.unmetConstraints).toEqual([]);
+  });
 });
