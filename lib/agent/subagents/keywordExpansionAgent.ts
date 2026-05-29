@@ -7,7 +7,7 @@ import type { SearchAttempt, UserGoal, UserPreferenceSummary } from '../types';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-const KEYWORD_EXPANSION_TIMEOUT = 12000;
+const KEYWORD_EXPANSION_TIMEOUT = 60000;
 const KEYWORD_EXPANSION_LIMIT = 3;
 
 export interface KeywordExpansionAgentInput {

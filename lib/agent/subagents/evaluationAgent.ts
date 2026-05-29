@@ -13,7 +13,7 @@ import type {
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-const EVALUATION_TIMEOUT = 18000;
+const EVALUATION_TIMEOUT = 60000;
 const MIN_EVALUATION_MAX_TOKENS = 1600;
 const MAX_EVALUATION_MAX_TOKENS = 4096;
 

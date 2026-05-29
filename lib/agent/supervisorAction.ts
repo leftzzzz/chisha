@@ -18,7 +18,7 @@ import type {
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-const SUPERVISOR_ACTION_TIMEOUT = 15000;
+const SUPERVISOR_ACTION_TIMEOUT = 60000;
 const MIN_PRIMARY_BEFORE_OPTIONAL_EXPANSION = 6;
 
 export interface SearchSupervisorActionInput {

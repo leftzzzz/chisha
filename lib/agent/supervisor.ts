@@ -21,7 +21,7 @@ import type {
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-const SUPERVISOR_TIMEOUT = 18000;
+const SUPERVISOR_TIMEOUT = 60000;
 const SUPERVISOR_MAX_TOKENS = 4096;
 const SUPERVISOR_RETRY_MAX_TOKENS = 8192;
 
