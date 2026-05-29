@@ -448,6 +448,29 @@ describe('SearchSupervisorAgent', () => {
     expect(parsed.goal?.allowBroaden).toBe(false);
   });
 
+  it('accepts boolean hard constraint values from model output', () => {
+    const parsed = SearchSupervisorOutputSchema.parse({
+      goal: {
+        intent: 'find_restaurants',
+        rawQuery: '找现在营业的餐厅',
+        hardConstraints: [{
+          kind: 'open_now',
+          label: '当前营业',
+          value: true,
+          strict: true,
+        }],
+      },
+      nextAction: 'plan',
+    });
+
+    expect(parsed.goal?.hardConstraints[0]).toEqual({
+      kind: 'open_now',
+      label: '当前营业',
+      value: true,
+      strict: true,
+    });
+  });
+
   it('defaults omitted patch reason from model output', () => {
     const parsed = SearchSupervisorOutputSchema.parse({
       patch: {

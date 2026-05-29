@@ -14,6 +14,7 @@ export const ConstraintSchema = z.object({
   value: z.union([
     z.string(),
     z.number(),
+    z.boolean(),
     z.array(z.string()),
     z.object({
       min: z.number().optional(),

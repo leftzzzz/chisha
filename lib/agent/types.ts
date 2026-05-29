@@ -21,7 +21,7 @@ export type ConstraintKind =
 export interface Constraint {
   kind: ConstraintKind;
   label: string;
-  value?: string | number | string[] | { min?: number; max?: number };
+  value?: string | number | boolean | string[] | { min?: number; max?: number };
   strict?: boolean;
   maxMeters?: number;
   values?: string[];

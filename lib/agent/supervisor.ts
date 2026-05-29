@@ -777,6 +777,7 @@ function constraintJsonSchema() {
         oneOf: [
           { type: 'string' },
           { type: 'number' },
+          { type: 'boolean' },
           { type: 'array', items: { type: 'string' } },
           {
             type: 'object',
