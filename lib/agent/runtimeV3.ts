@@ -53,6 +53,7 @@ interface AgentV3Context extends AgentContext {
 }
 
 const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 4);
+const DEFAULT_AGENT_EVALUATION_LIMIT = parsePositiveInt(process.env.AGENT_EVALUATION_LIMIT, 24);
 
 interface GuardedAction {
   action: AgentAction;
@@ -639,11 +640,36 @@ async function executeSearchAction(
   emit({ type: 'searching', keywords: plan.keywords, round });
   emit({ type: 'tool_start', tool: 'search_restaurants', args: plan });
 
+  const toolStartedAt = Date.now();
   const restaurants = await searchPlaces(plan);
+  emit({
+    type: 'tool_result',
+    tool: 'search_restaurants',
+    summary: {
+      found: restaurants.length,
+      provider: inferObservationProvider(restaurants),
+      durationMs: Date.now() - toolStartedAt,
+    },
+  });
+  emit({
+    type: 'search_result',
+    found: restaurants.length,
+    total: restaurants.length,
+    restaurants: summarizeRestaurantsForEvent(restaurants),
+  });
+
+  const evaluationRestaurants = selectRestaurantsForEvaluation(restaurants, context.targetCount);
+  emit({
+    type: 'status',
+    message: evaluationRestaurants.length < restaurants.length
+      ? `EvaluationAgent 正在验证前 ${evaluationRestaurants.length} 家候选餐厅...`
+      : 'EvaluationAgent 正在验证候选餐厅...',
+  });
+
   const agentEvaluation = await runEvaluationAgent({
     goal: context.goal,
     plan,
-    restaurants,
+    restaurants: evaluationRestaurants,
     existingCandidates: context.candidates.map((candidate) => ({
       restaurant: candidate.restaurant,
       verdict: candidateToVerdict(candidate),
@@ -652,7 +678,7 @@ async function executeSearchAction(
     targetCount: context.targetCount,
     preferenceSummary: context.preferenceSummary,
   });
-  const hardGuard = applyHardConstraintGuard(restaurants, context.goal);
+  const hardGuard = applyHardConstraintGuard(evaluationRestaurants, context.goal);
   const hardRejectedReasons = hardGuard.rejected.flatMap((item) => item.reasons);
   context.unmetConstraints.push(...hardRejectedReasons);
   if (!plan.allowedForPrimary && restaurants.length > 0) {
@@ -661,13 +687,13 @@ async function executeSearchAction(
 
   const verdictGuard = applyVerdictGuard(
     agentEvaluation,
-    restaurants,
+    evaluationRestaurants,
     context.goal,
     plan,
     context.targetCount
   );
   const evaluated = evaluateSearchResult(
-    restaurants,
+    evaluationRestaurants,
     context,
     plan,
     round,
@@ -705,27 +731,6 @@ async function executeSearchAction(
   ]));
 
   emit({
-    type: 'search_result',
-    found: restaurants.length,
-    total: context.candidates.length,
-    restaurants: context.candidates.map((candidate) => ({
-      id: candidate.restaurant.id,
-      name: candidate.restaurant.name,
-      cuisineType: candidate.restaurant.cuisineType,
-      distance: candidate.restaurant.distance,
-    })),
-  });
-  emit({
-    type: 'tool_result',
-    tool: 'search_restaurants',
-    summary: {
-      found: restaurants.length,
-      hardRejected: hardGuard.rejected.length,
-      accepted: evaluated.acceptedCandidates.length,
-      total: context.candidates.length,
-    },
-  });
-  emit({
     type: 'partial_results',
     restaurants: context.candidates
       .slice(0, context.targetCount)
@@ -750,6 +755,25 @@ async function executeSearchAction(
 
 function inferObservationProvider(restaurants: Restaurant[]): AgentObservation['provider'] {
   return restaurants.some((restaurant) => restaurant.source === 'osm') ? 'osm' : 'amap';
+}
+
+function summarizeRestaurantsForEvent(restaurants: Restaurant[]): Array<{
+  id: string;
+  name: string;
+  cuisineType: string;
+  distance?: number;
+}> {
+  return restaurants.map((restaurant) => ({
+    id: restaurant.id,
+    name: restaurant.name,
+    cuisineType: restaurant.cuisineType,
+    distance: restaurant.distance,
+  }));
+}
+
+function selectRestaurantsForEvaluation(restaurants: Restaurant[], targetCount: number): Restaurant[] {
+  const limit = Math.max(targetCount, DEFAULT_AGENT_EVALUATION_LIMIT);
+  return restaurants.slice(0, limit);
 }
 
 function appendAction(
@@ -855,7 +879,7 @@ function hasPrimaryCandidates(context: AgentV3Context): boolean {
 function hasTriedPlan(context: AgentV3Context, plan: SearchPlan): boolean {
   const key = searchPlanKey(plan);
   return context.attempts.some((attempt) =>
-    `${attempt.searchIntent}:${attempt.keywords.join('|')}:${attempt.radius}:${attempt.poiType ?? ''}` === key
+    `${attempt.keywords.join('|')}:${attempt.radius}:${attempt.poiType ?? ''}` === key
   );
 }
 
@@ -982,7 +1006,7 @@ function nextRuntimeRadius(context: AgentV3Context): number {
 }
 
 function searchPlanKey(plan: SearchPlan): string {
-  return `${plan.searchIntent}:${plan.keywords.join('|')}:${plan.radiusMeters}:${plan.poiType ?? ''}`;
+  return `${plan.keywords.join('|')}:${plan.radiusMeters}:${plan.poiType ?? ''}`;
 }
 
 function getStrictDistanceMaxMeters(goal: UserGoal): number | undefined {

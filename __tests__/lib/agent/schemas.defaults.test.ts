@@ -1,5 +1,6 @@
 import { AgentActionSchema } from '@/lib/agent/schemas/action';
 import { UserGoalSchema } from '@/lib/agent/schemas/goal';
+import { KeywordExpansionOutputSchema } from '@/lib/agent/schemas/keywordExpansion';
 import { PlanningAgentOutputSchema, SearchPlanSchema } from '@/lib/agent/schemas/plan';
 import { EvaluationAgentOutputSchema } from '@/lib/agent/schemas/verdict';
 
@@ -26,6 +27,45 @@ describe('Agent schema defaults', () => {
     });
   });
 
+  it('tolerates common scalar fields in UserGoal model output', () => {
+    const parsed = UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '找现在营业的日料',
+      requestedItems: '日料',
+      acceptableCategories: '日本料理',
+      primaryKeywords: '日料',
+      relatedTargets: {
+        keyword: '寿司',
+        poiTypes: '050202|050203',
+        confidence: '0.7',
+      },
+      hardConstraints: {
+        kind: 'open_now',
+        label: '当前营业',
+        value: true,
+        strict: 'true',
+      },
+      softPreferences: '清淡',
+      allowBroaden: 'false',
+    });
+
+    expect(parsed.requestedItems).toEqual([{ name: '日料', required: true, aliases: [] }]);
+    expect(parsed.acceptableCategories).toEqual([{ name: '日本料理', confidence: 0.8 }]);
+    expect(parsed.primaryKeywords).toEqual(['日料']);
+    expect(parsed.relatedTargets).toEqual([expect.objectContaining({
+      keyword: '寿司',
+      poiTypes: ['050202', '050203'],
+      confidence: 0.7,
+    })]);
+    expect(parsed.hardConstraints[0]).toEqual(expect.objectContaining({
+      kind: 'open_now',
+      value: true,
+      strict: true,
+    }));
+    expect(parsed.softPreferences).toEqual([{ name: '清淡', weight: 1, verifiable: false }]);
+    expect(parsed.allowBroaden).toBe(false);
+  });
+
   it('defaults optional explanation fields in action and plan outputs', () => {
     expect(AgentActionSchema.parse({ type: 'finish' })).toEqual({
       type: 'finish',
@@ -41,6 +81,68 @@ describe('Agent schema defaults', () => {
     }).reason).toBe('根据用户目标搜索。');
 
     expect(PlanningAgentOutputSchema.parse({}).plans).toEqual([]);
+  });
+
+  it('tolerates common scalar fields in action and plan outputs', () => {
+    const plan = SearchPlanSchema.parse({
+      keywords: '日料',
+      radiusMeters: '1800',
+      searchIntent: 'exact',
+      allowedForPrimary: 'true',
+      reason: null,
+    });
+    expect(plan).toEqual({
+      keywords: ['日料'],
+      radiusMeters: 1800,
+      searchIntent: 'exact',
+      allowedForPrimary: true,
+      reason: '根据用户目标搜索。',
+    });
+
+    const action = AgentActionSchema.parse({
+      type: 'finish',
+      selectedIds: 'r1',
+      candidateIds: null,
+      confidence: '0.75',
+      explanation: null,
+    });
+    expect(action).toEqual(expect.objectContaining({
+      type: 'finish',
+      selectedIds: ['r1'],
+      explanation: '已完成当前推荐。',
+      confidence: 0.75,
+    }));
+    if (action.type === 'finish') {
+      expect(action.candidateIds).toBeUndefined();
+    }
+  });
+
+  it('tolerates common scalar fields in keyword expansion output', () => {
+    const parsed = KeywordExpansionOutputSchema.parse({
+      relatedKeywords: '寿司',
+      broadenedKeywords: null,
+      relatedTargets: {
+        keyword: '刺身',
+        poiTypes: '050202|050203',
+        confidence: '0.9',
+        reason: null,
+      },
+      broadenedTargets: '居酒屋',
+      rationale: null,
+    });
+
+    expect(parsed.relatedKeywords).toEqual(['寿司']);
+    expect(parsed.broadenedKeywords).toEqual([]);
+    expect(parsed.relatedTargets[0]).toEqual(expect.objectContaining({
+      keyword: '刺身',
+      poiTypes: ['050202', '050203'],
+      confidence: 0.9,
+    }));
+    expect(parsed.broadenedTargets[0]).toEqual(expect.objectContaining({
+      keyword: '居酒屋',
+      confidence: 0.5,
+    }));
+    expect(parsed.rationale).toBe('根据用户目标生成搜索联想词。');
   });
 
   it('defaults non-critical evaluation output fields', () => {

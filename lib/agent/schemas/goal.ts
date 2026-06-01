@@ -8,6 +8,105 @@ export const ConstraintKindSchema = z.enum([
   'open_now',
 ]);
 
+function defaultArray<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => {
+    if (value === undefined || value === null) {
+      return [];
+    }
+
+    return Array.isArray(value) ? value : [value];
+  }, z.array(schema).default([]).catch([]));
+}
+
+function optionalArray<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    return Array.isArray(value) ? value : [value];
+  }, z.array(schema)).optional().catch(undefined);
+}
+
+const OptionalStringArraySchema = optionalArray(z.string());
+const DefaultStringArraySchema = defaultArray(z.string());
+
+const OptionalStringSchema = z.preprocess((value) => {
+  return typeof value === 'string' ? value : undefined;
+}, z.string()).optional().catch(undefined);
+
+const OptionalBooleanSchema = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    if (value.toLowerCase() === 'true') return true;
+    if (value.toLowerCase() === 'false') return false;
+  }
+
+  return value;
+}, z.boolean()).optional().catch(undefined);
+
+function booleanWithDefault(defaultValue: boolean) {
+  return z.preprocess((value) => {
+    if (typeof value === 'string') {
+      if (value.toLowerCase() === 'true') return true;
+      if (value.toLowerCase() === 'false') return false;
+    }
+
+    return value;
+  }, z.boolean()).default(defaultValue).catch(defaultValue);
+}
+
+const OptionalNumberSchema = z.preprocess((value) => {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  return value;
+}, z.coerce.number()).optional().catch(undefined);
+
+function numberWithDefault(defaultValue: number) {
+  return z.preprocess((value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    return value;
+  }, z.coerce.number()).default(defaultValue).catch(defaultValue);
+}
+
+function boundedNumberWithDefault(defaultValue: number, min: number, max: number) {
+  return z.preprocess((value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    return value;
+  }, z.coerce.number().min(min).max(max)).default(defaultValue).catch(defaultValue);
+}
+
+function stringWithDefault(defaultValue: string) {
+  return z.preprocess((value) => {
+    return typeof value === 'string' ? value : undefined;
+  }, z.string().min(1).default(defaultValue).catch(defaultValue));
+}
+
+const OptionalPoiTypeArraySchema = z.preprocess((value) => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const values = Array.isArray(value) ? value : [value];
+  return values.flatMap((item) =>
+    typeof item === 'string'
+      ? item.split('|').map((code) => code.trim()).filter(Boolean)
+      : item
+  );
+}, z.array(z.string().regex(/^\d{6}$/)).max(5)).optional().catch(undefined);
+
+const ConstraintRangeSchema = z.object({
+  min: OptionalNumberSchema,
+  max: OptionalNumberSchema,
+});
+
 export const ConstraintSchema = z.object({
   kind: ConstraintKindSchema,
   label: z.string().min(1).default('约束'),
@@ -16,40 +115,55 @@ export const ConstraintSchema = z.object({
     z.number(),
     z.boolean(),
     z.array(z.string()),
-    z.object({
-      min: z.number().optional(),
-      max: z.number().optional(),
-    }),
+    ConstraintRangeSchema,
   ]).optional(),
-  strict: z.boolean().optional(),
-  maxMeters: z.number().optional(),
-  values: z.array(z.string()).optional(),
-  min: z.number().optional(),
-  max: z.number().optional(),
+  strict: OptionalBooleanSchema,
+  maxMeters: OptionalNumberSchema,
+  values: OptionalStringArraySchema,
+  min: OptionalNumberSchema,
+  max: OptionalNumberSchema,
 });
 
-export const PreferenceSchema = z.object({
-  name: z.string().min(1),
-  weight: z.number().default(1),
-  verifiable: z.boolean().default(false),
-});
+export const PreferenceSchema = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    return { name: value };
+  }
 
-export const RequestedItemSchema = z.object({
+  return value;
+}, z.object({
   name: z.string().min(1),
-  required: z.boolean().default(true),
-  aliases: z.array(z.string()).default([]),
-});
+  weight: numberWithDefault(1),
+  verifiable: booleanWithDefault(false),
+}));
 
-export const GoalCategorySchema = z.object({
+export const RequestedItemSchema = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    return { name: value };
+  }
+
+  return value;
+}, z.object({
   name: z.string().min(1),
-  confidence: z.number().min(0).max(1).default(0.8),
-});
+  required: booleanWithDefault(true),
+  aliases: DefaultStringArraySchema,
+}));
+
+export const GoalCategorySchema = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    return { name: value };
+  }
+
+  return value;
+}, z.object({
+  name: z.string().min(1),
+  confidence: boundedNumberWithDefault(0.8, 0, 1),
+}));
 
 export const SearchKeywordTargetSchema = z.object({
   keyword: z.string().min(1).max(30),
-  poiTypes: z.array(z.string().regex(/^\d{6}$/)).max(5).optional(),
-  confidence: z.number().min(0).max(1).default(0.5),
-  reason: z.string().max(120).optional(),
+  poiTypes: OptionalPoiTypeArraySchema,
+  confidence: boundedNumberWithDefault(0.5, 0, 1),
+  reason: OptionalStringSchema.pipe(z.string().max(120).optional()),
 });
 
 const ClarificationEffectTargetSchema = z.preprocess((value) => {
@@ -65,23 +179,23 @@ const ClarificationEffectTargetSchema = z.preprocess((value) => {
   return value;
 }, z.string().min(1));
 
-const ClarificationEffectTargetListSchema = z.array(ClarificationEffectTargetSchema);
+const ClarificationEffectTargetListSchema = optionalArray(ClarificationEffectTargetSchema);
 
 export const AlternativeGroupSchema = z.object({
   mode: z.enum(['any_of', 'all_of']),
-  items: z.array(z.string().min(1)),
-  minPerGroup: z.number().int().positive().optional(),
+  items: defaultArray(z.string().min(1)),
+  minPerGroup: OptionalNumberSchema,
 });
 
 export const ClarificationEffectSchema = z.object({
-  replaceRequestedItems: ClarificationEffectTargetListSchema.optional(),
-  replaceCategories: ClarificationEffectTargetListSchema.optional(),
-  replacePrimaryKeywords: ClarificationEffectTargetListSchema.optional(),
-  addRequestedItems: ClarificationEffectTargetListSchema.optional(),
-  addCategories: ClarificationEffectTargetListSchema.optional(),
-  addSoftPreferences: z.array(PreferenceSchema).optional(),
-  setDistanceMaxMeters: z.number().optional(),
-  allowBroaden: z.boolean().optional(),
+  replaceRequestedItems: ClarificationEffectTargetListSchema,
+  replaceCategories: ClarificationEffectTargetListSchema,
+  replacePrimaryKeywords: ClarificationEffectTargetListSchema,
+  addRequestedItems: ClarificationEffectTargetListSchema,
+  addCategories: ClarificationEffectTargetListSchema,
+  addSoftPreferences: optionalArray(PreferenceSchema),
+  setDistanceMaxMeters: OptionalNumberSchema,
+  allowBroaden: OptionalBooleanSchema,
 });
 
 export const ClarificationOptionSchema = z.preprocess((value) => {
@@ -136,7 +250,7 @@ export const ClarificationNeedSchema = z.preprocess((value) => {
   reason: z.string().min(1).default('需要补充信息。'),
   question: z.string().min(1),
   options: ClarificationOptionListSchema,
-  allowFreeText: z.boolean().default(true),
+  allowFreeText: booleanWithDefault(true),
 }));
 
 const ClarificationNeedListSchema = z.preprocess((value) => {
@@ -157,47 +271,47 @@ export const UserGoalSchema = z.object({
   intent: z.literal('find_restaurants'),
   rawQuery: z.string(),
   poiType: z.string().regex(/^\d{6}$/).optional(),
-  requestedItems: z.array(RequestedItemSchema).default([]),
-  acceptableCategories: z.array(GoalCategorySchema).default([]),
-  alternativeGroups: z.array(AlternativeGroupSchema).default([]),
-  primaryKeywords: z.array(z.string()).default([]),
-  relatedKeywords: z.array(z.string()).default([]),
-  broadenedKeywords: z.array(z.string()).default([]),
-  relatedTargets: z.array(SearchKeywordTargetSchema).default([]),
-  broadenedTargets: z.array(SearchKeywordTargetSchema).default([]),
-  hardConstraints: z.array(ConstraintSchema).default([]),
-  softPreferences: z.array(PreferenceSchema).default([]),
-  exclusions: z.array(z.string()).default([]),
-  ambiguity: z.array(z.string()).default([]),
+  requestedItems: defaultArray(RequestedItemSchema),
+  acceptableCategories: defaultArray(GoalCategorySchema),
+  alternativeGroups: defaultArray(AlternativeGroupSchema),
+  primaryKeywords: DefaultStringArraySchema,
+  relatedKeywords: DefaultStringArraySchema,
+  broadenedKeywords: DefaultStringArraySchema,
+  relatedTargets: defaultArray(SearchKeywordTargetSchema),
+  broadenedTargets: defaultArray(SearchKeywordTargetSchema),
+  hardConstraints: defaultArray(ConstraintSchema),
+  softPreferences: defaultArray(PreferenceSchema),
+  exclusions: DefaultStringArraySchema,
+  ambiguity: DefaultStringArraySchema,
   clarificationNeeded: ClarificationNeedListSchema,
-  allowBroaden: z.boolean().default(false),
+  allowBroaden: booleanWithDefault(false),
 });
 
 export const GoalPatchSchema = z.object({
-  replaceRequestedItems: z.array(RequestedItemSchema).optional(),
-  replaceCategories: z.array(GoalCategorySchema).optional(),
-  replacePrimaryKeywords: z.array(z.string()).optional(),
-  addRequestedItems: z.array(RequestedItemSchema).optional(),
-  addCategories: z.array(GoalCategorySchema).optional(),
-  addSoftPreferences: z.array(PreferenceSchema).optional(),
-  addConstraints: z.array(ConstraintSchema).optional(),
-  removeConstraints: z.array(z.string()).optional(),
-  allowBroaden: z.boolean().optional(),
-  reason: z.string().min(1).default('SearchSupervisorAgent 更新目标。'),
+  replaceRequestedItems: optionalArray(RequestedItemSchema),
+  replaceCategories: optionalArray(GoalCategorySchema),
+  replacePrimaryKeywords: OptionalStringArraySchema,
+  addRequestedItems: optionalArray(RequestedItemSchema),
+  addCategories: optionalArray(GoalCategorySchema),
+  addSoftPreferences: optionalArray(PreferenceSchema),
+  addConstraints: optionalArray(ConstraintSchema),
+  removeConstraints: OptionalStringArraySchema,
+  allowBroaden: OptionalBooleanSchema,
+  reason: stringWithDefault('SearchSupervisorAgent 更新目标。'),
 });
 
 export const AgentGoalDraftSchema = z.object({
-  requestedItems: z.array(RequestedItemSchema).default([]),
-  acceptableCategories: z.array(GoalCategorySchema).default([]),
-  alternativeGroups: z.array(AlternativeGroupSchema).default([]),
-  primaryKeywords: z.array(z.string().min(1)).default([]),
-  relatedKeywords: z.array(z.string().min(1)).default([]),
-  broadenedKeywords: z.array(z.string().min(1)).default([]),
-  relatedTargets: z.array(SearchKeywordTargetSchema).default([]),
-  broadenedTargets: z.array(SearchKeywordTargetSchema).default([]),
+  requestedItems: defaultArray(RequestedItemSchema),
+  acceptableCategories: defaultArray(GoalCategorySchema),
+  alternativeGroups: defaultArray(AlternativeGroupSchema),
+  primaryKeywords: defaultArray(z.string().min(1)),
+  relatedKeywords: defaultArray(z.string().min(1)),
+  broadenedKeywords: defaultArray(z.string().min(1)),
+  relatedTargets: defaultArray(SearchKeywordTargetSchema),
+  broadenedTargets: defaultArray(SearchKeywordTargetSchema),
   poiType: z.string().regex(/^\d{6}$/).optional(),
-  softPreferences: z.array(PreferenceSchema).default([]),
-  ambiguity: z.array(z.string()).default([]),
+  softPreferences: defaultArray(PreferenceSchema),
+  ambiguity: DefaultStringArraySchema,
   clarificationNeeded: ClarificationNeedListSchema,
-  allowBroaden: z.boolean().default(false),
+  allowBroaden: booleanWithDefault(false),
 });
