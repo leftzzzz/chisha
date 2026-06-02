@@ -126,6 +126,7 @@ jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
 
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import { runSearchSupervisor } from '@/lib/agent/supervisor';
+import { runEvaluationAgent } from '@/lib/agent/subagents/evaluationAgent';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 
@@ -182,6 +183,10 @@ function input(searchGoal: UserGoal, query = searchGoal.rawQuery): AgentInput {
 }
 
 describe('runSearchAgentV3', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it('uses Supervisor actions and FinalGuard for primary recommendations', async () => {
     const events: AgentEvent[] = [];
     const result = await runSearchAgentV3(
@@ -198,6 +203,60 @@ describe('runSearchAgentV3', () => {
     expect(events.some((event) => event.type === 'action')).toBe(true);
     expect(events.some((event) => event.type === 'observation')).toBe(true);
     expect(events.some((event) => event.type === 'final')).toBe(true);
+  });
+
+  it('limits EvaluationAgent candidates to the target count plus buffer by default', async () => {
+    await runSearchAgentV3(
+      input(goal({
+        rawQuery: 'pizza',
+        acceptableCategories: [{ name: 'pizza', confidence: 0.9 }],
+        primaryKeywords: ['pizza'],
+      })),
+      () => undefined,
+      async () => Array.from({ length: 30 }, (_, index) =>
+        restaurant(`r${index}`, `pizza place ${index}`, 'pizza', 100 + index)
+      )
+    );
+
+    expect(runEvaluationAgent).toHaveBeenCalledTimes(1);
+    const evaluationInput = (runEvaluationAgent as jest.Mock).mock.calls[0][0];
+    expect(evaluationInput.restaurants).toHaveLength(12);
+    expect(evaluationInput.restaurants.map((item: Restaurant) => item.id)).toEqual(
+      Array.from({ length: 12 }, (_, index) => `r${index}`)
+    );
+  });
+
+  it('pre-filters deterministic hard constraint failures before EvaluationAgent runs', async () => {
+    await runSearchAgentV3(
+      input(goal({
+        rawQuery: 'pizza nearby',
+        acceptableCategories: [{ name: 'pizza', confidence: 0.9 }],
+        primaryKeywords: ['pizza'],
+        hardConstraints: [{
+          kind: 'distance',
+          label: '500m',
+          value: 500,
+          maxMeters: 500,
+          strict: true,
+        }],
+      })),
+      () => undefined,
+      async () => [
+        ...Array.from({ length: 6 }, (_, index) =>
+          restaurant(`far${index}`, `pizza far ${index}`, 'pizza', 900 + index)
+        ),
+        ...Array.from({ length: 20 }, (_, index) =>
+          restaurant(`near${index}`, `pizza near ${index}`, 'pizza', 100 + index)
+        ),
+      ]
+    );
+
+    expect(runEvaluationAgent).toHaveBeenCalledTimes(1);
+    const evaluationInput = (runEvaluationAgent as jest.Mock).mock.calls[0][0];
+    expect(evaluationInput.restaurants).toHaveLength(12);
+    expect(evaluationInput.restaurants.map((item: Restaurant) => item.id)).toEqual(
+      Array.from({ length: 12 }, (_, index) => `near${index}`)
+    );
   });
 
   it('clamps strict downstairs distance before calling the search tool', async () => {

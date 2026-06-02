@@ -53,7 +53,10 @@ interface AgentV3Context extends AgentContext {
 }
 
 const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 4);
-const DEFAULT_AGENT_EVALUATION_LIMIT = parsePositiveInt(process.env.AGENT_EVALUATION_LIMIT, 24);
+const DEFAULT_AGENT_EVALUATION_BUFFER = parsePositiveInt(process.env.AGENT_EVALUATION_BUFFER, 4);
+const CONFIGURED_AGENT_EVALUATION_LIMIT = parseOptionalPositiveInt(process.env.AGENT_EVALUATION_LIMIT);
+const MAX_HARD_REJECTED_REASON_DETAILS = 6;
+const MAX_HARD_REJECTED_OBSERVATIONS = 20;
 
 interface GuardedAction {
   action: AgentAction;
@@ -375,6 +378,11 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseOptionalPositiveInt(value: string | undefined): number | undefined {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function patchedRawQuery(goal: UserGoal, patch: GoalPatch, message: string): string {
   const trimmed = message.trim();
   if (!trimmed) {
@@ -658,29 +666,40 @@ async function executeSearchAction(
     restaurants: summarizeRestaurantsForEvent(restaurants),
   });
 
-  const evaluationRestaurants = selectRestaurantsForEvaluation(restaurants, context.targetCount);
-  emit({
-    type: 'status',
-    message: evaluationRestaurants.length < restaurants.length
-      ? `EvaluationAgent 正在验证前 ${evaluationRestaurants.length} 家候选餐厅...`
-      : 'EvaluationAgent 正在验证候选餐厅...',
-  });
-
-  const agentEvaluation = await runEvaluationAgent({
-    goal: context.goal,
-    plan,
-    restaurants: evaluationRestaurants,
-    existingCandidates: context.candidates.map((candidate) => ({
-      restaurant: candidate.restaurant,
-      verdict: candidateToVerdict(candidate),
-      sourceAttempt: candidate.sourceAttempt,
-    })),
-    targetCount: context.targetCount,
-    preferenceSummary: context.preferenceSummary,
-  });
-  const hardGuard = applyHardConstraintGuard(evaluationRestaurants, context.goal);
-  const hardRejectedReasons = hardGuard.rejected.flatMap((item) => item.reasons);
+  const hardGuard = applyHardConstraintGuard(restaurants, context.goal);
+  const hardRejectedReasons = summarizeHardRejectedReasons(hardGuard.rejected);
   context.unmetConstraints.push(...hardRejectedReasons);
+
+  const evaluationRestaurants = selectRestaurantsForEvaluation(hardGuard.passed, context.targetCount);
+  if (evaluationRestaurants.length > 0) {
+    emit({
+      type: 'status',
+      message: evaluationRestaurants.length < restaurants.length
+        ? `EvaluationAgent 正在验证前 ${evaluationRestaurants.length} 家候选餐厅...`
+        : 'EvaluationAgent 正在验证候选餐厅...',
+    });
+  }
+
+  const agentEvaluation = evaluationRestaurants.length > 0
+    ? await runEvaluationAgent({
+      goal: context.goal,
+      plan,
+      restaurants: evaluationRestaurants,
+      existingCandidates: context.candidates.map((candidate) => ({
+        restaurant: candidate.restaurant,
+        verdict: candidateToVerdict(candidate),
+        sourceAttempt: candidate.sourceAttempt,
+      })),
+      targetCount: context.targetCount,
+      preferenceSummary: context.preferenceSummary,
+    })
+    : {
+      verdicts: [],
+      selectedIds: [],
+      candidateIds: [],
+      explanation: 'No candidates to evaluate after deterministic filtering.',
+      unmetConstraints: [],
+    };
   if (!plan.allowedForPrimary && restaurants.length > 0) {
     context.unmetConstraints.push('未授权放宽或兜底结果只作为候补，不进入主推荐。');
   }
@@ -742,7 +761,7 @@ async function executeSearchAction(
     plan,
     provider: inferObservationProvider(restaurants),
     rawCount: restaurants.length,
-    hardRejected: hardGuard.rejected.map((item) => ({
+    hardRejected: hardGuard.rejected.slice(0, MAX_HARD_REJECTED_OBSERVATIONS).map((item) => ({
       restaurantId: item.restaurant.id,
       reasons: item.reasons,
     })),
@@ -772,8 +791,24 @@ function summarizeRestaurantsForEvent(restaurants: Restaurant[]): Array<{
 }
 
 function selectRestaurantsForEvaluation(restaurants: Restaurant[], targetCount: number): Restaurant[] {
-  const limit = Math.max(targetCount, DEFAULT_AGENT_EVALUATION_LIMIT);
+  const dynamicLimit = targetCount + DEFAULT_AGENT_EVALUATION_BUFFER;
+  const configuredLimit = CONFIGURED_AGENT_EVALUATION_LIMIT ?? dynamicLimit;
+  const limit = Math.max(targetCount, configuredLimit);
   return restaurants.slice(0, limit);
+}
+
+function summarizeHardRejectedReasons(
+  rejected: ReturnType<typeof applyHardConstraintGuard>['rejected']
+): string[] {
+  const reasons = rejected.flatMap((item) => item.reasons);
+  if (reasons.length <= MAX_HARD_REJECTED_REASON_DETAILS) {
+    return reasons;
+  }
+
+  return [
+    ...reasons.slice(0, MAX_HARD_REJECTED_REASON_DETAILS),
+    `还有 ${reasons.length - MAX_HARD_REJECTED_REASON_DETAILS} 条明确硬约束不匹配结果已被本地过滤。`,
+  ];
 }
 
 function appendAction(
