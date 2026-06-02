@@ -218,10 +218,12 @@ describe('runSearchAgentV3', () => {
       )
     );
 
-    expect(runEvaluationAgent).toHaveBeenCalledTimes(1);
-    const evaluationInput = (runEvaluationAgent as jest.Mock).mock.calls[0][0];
-    expect(evaluationInput.restaurants).toHaveLength(12);
-    expect(evaluationInput.restaurants.map((item: Restaurant) => item.id)).toEqual(
+    expect(runEvaluationAgent).toHaveBeenCalledTimes(2);
+    const evaluationInputs = (runEvaluationAgent as jest.Mock).mock.calls.map((call) => call[0]);
+    const evaluatedRestaurants = evaluationInputs.flatMap((item) => item.restaurants);
+    expect(evaluationInputs.every((item) => item.restaurants.length <= 6)).toBe(true);
+    expect(evaluatedRestaurants).toHaveLength(12);
+    expect(evaluatedRestaurants.map((item: Restaurant) => item.id)).toEqual(
       Array.from({ length: 12 }, (_, index) => `r${index}`)
     );
   });
@@ -251,10 +253,12 @@ describe('runSearchAgentV3', () => {
       ]
     );
 
-    expect(runEvaluationAgent).toHaveBeenCalledTimes(1);
-    const evaluationInput = (runEvaluationAgent as jest.Mock).mock.calls[0][0];
-    expect(evaluationInput.restaurants).toHaveLength(12);
-    expect(evaluationInput.restaurants.map((item: Restaurant) => item.id)).toEqual(
+    expect(runEvaluationAgent).toHaveBeenCalledTimes(2);
+    const evaluationInputs = (runEvaluationAgent as jest.Mock).mock.calls.map((call) => call[0]);
+    const evaluatedRestaurants = evaluationInputs.flatMap((item) => item.restaurants);
+    expect(evaluationInputs.every((item) => item.restaurants.length <= 6)).toBe(true);
+    expect(evaluatedRestaurants).toHaveLength(12);
+    expect(evaluatedRestaurants.map((item: Restaurant) => item.id)).toEqual(
       Array.from({ length: 12 }, (_, index) => `near${index}`)
     );
   });

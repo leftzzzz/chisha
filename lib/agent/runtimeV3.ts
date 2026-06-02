@@ -22,7 +22,7 @@ import {
   normalizeSearchKeywords,
 } from './poiTaxonomy';
 import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
-import { runEvaluationAgent } from './subagents/evaluationAgent';
+import { runEvaluationAgent, type EvaluationAgentInput } from './subagents/evaluationAgent';
 import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
 import {
   createActionRecord,
@@ -38,6 +38,7 @@ import type {
   AgentRuntimeState,
   CandidateVerdict,
   EmitAgentEvent,
+  EvaluationAgentOutput,
   GoalPatch,
   PendingQuestion,
   RestaurantCandidate,
@@ -54,6 +55,8 @@ interface AgentV3Context extends AgentContext {
 
 const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 4);
 const DEFAULT_AGENT_EVALUATION_BUFFER = parsePositiveInt(process.env.AGENT_EVALUATION_BUFFER, 4);
+const DEFAULT_AGENT_EVALUATION_BATCH_SIZE = parsePositiveInt(process.env.AGENT_EVALUATION_BATCH_SIZE, 6);
+const DEFAULT_AGENT_EVALUATION_CONCURRENCY = parsePositiveInt(process.env.AGENT_EVALUATION_CONCURRENCY, 2);
 const CONFIGURED_AGENT_EVALUATION_LIMIT = parseOptionalPositiveInt(process.env.AGENT_EVALUATION_LIMIT);
 const MAX_HARD_REJECTED_REASON_DETAILS = 6;
 const MAX_HARD_REJECTED_OBSERVATIONS = 20;
@@ -681,7 +684,7 @@ async function executeSearchAction(
   }
 
   const agentEvaluation = evaluationRestaurants.length > 0
-    ? await runEvaluationAgent({
+    ? await runBatchedEvaluationAgent({
       goal: context.goal,
       plan,
       restaurants: evaluationRestaurants,
@@ -809,6 +812,85 @@ function summarizeHardRejectedReasons(
     ...reasons.slice(0, MAX_HARD_REJECTED_REASON_DETAILS),
     `还有 ${reasons.length - MAX_HARD_REJECTED_REASON_DETAILS} 条明确硬约束不匹配结果已被本地过滤。`,
   ];
+}
+
+async function runBatchedEvaluationAgent(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
+  const batchSize = Math.max(1, DEFAULT_AGENT_EVALUATION_BATCH_SIZE);
+  if (input.restaurants.length <= batchSize) {
+    return runEvaluationAgent(input);
+  }
+
+  const batches = chunkRestaurants(input.restaurants, batchSize);
+  const concurrency = Math.min(
+    Math.max(1, DEFAULT_AGENT_EVALUATION_CONCURRENCY),
+    batches.length
+  );
+
+  try {
+    const outputs = await mapWithConcurrency(batches, concurrency, (restaurants) =>
+      runEvaluationAgent({ ...input, restaurants })
+    );
+    return mergeEvaluationOutputs(outputs);
+  } catch (error) {
+    if (concurrency <= 1 || !isLikelyEvaluationRateLimit(error)) {
+      throw error;
+    }
+
+    const outputs: EvaluationAgentOutput[] = [];
+    for (const restaurants of batches) {
+      outputs.push(await runEvaluationAgent({ ...input, restaurants }));
+    }
+    return mergeEvaluationOutputs(outputs);
+  }
+}
+
+function chunkRestaurants(restaurants: Restaurant[], size: number): Restaurant[][] {
+  const chunks: Restaurant[][] = [];
+  for (let index = 0; index < restaurants.length; index += size) {
+    chunks.push(restaurants.slice(index, index + size));
+  }
+  return chunks;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  }));
+
+  return results;
+}
+
+function mergeEvaluationOutputs(outputs: EvaluationAgentOutput[]): EvaluationAgentOutput {
+  return {
+    verdicts: outputs.flatMap((output) => output.verdicts),
+    selectedIds: uniqueStrings(outputs.flatMap((output) => output.selectedIds)),
+    candidateIds: uniqueStrings(outputs.flatMap((output) => output.candidateIds)),
+    explanation: outputs
+      .map((output) => output.explanation)
+      .filter(Boolean)
+      .join(' '),
+    unmetConstraints: uniqueStrings(outputs.flatMap((output) => output.unmetConstraints)),
+  };
+}
+
+function isLikelyEvaluationRateLimit(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /429|rate\s*limit|too many requests/i.test(message);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function appendAction(
