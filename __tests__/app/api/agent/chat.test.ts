@@ -137,7 +137,7 @@ describe('/api/agent/chat', () => {
     jest.clearAllMocks();
   });
 
-  it('starts a fresh search when a completed session id is sent by mistake', async () => {
+  it('resumes a valid completed session id as a follow-up conversation', async () => {
     const previousSession = createAgentSession('想吃日料', location);
     previousSession.goal = goal();
     previousSession.pendingQuestion = undefined;
@@ -149,12 +149,20 @@ describe('/api/agent/chat', () => {
       sessionId: previousSession.id,
     }));
     const events = await readSseEvents(response);
+    const runtimeInput = (runSearchAgentV3 as jest.Mock).mock.calls.at(-1)?.[0];
 
-    expect(events.map((event) => event.type)).not.toContain('session_resumed');
+    expect(events.map((event) => event.type)).toContain('session_resumed');
     expect(events.find((event) => event.type === 'error')).toBeUndefined();
+    expect(runtimeInput.runtimeState.goal).toEqual(expect.objectContaining({
+      primaryKeywords: ['日料'],
+    }));
+    expect(runtimeInput.messages.at(-1)).toEqual(expect.objectContaining({
+      role: 'user',
+      content: '想吃火锅',
+    }));
   });
 
-  it('resumes only sessions that are waiting for a pending question', async () => {
+  it('resumes sessions that are waiting for a pending question', async () => {
     const pausedSession = createAgentSession('随便吃点', location);
     pausedSession.goal = goal({ primaryKeywords: ['餐厅'], acceptableCategories: [] });
     pausedSession.pendingQuestion = {
@@ -177,7 +185,7 @@ describe('/api/agent/chat', () => {
     expect(events.map((event) => event.type)).toContain('session_resumed');
   });
 
-  it('applies structured option effects before resuming the runtime', async () => {
+  it('passes pending question option effects to runtime for Supervisor-owned handling', async () => {
     const pausedSession = createAgentSession('想吃日料', location);
     pausedSession.goal = goal({
       hardConstraints: [{ kind: 'distance', label: '500米内', value: 500, maxMeters: 500, strict: true }],
@@ -200,14 +208,16 @@ describe('/api/agent/chat', () => {
     await readSseEvents(response);
 
     const runtimeInput = (runSearchAgentV3 as jest.Mock).mock.calls.at(-1)?.[0];
-    expect(runtimeInput.runtimeState.pendingQuestion).toBeUndefined();
-    expect(runtimeInput.runtimeState.goal.allowBroaden).toBe(true);
-    expect(runtimeInput.runtimeState.goal.hardConstraints).toEqual(
-      expect.arrayContaining([expect.objectContaining({ maxMeters: 5000, strict: false })])
-    );
+    expect(runtimeInput.runtimeState.pendingQuestion).toEqual(expect.objectContaining({
+      question: '当前距离范围内没有找到合适餐厅，要扩大范围再搜吗？',
+      optionEffects: {
+        '扩大范围': { allowBroaden: true, setDistanceMaxMeters: 5000 },
+      },
+    }));
+    expect(runtimeInput.runtimeState.goal.allowBroaden).toBe(false);
   });
 
-  it('promotes existing fallback candidates when structured option effects authorize broadening', async () => {
+  it('preserves existing fallback candidates when a pending answer reaches the runtime', async () => {
     const pausedSession = createAgentSession('随便吃点', location);
     pausedSession.goal = goal({ allowBroaden: false });
     pausedSession.attempts = [{
@@ -262,7 +272,10 @@ describe('/api/agent/chat', () => {
     await readSseEvents(response);
 
     const runtimeInput = (runSearchAgentV3 as jest.Mock).mock.calls.at(-1)?.[0];
-    expect(runtimeInput.runtimeState.attempts[0].allowedForPrimary).toBe(true);
-    expect(runtimeInput.runtimeState.candidates[0].verification.primaryEligible).toBe(true);
+    expect(runtimeInput.runtimeState.pendingQuestion).toEqual(expect.objectContaining({
+      question: '没有找到符合条件的餐厅，要调整需求或允许放宽吗？',
+    }));
+    expect(runtimeInput.runtimeState.attempts[0].allowedForPrimary).toBe(false);
+    expect(runtimeInput.runtimeState.candidates[0].verification.primaryEligible).toBe(false);
   });
 });

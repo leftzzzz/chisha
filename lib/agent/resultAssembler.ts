@@ -6,6 +6,11 @@ import type {
 } from './types';
 import type { Restaurant } from '@/types';
 import { applyFinalGuard } from './finalGuard';
+import {
+  isBroadSearchIntent,
+  isSearchIntentAuthorizedForPrimary,
+  primaryAuthorizationReason,
+} from './authorization';
 
 export function finalizeRecommendations(
   context: AgentContext,
@@ -60,11 +65,24 @@ function buildExplanation(
 
 function withRecommendationDetails(candidate: RestaurantCandidate, context: AgentContext): Restaurant {
   const attempt = context.attempts[candidate.sourceAttempt - 1];
+  const authorizationReason = attempt
+    ? primaryAuthorizationReason(context.goal, attempt.searchIntent, attempt.keywords)
+    : undefined;
+  const unauthorizedBroadAttempt = attempt
+    ? isBroadSearchIntent(attempt.searchIntent)
+      && !isSearchIntentAuthorizedForPrimary(context.goal, attempt.searchIntent, attempt.keywords)
+    : false;
   const verificationWarnings = [
     ...candidate.verification.hardFailures.map((failure) => failure.message),
     ...candidate.verification.warnings,
+    ...(candidate.stale ? [candidate.staleReason ?? '候选已过期，需重新验证。'] : []),
     ...(candidate.verification.status === 'unverified' ? ['候补：数据源不足，未验证为主推荐。'] : []),
-    ...(attempt?.allowedForPrimary === false ? ['候补：未授权放宽或兜底结果，不进入主推荐。'] : []),
+    ...(attempt?.allowedForPrimary === false || unauthorizedBroadAttempt
+      ? ['候补：未获得对应授权 scope 的放宽或兜底结果，不进入主推荐。']
+      : []),
+    ...(authorizationReason && isBroadSearchIntent(attempt!.searchIntent)
+      ? [`授权来源：${authorizationReason}`]
+      : []),
   ];
 
   return {

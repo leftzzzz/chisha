@@ -3,9 +3,9 @@ import { z } from 'zod';
 import type { FinishRecommendation, PendingQuestion } from './types';
 
 /**
- * @deprecated Runtime V3 no longer uses AI SDK tool calling directly. Keep
- * these schemas only for migration/reference tests until the old tool loop is
- * removed.
+ * @deprecated Runtime V3 does not use AI SDK tool calling directly. This file
+ * is legacy migration reference only; do not import it into the active Agent
+ * runtime path. Active orchestration lives in runtimeV3 + supervisorAction.
  */
 
 const LocationSchema = z.object({
@@ -74,6 +74,23 @@ export const AskUserInputSchema = z.object({
       addRequestedItems: z.array(z.string()).default([]),
       addCategories: z.array(z.string()).default([]),
       setDistanceMaxMeters: z.number().optional(),
+      addAuthorizations: z.array(z.object({
+        id: z.string(),
+        kind: z.enum([
+          'distance_expansion',
+          'category_broaden',
+          'fallback_primary',
+          'unverified_backup_only',
+        ]),
+        createdAt: z.number(),
+        sourceQuestionId: z.string().optional(),
+        reason: z.string(),
+        constraints: z.object({
+          maxMeters: z.number().optional(),
+          allowedSearchIntents: z.array(z.enum(['exact', 'synonym', 'broadened', 'fallback'])).optional(),
+          allowedKeywords: z.array(z.string()).optional(),
+        }).optional(),
+      })).optional(),
       allowBroaden: z.boolean().optional(),
     }).optional(),
   })).min(2).max(4).optional(),

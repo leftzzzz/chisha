@@ -2,6 +2,25 @@ import type { Location, Restaurant } from '@/types';
 
 export type SearchIntent = 'exact' | 'synonym' | 'broadened' | 'fallback';
 
+export type AuthorizationScopeKind =
+  | 'distance_expansion'
+  | 'category_broaden'
+  | 'fallback_primary'
+  | 'unverified_backup_only';
+
+export interface AgentAuthorization {
+  id: string;
+  kind: AuthorizationScopeKind;
+  createdAt: number;
+  sourceQuestionId?: string;
+  reason: string;
+  constraints?: {
+    maxMeters?: number;
+    allowedSearchIntents?: SearchIntent[];
+    allowedKeywords?: string[];
+  };
+}
+
 export interface UserPreferenceSummary {
   favoriteCuisines?: Array<{ name: string; weight: number }>;
   avoidedCuisines?: Array<{ name: string; weight: number }>;
@@ -61,9 +80,15 @@ export interface GoalPatch {
   addSoftPreferences?: Preference[];
   addConstraints?: Constraint[];
   removeConstraints?: string[];
+  addAuthorizations?: AgentAuthorization[];
   allowBroaden?: boolean;
   reason: string;
 }
+
+export type ConversationMode =
+  | 'continue_current_goal'
+  | 'patch_current_goal'
+  | 'start_new_goal';
 
 export interface SearchKeywordTarget {
   keyword: string;
@@ -80,6 +105,7 @@ export interface ClarificationEffect {
   addCategories?: string[];
   addSoftPreferences?: Preference[];
   setDistanceMaxMeters?: number;
+  addAuthorizations?: AgentAuthorization[];
   allowBroaden?: boolean;
 }
 
@@ -98,6 +124,9 @@ export interface ClarificationNeed {
 
 export interface UserGoal {
   intent: 'find_restaurants';
+  goalId?: string;
+  goalVersion?: number;
+  goalSignature?: string;
   rawQuery: string;
   poiType?: string;
   requestedItems: RequestedItem[];
@@ -113,6 +142,7 @@ export interface UserGoal {
   exclusions: string[];
   ambiguity: string[];
   clarificationNeeded: ClarificationNeed[];
+  authorizations?: AgentAuthorization[];
   allowBroaden: boolean;
 }
 
@@ -161,7 +191,49 @@ export interface EvaluationAgentOutput {
   candidateIds: string[];
   explanation: string;
   unmetConstraints: string[];
+  source?: 'model' | 'cache' | 'error';
+  error?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+  };
 }
+
+export type GuardrailViolationCode =
+  | 'SEARCH_BUDGET_EXCEEDED'
+  | 'INVALID_PLAN_SCHEMA'
+  | 'MULTI_INTENT_KEYWORDS'
+  | 'UNAUTHORIZED_BROADENING'
+  | 'STRICT_DISTANCE_EXCEEDED'
+  | 'DUPLICATE_PLAN'
+  | 'UNOBSERVED_CANDIDATE_ID'
+  | 'INVALID_POI_TYPE'
+  | 'PREMATURE_FINISH';
+
+export interface GuardrailViolation {
+  code: GuardrailViolationCode;
+  message: string;
+  severity: 'info' | 'warn' | 'error';
+  details?: unknown;
+}
+
+export type GuardrailDecision =
+  | {
+      type: 'allow';
+      action: AgentAction;
+      notes?: string[];
+    }
+  | {
+      type: 'reject';
+      violations: GuardrailViolation[];
+      fallback?: 'ask_user' | 'finish' | 'error';
+    }
+  | {
+      type: 'request_rewrite';
+      violations: GuardrailViolation[];
+      instruction: string;
+      suggestedAction?: AgentAction;
+    };
 
 export interface SearchAttempt {
   keywords: string[];
@@ -197,6 +269,14 @@ export interface CandidateVerification {
 }
 
 export interface RestaurantCandidate {
+  candidateId?: string;
+  goalId?: string;
+  verifiedAgainstGoalVersion?: number;
+  verifiedAgainstGoalSignature?: string;
+  locationSignature?: string;
+  evaluationTraceId?: string;
+  stale?: boolean;
+  staleReason?: string;
   restaurant: Restaurant;
   score: number;
   matched: string[];
@@ -247,6 +327,7 @@ export interface AgentActionRecord {
 
 export interface AgentObservation {
   actionId: string;
+  traceId?: string;
   plan: SearchPlan;
   provider: 'amap' | 'osm';
   rawCount: number;
@@ -260,9 +341,44 @@ export interface AgentObservation {
   unmetConstraints: string[];
 }
 
+export type AgentTraceType =
+  | 'user_message'
+  | 'model_goal'
+  | 'model_action'
+  | 'guard_decision'
+  | 'tool_start'
+  | 'tool_result'
+  | 'observation'
+  | 'evaluation'
+  | 'state_update'
+  | 'runtime_decision'
+  | 'question'
+  | 'final'
+  | 'error';
+
+export interface AgentTraceItem {
+  id: string;
+  sessionId: string;
+  turnId: string;
+  actionId?: string;
+  type: AgentTraceType;
+  createdAt: number;
+  input?: unknown;
+  output?: unknown;
+  rawAction?: AgentAction;
+  guardedAction?: AgentAction;
+  guardDecision?: GuardrailDecision;
+  error?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+  };
+}
+
 export interface AgentInput {
   query: string;
   location: Location;
+  previousLocation?: Location;
   sessionId?: string;
   messages?: AgentMessage[];
   preferenceSummary?: UserPreferenceSummary;
@@ -295,10 +411,11 @@ export interface AgentRuntimeState {
   candidates: RestaurantCandidate[];
   actions?: AgentActionRecord[];
   observations?: AgentObservation[];
+  trace?: AgentTraceItem[];
   pendingQuestion?: PendingQuestion;
 }
 
-export type AgentEvent =
+type AgentEventPayload =
   | { type: 'thinking'; message: string }
   | { type: 'searching'; keywords: string[]; round: number }
   | {
@@ -349,6 +466,8 @@ export type AgentEvent =
       unmetConstraints: string[];
     };
 
+export type AgentEvent = AgentEventPayload & { traceId?: string };
+
 export type EmitAgentEvent = (event: AgentEvent) => void;
 
 export interface AgentMessage {
@@ -378,5 +497,6 @@ export interface AgentSession {
   candidates: RestaurantCandidate[];
   actions: AgentActionRecord[];
   observations: AgentObservation[];
+  trace: AgentTraceItem[];
   pendingQuestion?: PendingQuestion;
 }

@@ -195,22 +195,29 @@ function buildModelInput(input: KeywordExpansionAgentInput) {
   const primarySearchTargets = goalKeywords(input.goal);
 
   return {
-    primarySearchTargets,
-    openExplorationAllowed: isOpenExplorationGoal(input.goal),
-    goalContext: {
-      rawQuery: input.goal.rawQuery,
-      requestedItems: input.goal.requestedItems,
-      acceptableCategories: input.goal.acceptableCategories,
-      alternativeGroups: input.goal.alternativeGroups,
-      primaryKeywords: input.goal.primaryKeywords,
-      hardConstraints: input.goal.hardConstraints,
-      softPreferences: input.goal.softPreferences,
-      exclusions: input.goal.exclusions,
-      allowBroaden: input.goal.allowBroaden,
+    trustedContext: {
+      primarySearchTargets,
+      openExplorationAllowed: isOpenExplorationGoal(input.goal),
+      goalContext: {
+        rawQuery: input.goal.rawQuery,
+        requestedItems: input.goal.requestedItems,
+        acceptableCategories: input.goal.acceptableCategories,
+        alternativeGroups: input.goal.alternativeGroups,
+        primaryKeywords: input.goal.primaryKeywords,
+        hardConstraints: input.goal.hardConstraints,
+        softPreferences: input.goal.softPreferences,
+        exclusions: input.goal.exclusions,
+        allowBroaden: input.goal.allowBroaden,
+        authorizations: input.goal.authorizations,
+      },
+      attemptedKeywords: input.attempts.flatMap((attempt) => attempt.keywords),
+      preferenceSummary: input.preferenceSummary,
     },
-    attemptedKeywords: input.attempts.flatMap((attempt) => attempt.keywords),
-    preferenceSummary: input.preferenceSummary,
-    foodPoiTypes: AMAP_FOOD_POI_TYPES,
+    policy: {
+      foodPoiTypes: AMAP_FOOD_POI_TYPES,
+      generatedKeywordsMustBeSingleSearchIntent: true,
+      broadTargetsRequireAuthorizationForPrimary: true,
+    },
   };
 }
 

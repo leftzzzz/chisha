@@ -83,6 +83,10 @@ describe('modelClient', () => {
     const retryBody = JSON.parse(fetchWithTimeoutMock.mock.calls[1][1].body);
     expect(firstBody.max_tokens).toBe(10);
     expect(retryBody.max_tokens).toBe(20);
+    expect(firstBody.messages).toEqual([
+      { role: 'system', content: 'Return JSON.' },
+      { role: 'user', content: JSON.stringify({ trustedContext: { query: 'test' } }) },
+    ]);
   });
 });
 

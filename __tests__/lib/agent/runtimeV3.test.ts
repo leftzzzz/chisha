@@ -127,6 +127,7 @@ jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import { runSearchSupervisor } from '@/lib/agent/supervisor';
 import { runEvaluationAgent } from '@/lib/agent/subagents/evaluationAgent';
+import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 
@@ -203,6 +204,80 @@ describe('runSearchAgentV3', () => {
     expect(events.some((event) => event.type === 'action')).toBe(true);
     expect(events.some((event) => event.type === 'observation')).toBe(true);
     expect(events.some((event) => event.type === 'final')).toBe(true);
+  });
+
+  it('records a replayable trace timeline for model, guard, tool, evaluation, and final steps', async () => {
+    const result = await runSearchAgentV3(
+      input(goal()),
+      () => undefined,
+      async () => [restaurant('r1', '寿司店', '日本料理', 300)]
+    );
+
+    const trace = result.runtimeState?.trace ?? [];
+    expect(trace.map((item) => item.type)).toEqual(expect.arrayContaining([
+      'user_message',
+      'model_goal',
+      'model_action',
+      'guard_decision',
+      'tool_start',
+      'tool_result',
+      'evaluation',
+      'observation',
+      'state_update',
+      'final',
+    ]));
+    expect(trace.find((item) => item.type === 'model_action')?.rawAction?.type).toBe('search');
+    expect(trace.find((item) => item.type === 'guard_decision')?.guardDecision?.type).toBe('allow');
+    expect(trace.find((item) => item.type === 'tool_result')?.output).toEqual(
+      expect.objectContaining({
+        found: 1,
+        provider: 'amap',
+        restaurantIds: ['r1'],
+      })
+    );
+    expect(result.runtimeState?.goal?.goalVersion).toBe(1);
+    expect(result.runtimeState?.candidates[0]).toEqual(expect.objectContaining({
+      goalId: result.runtimeState?.goal?.goalId,
+      verifiedAgainstGoalVersion: 1,
+      verifiedAgainstGoalSignature: result.runtimeState?.goal?.goalSignature,
+    }));
+  });
+
+  it('marks existing candidates stale when a follow-up changes hard constraints', async () => {
+    const first = await runSearchAgentV3(
+      input(goal()),
+      () => undefined,
+      async () => [restaurant('r1', '寿司店', '日本料理', 300)]
+    );
+    expect(first.paused).not.toBe(true);
+
+    const supervisorMock = runSearchSupervisor as jest.Mock;
+    supervisorMock.mockResolvedValueOnce({
+      patch: {
+        addConstraints: [{
+          kind: 'budget',
+          label: '50元以下',
+          max: 50,
+        }],
+        reason: '用户追加预算硬约束。',
+      },
+      nextAction: 'plan',
+    });
+
+    const second = await runSearchAgentV3(
+      {
+        query: '预算 50 以下',
+        location,
+        runtimeState: first.runtimeState,
+      },
+      () => undefined,
+      async () => []
+    );
+
+    expect(second.runtimeState?.goal?.goalVersion).toBe((first.runtimeState?.goal?.goalVersion ?? 1) + 1);
+    expect(second.runtimeState?.candidates.some((item) => item.stale)).toBe(true);
+    expect(second.runtimeState?.candidates.find((item) => item.restaurant.id === 'r1')?.staleReason)
+      .toContain('当前目标不一致');
   });
 
   it('limits EvaluationAgent candidates to the target count plus buffer by default', async () => {
@@ -349,21 +424,22 @@ describe('runSearchAgentV3', () => {
 
   it('finalizes already promoted broadened candidates without asking the Supervisor for another search', async () => {
     const searchPlaces = jest.fn(async () => []);
+    const promotedGoal = withUpdatedGoalVersion(goal({
+      rawQuery: '炸鸡薯条，允许放宽',
+      requestedItems: [
+        { name: '炸鸡', required: true, aliases: ['鸡排', '炸物'] },
+        { name: '薯条', required: true, aliases: ['汉堡'] },
+      ],
+      acceptableCategories: [{ name: '快餐', confidence: 0.8 }],
+      primaryKeywords: ['炸鸡', '薯条'],
+      allowBroaden: true,
+    }));
     const result = await runSearchAgentV3(
       {
         query: '允许放宽',
         location,
         runtimeState: {
-          goal: goal({
-            rawQuery: '炸鸡薯条，允许放宽',
-            requestedItems: [
-              { name: '炸鸡', required: true, aliases: ['鸡排', '炸物'] },
-              { name: '薯条', required: true, aliases: ['汉堡'] },
-            ],
-            acceptableCategories: [{ name: '快餐', confidence: 0.8 }],
-            primaryKeywords: ['炸鸡', '薯条'],
-            allowBroaden: true,
-          }),
+          goal: promotedGoal,
           attempts: [{
             keywords: ['小吃'],
             radius: 1800,
@@ -374,6 +450,11 @@ describe('runSearchAgentV3', () => {
             accepted: 1,
           }],
           candidates: [{
+            candidateId: `${promotedGoal.goalId}:${promotedGoal.goalVersion}:r1:1`,
+            goalId: promotedGoal.goalId,
+            verifiedAgainstGoalVersion: promotedGoal.goalVersion,
+            verifiedAgainstGoalSignature: promotedGoal.goalSignature,
+            locationSignature: deriveLocationSignature(location),
             restaurant: restaurant('r1', '沙县小吃', '小吃', 200),
             score: 95,
             matched: ['Agent 验证品类小吃'],
@@ -496,6 +577,24 @@ describe('runSearchAgentV3', () => {
     expect(searchedPlans.some((plan) => plan.searchIntent === 'fallback')).toBe(true);
     expect(searchedPlans[0].keywords).toEqual(['餐厅']);
     expect(result.restaurants.length).toBeGreaterThan(0);
+
+    const guardDecisions = result.runtimeState?.trace
+      ?.filter((item) => item.type === 'guard_decision')
+      .map((item) => item.guardDecision);
+    expect(guardDecisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'request_rewrite',
+        violations: expect.arrayContaining([
+          expect.objectContaining({ code: 'MULTI_INTENT_KEYWORDS' }),
+        ]),
+      }),
+    ]));
+    expect(result.runtimeState?.trace).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'runtime_decision',
+        output: expect.objectContaining({ reason: 'guard_rewrite_exhausted' }),
+      }),
+    ]));
   });
 
   it('clears model-invented primary targets for explicit random recommendations', async () => {
@@ -799,6 +898,45 @@ describe('runSearchAgentV3', () => {
     )).toBe(false);
   });
 
+  it('keeps EvaluationAgent failures out of primary recommendations and records a structured trace', async () => {
+    const evaluationMock = runEvaluationAgent as jest.Mock;
+    const defaultImplementation = evaluationMock.getMockImplementation();
+    evaluationMock.mockRejectedValue(new Error('429 too many requests'));
+
+    try {
+      const result = await runSearchAgentV3(
+        input(goal()),
+        () => undefined,
+        async () => [restaurant('r1', '寿司店', '日本料理', 300)]
+      );
+
+      expect(result.paused).toBe(true);
+      expect(result.restaurants).toEqual([]);
+      expect(result.runtimeState?.candidates[0]).toEqual(expect.objectContaining({
+        restaurant: expect.objectContaining({ id: 'r1' }),
+        warnings: expect.arrayContaining([expect.stringContaining('未验证候补')]),
+        verification: expect.objectContaining({
+          status: 'unverified',
+          primaryEligible: false,
+        }),
+      }));
+      expect(result.runtimeState?.trace).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'evaluation',
+          output: expect.objectContaining({ source: 'error' }),
+          error: expect.objectContaining({
+            code: 'EVALUATION_RATE_LIMITED',
+            retryable: true,
+          }),
+        }),
+      ]));
+    } finally {
+      if (defaultImplementation) {
+        evaluationMock.mockImplementation(defaultImplementation);
+      }
+    }
+  });
+
   it('applies pending question option effects when resuming through the Supervisor', async () => {
     const first = await runSearchAgentV3(
       input(goal({
@@ -810,10 +948,16 @@ describe('runSearchAgentV3', () => {
     );
 
     expect(first.paused).toBe(true);
-    expect(first.question?.optionEffects?.['扩大范围']).toEqual({
+    expect(first.question?.optionEffects?.['扩大范围']).toEqual(expect.objectContaining({
       allowBroaden: true,
       setDistanceMaxMeters: 5000,
-    });
+      addAuthorizations: [
+        expect.objectContaining({
+          kind: 'distance_expansion',
+          constraints: { maxMeters: 5000 },
+        }),
+      ],
+    }));
 
     const searchedRadii: number[] = [];
     const second = await runSearchAgentV3(

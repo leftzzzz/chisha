@@ -7,6 +7,7 @@ import type {
   RestaurantCandidate,
   SearchPlan,
 } from './types';
+import { deriveGoalSignature, deriveLocationSignature } from './goalVersion';
 
 export function evaluateSearchResult(
   restaurants: Restaurant[],
@@ -52,7 +53,7 @@ export function mergeCandidates(
     const key = candidateKey(incoming.restaurant);
     const existing = candidateMap.get(key);
 
-    if (!existing || incoming.score > existing.score) {
+    if (!existing || (existing.stale && !incoming.stale) || incoming.score > existing.score) {
       candidateMap.set(key, incoming);
       continue;
     }
@@ -79,8 +80,16 @@ function buildCandidate(
     [...verdict.conflicts, ...verdict.warnings]
   );
   const score = calculateScore(restaurant, verdict, plan, selectedIds, candidateIds);
+  const goalSignature = context.goal.goalSignature ?? deriveGoalSignature(context.goal);
+  const goalVersion = context.goal.goalVersion ?? 1;
+  const goalId = context.goal.goalId ?? goalSignature;
 
   return {
+    candidateId: `${goalId}:${goalVersion}:${restaurant.id}:${sourceAttempt}`,
+    goalId,
+    verifiedAgainstGoalVersion: goalVersion,
+    verifiedAgainstGoalSignature: goalSignature,
+    locationSignature: deriveLocationSignature(context.location),
     restaurant,
     score,
     matched: mergeStrings(verdict.evidence, [

@@ -17,7 +17,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { Location } from '@/types';
-import { agentChat, APIError, AgentQuestion, SearchResultRestaurant } from '@/lib/api';
+import { agentChat, APIError, AgentQuestion, AgentTraceEvent, SearchResultRestaurant } from '@/lib/api';
 import { buildUserPreferenceSummary } from '@/lib/storage';
 import { useAppState } from './useAppState';
 
@@ -85,9 +85,14 @@ function isSameQuestion(left?: AgentQuestion | null, right?: AgentQuestion | nul
  */
 export function useRestaurantSearch(): UseRestaurantSearchReturn {
   const {
+    state,
     setStep,
     setRestaurantsWithCandidates,
     setError,
+    setAgentSessionId,
+    setAgentQuestion,
+    appendAgentTrace,
+    clearAgentTrace,
   } = useAppState();
 
   const [isSearching, setIsSearching] = useState(false);
@@ -105,6 +110,9 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
   const setQuestionProgress = useCallback((question: AgentQuestion) => {
     activeQuestionRef.current = question;
     activeSessionIdRef.current = question.sessionId;
+    setAgentSessionId(question.sessionId);
+    setAgentQuestion(question);
+    setStep('AGENT_QUESTION');
     setProgress(prev => {
       if (prev.status === 'question' && isSameQuestion(prev.question, question)) {
         return prev;
@@ -116,7 +124,11 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         question,
       };
     });
-  }, []);
+  }, [setAgentQuestion, setAgentSessionId, setStep]);
+
+  const appendTraceProgress = useCallback((trace: AgentTraceEvent) => {
+    appendAgentTrace(trace);
+  }, [appendAgentTrace]);
 
   /**
    * 执行 Agent 搜索或会话续跑
@@ -151,7 +163,17 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
       setIsSearching(true);
       setStep('SEARCHING');
       setError(null);
+      setAgentQuestion(null);
       activeLocationRef.current = location;
+
+      if (sessionId) {
+        activeSessionIdRef.current = sessionId;
+        setAgentSessionId(sessionId);
+      } else {
+        activeSessionIdRef.current = null;
+        setAgentSessionId(null);
+        clearAgentTrace();
+      }
 
       // 初始化进度
       setProgress({
@@ -246,14 +268,21 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
 
           onSessionPaused: (sessionId) => {
             activeSessionIdRef.current = sessionId;
+            setAgentSessionId(sessionId);
           },
 
           onSessionResumed: (sessionId) => {
             activeSessionIdRef.current = sessionId;
+            setAgentSessionId(sessionId);
           },
 
           onSessionUpdated: (sessionId) => {
             activeSessionIdRef.current = sessionId;
+            setAgentSessionId(sessionId);
+          },
+
+          onTrace: (trace) => {
+            appendTraceProgress(trace);
           },
 
           onDone: () => {
@@ -278,8 +307,10 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
 
         const { restaurants, candidates, explanation, unmetConstraints } = result;
         activeQuestionRef.current = null;
+        setAgentQuestion(null);
         if (result.sessionId) {
           activeSessionIdRef.current = result.sessionId;
+          setAgentSessionId(result.sessionId);
         }
 
         // 搜索完成
@@ -313,6 +344,8 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
 
         activeQuestionRef.current = null;
         activeSessionIdRef.current = null;
+        setAgentQuestion(null);
+        setAgentSessionId(null);
         setError(errorMessage);
         onError?.(errorCode);
 
@@ -324,21 +357,30 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         }
       }
     },
-    [setStep, setRestaurantsWithCandidates, setError, setQuestionProgress]
+    [
+      appendTraceProgress,
+      clearAgentTrace,
+      setAgentQuestion,
+      setAgentSessionId,
+      setStep,
+      setRestaurantsWithCandidates,
+      setError,
+      setQuestionProgress,
+    ]
   );
 
   const search = useCallback(
     async (query: string, location: Location, onError?: (errorCode: string) => void) => {
       activeQuestionRef.current = null;
-      activeSessionIdRef.current = null;
-      await runChatSearch(query, location, onError);
+      const sessionId = activeSessionIdRef.current ?? state.agentSessionId ?? undefined;
+      await runChatSearch(query, location, onError, sessionId);
     },
-    [runChatSearch]
+    [runChatSearch, state.agentSessionId]
   );
 
   const answerQuestion = useCallback(
     async (answer: string, onError?: (errorCode: string) => void) => {
-      const question = activeQuestionRef.current ?? progress.question;
+      const question = activeQuestionRef.current ?? progress.question ?? state.agentQuestion;
       const location = activeLocationRef.current;
 
       if (!question || !location) {
@@ -348,7 +390,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
 
       await runChatSearch(answer, location, onError, question.sessionId);
     },
-    [progress.question, runChatSearch, setError]
+    [progress.question, runChatSearch, setError, state.agentQuestion]
   );
 
   return {

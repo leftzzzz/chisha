@@ -24,7 +24,6 @@ import {
   saveAgentSessionAsync,
 } from '@/lib/agent/session';
 import { configureCloudflareAgentSessionStore } from '@/lib/agent/cloudflareSessionStore';
-import { applySupervisorClarifyingAnswer } from '@/lib/agent/supervisor';
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
@@ -151,7 +150,7 @@ export async function POST(request: Request) {
           return;
         }
 
-        const shouldResumeSession = Boolean(resumableSession?.pendingQuestion);
+        const shouldResumeSession = Boolean(resumableSession);
         let session = shouldResumeSession && resumableSession
           ? resumableSession
           : await createAgentSessionAsync(requestData.message, requestData.location);
@@ -165,14 +164,6 @@ export async function POST(request: Request) {
           return;
         }
 
-        if (
-          shouldResumeSession
-          && session.pendingQuestion?.optionEffects?.[requestData.message.trim()]
-        ) {
-          applySupervisorClarifyingAnswer(session, requestData.message);
-          await saveAgentSessionAsync(session);
-        }
-
         if (shouldResumeSession) {
           await appendUserMessageAsync(session, requestData.message);
           sendEvent(controller, {
@@ -181,11 +172,15 @@ export async function POST(request: Request) {
           });
         }
 
+        const previousLocation = session.location;
+        session.location = requestData.location;
+
         const input: AgentInput = {
           query: requestData.message,
           location: requestData.location,
+          previousLocation,
           sessionId: session.id,
-          messages: session.messages,
+          messages: [...session.messages],
           preferenceSummary: mergeUserPreferenceSummaries([
             requestData.preferenceSummary,
             ...(requestData.groupPreferenceSummaries ?? []),
@@ -196,6 +191,7 @@ export async function POST(request: Request) {
             candidates: session.candidates,
             actions: session.actions,
             observations: session.observations,
+            trace: session.trace,
             pendingQuestion: session.pendingQuestion,
           },
         };

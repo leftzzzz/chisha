@@ -24,6 +24,9 @@ export const initialState: AppState = {
   candidateRestaurants: [],
   agentExplanation: undefined,
   agentUnmetConstraints: [],
+  agentSessionId: null,
+  agentQuestion: null,
+  agentTrace: [],
   removedRestaurants: [],
   customOptions: [],
   selectedIndex: -1,
@@ -101,6 +104,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         candidateRestaurants: action.payload.candidates,
         agentExplanation: action.payload.explanation,
         agentUnmetConstraints: action.payload.unmetConstraints ?? [],
+        agentQuestion: null,
         removedRestaurants: [], // 清空已移除
         customOptions: [], // 清空自定义选项
         selectedIndex: -1,
@@ -130,6 +134,53 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         error: action.payload,
         step: action.payload ? 'ERROR' : state.step,
+      };
+
+    /**
+     * 保存当前 Agent 会话 ID
+     */
+    case 'SET_AGENT_SESSION_ID':
+      return {
+        ...state,
+        agentSessionId: action.payload,
+      };
+
+    /**
+     * 保存或清除 Agent 追问
+     */
+    case 'SET_AGENT_QUESTION':
+      return {
+        ...state,
+        agentQuestion: action.payload,
+        step: action.payload ? 'AGENT_QUESTION' : state.step,
+        error: action.payload ? null : state.error,
+      };
+
+    /**
+     * 追加 Agent trace 索引
+     */
+    case 'APPEND_AGENT_TRACE':
+      return {
+        ...state,
+        agentTrace: [...state.agentTrace, action.payload].slice(-200),
+      };
+
+    /**
+     * 替换 Agent trace 索引
+     */
+    case 'SET_AGENT_TRACE':
+      return {
+        ...state,
+        agentTrace: action.payload.slice(-200),
+      };
+
+    /**
+     * 清空 Agent trace 索引
+     */
+    case 'CLEAR_AGENT_TRACE':
+      return {
+        ...state,
+        agentTrace: [],
       };
 
     /**
@@ -382,6 +433,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         candidateRestaurants: [],
         agentExplanation: undefined,
         agentUnmetConstraints: [],
+        agentSessionId: null,
+        agentQuestion: null,
+        agentTrace: [],
         removedRestaurants: [],
         customOptions: customOptions || [],
         selectedIndex: -1,

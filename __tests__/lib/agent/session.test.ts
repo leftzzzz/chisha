@@ -5,7 +5,7 @@ import {
   resetAgentSessionStore,
   setAgentSessionStore,
 } from '@/lib/agent/session';
-import type { AgentSession, UserGoal } from '@/lib/agent/types';
+import type { AgentSession, AgentTraceItem, UserGoal } from '@/lib/agent/types';
 import type { Location } from '@/types';
 
 const location: Location = {
@@ -31,6 +31,19 @@ const goal: UserGoal = {
   allowBroaden: true,
 };
 
+const traceItem: AgentTraceItem = {
+  id: 'trace_1',
+  sessionId: 's1',
+  turnId: 'turn_1',
+  type: 'model_action',
+  createdAt: 1,
+  rawAction: {
+    type: 'finish',
+    explanation: '测试 trace',
+    confidence: 0.8,
+  },
+};
+
 describe('agent session store', () => {
   afterEach(() => {
     resetAgentSessionStore();
@@ -44,6 +57,7 @@ describe('agent session store', () => {
       candidates: [],
       actions: [],
       observations: [],
+      trace: [traceItem],
     });
 
     const restored = getAgentSession(session.id);
@@ -51,6 +65,7 @@ describe('agent session store', () => {
     expect(session.id.startsWith('agent_state_')).toBe(false);
     expect(restored?.messages[0].content).toBe('随便吃点');
     expect(restored?.goal?.primaryKeywords).toEqual(['餐厅']);
+    expect(restored?.trace).toEqual([traceItem]);
   });
 
   it('does not decode client supplied agent_state payloads', () => {
@@ -73,6 +88,7 @@ describe('agent session store', () => {
           candidates: [],
           actions: [],
           observations: [],
+          trace: [],
         };
         stored.set(session.id, session);
         return session;

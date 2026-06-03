@@ -53,5 +53,10 @@ export const SearchSupervisorOutputSchema = z.object({
   goal: UserGoalSchema.optional(),
   patch: GoalPatchSchema.optional(),
   question: PendingQuestionSchema.optional(),
+  conversationMode: z.enum([
+    'continue_current_goal',
+    'patch_current_goal',
+    'start_new_goal',
+  ]).optional(),
   nextAction: z.enum(['plan', 'ask_user', 'finish']).optional(),
 });

@@ -141,6 +141,7 @@ describe('EvaluationAgent', () => {
     });
 
     expect(output.selectedIds).toEqual(['r2']);
+    expect(output.source).toBe('model');
     expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r1')).toEqual(
       expect.objectContaining({
         status: 'failed',
@@ -243,5 +244,41 @@ describe('EvaluationAgent', () => {
     const secondBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
     expect(firstBody.max_tokens).toBe(4096);
     expect(secondBody.max_tokens).toBe(8192);
+  });
+
+  it('reuses cached model verdicts for identical evaluation requests', async () => {
+    mockEvaluationResponse({
+      verdicts: [{
+        restaurantId: 'r1',
+        status: 'passed',
+        primaryEligible: true,
+        confidence: 0.9,
+        matchedItems: ['牛排'],
+        matchedCategories: ['西餐'],
+        conflicts: [],
+        evidence: ['Agent 判定符合。'],
+        warnings: [],
+      }],
+      selectedIds: ['r1'],
+      candidateIds: [],
+      explanation: 'cached ok',
+      unmetConstraints: [],
+    });
+
+    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
+    const request = {
+      goal: goal(),
+      plan: exactPlan,
+      restaurants: [restaurant('r1', '城中牛排馆', '西餐厅', 300)],
+      targetCount: 8,
+    };
+
+    const first = await runEvaluationAgent(request);
+    const second = await runEvaluationAgent(request);
+
+    expect(first.source).toBe('model');
+    expect(second.source).toBe('cache');
+    expect(second.selectedIds).toEqual(['r1']);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });

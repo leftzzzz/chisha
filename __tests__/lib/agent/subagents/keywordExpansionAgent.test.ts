@@ -150,13 +150,14 @@ describe('KeywordExpansionAgent', () => {
       });
       const requestInit = fetchWithTimeout.mock.calls[0][1];
       const requestBody = JSON.parse(requestInit.body as string);
-      const content = requestBody.messages[0].content as string;
-      const modelInput = JSON.parse(content.slice(content.lastIndexOf('\n\n') + 2));
+      const content = requestBody.messages[1].content as string;
+      const modelInput = JSON.parse(content);
 
       expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
       expect(requestBody.max_tokens).toBe(4096);
-      expect(modelInput.openExplorationAllowed).toBe(true);
-      expect(modelInput.goalContext.rawQuery).toBe('随意，你来选择');
+      expect(requestBody.messages[0].role).toBe('system');
+      expect(modelInput.trustedContext.openExplorationAllowed).toBe(true);
+      expect(modelInput.trustedContext.goalContext.rawQuery).toBe('随意，你来选择');
       expect(expansion.relatedKeywords).toEqual([]);
       expect(expansion.broadenedKeywords).toEqual(['简餐', '面馆', '小吃']);
       expect(expansion.broadenedTargets?.map((target) => [target.keyword, target.poiTypes])).toEqual([

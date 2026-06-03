@@ -8,6 +8,15 @@ export const ConstraintKindSchema = z.enum([
   'open_now',
 ]);
 
+export const SearchIntentSchema = z.enum(['exact', 'synonym', 'broadened', 'fallback']);
+
+export const AuthorizationScopeKindSchema = z.enum([
+  'distance_expansion',
+  'category_broaden',
+  'fallback_primary',
+  'unverified_backup_only',
+]);
+
 function defaultArray<T extends z.ZodTypeAny>(schema: T) {
   return z.preprocess((value) => {
     if (value === undefined || value === null) {
@@ -166,6 +175,38 @@ export const SearchKeywordTargetSchema = z.object({
   reason: OptionalStringSchema.pipe(z.string().max(120).optional()),
 });
 
+const AuthorizationConstraintsSchema = z.object({
+  maxMeters: OptionalNumberSchema,
+  allowedSearchIntents: optionalArray(SearchIntentSchema),
+  allowedKeywords: OptionalStringArraySchema,
+});
+
+export const AgentAuthorizationSchema = z.preprocess((value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  const kind = typeof record.kind === 'string' ? record.kind : 'category_broaden';
+  return {
+    ...record,
+    id: typeof record.id === 'string' && record.id.trim()
+      ? record.id
+      : `auth_${kind}_${Date.now().toString(36)}`,
+    createdAt: typeof record.createdAt === 'number' ? record.createdAt : Date.now(),
+    reason: typeof record.reason === 'string' && record.reason.trim()
+      ? record.reason
+      : '用户授权调整推荐范围。',
+  };
+}, z.object({
+  id: z.string().min(1),
+  kind: AuthorizationScopeKindSchema,
+  createdAt: z.number(),
+  sourceQuestionId: OptionalStringSchema,
+  reason: z.string().min(1),
+  constraints: AuthorizationConstraintsSchema.optional(),
+}));
+
 const ClarificationEffectTargetSchema = z.preprocess((value) => {
   if (typeof value === 'string') {
     return value;
@@ -195,6 +236,7 @@ export const ClarificationEffectSchema = z.object({
   addCategories: ClarificationEffectTargetListSchema,
   addSoftPreferences: optionalArray(PreferenceSchema),
   setDistanceMaxMeters: OptionalNumberSchema,
+  addAuthorizations: optionalArray(AgentAuthorizationSchema),
   allowBroaden: OptionalBooleanSchema,
 });
 
@@ -269,6 +311,9 @@ const ClarificationNeedListSchema = z.preprocess((value) => {
 
 export const UserGoalSchema = z.object({
   intent: z.literal('find_restaurants'),
+  goalId: z.string().min(1).optional(),
+  goalVersion: OptionalNumberSchema,
+  goalSignature: z.string().min(1).optional(),
   rawQuery: z.string(),
   poiType: z.string().regex(/^\d{6}$/).optional(),
   requestedItems: defaultArray(RequestedItemSchema),
@@ -284,6 +329,7 @@ export const UserGoalSchema = z.object({
   exclusions: DefaultStringArraySchema,
   ambiguity: DefaultStringArraySchema,
   clarificationNeeded: ClarificationNeedListSchema,
+  authorizations: defaultArray(AgentAuthorizationSchema),
   allowBroaden: booleanWithDefault(false),
 });
 
@@ -296,6 +342,7 @@ export const GoalPatchSchema = z.object({
   addSoftPreferences: optionalArray(PreferenceSchema),
   addConstraints: optionalArray(ConstraintSchema),
   removeConstraints: OptionalStringArraySchema,
+  addAuthorizations: optionalArray(AgentAuthorizationSchema),
   allowBroaden: OptionalBooleanSchema,
   reason: stringWithDefault('SearchSupervisorAgent 更新目标。'),
 });
@@ -313,5 +360,6 @@ export const AgentGoalDraftSchema = z.object({
   softPreferences: defaultArray(PreferenceSchema),
   ambiguity: DefaultStringArraySchema,
   clarificationNeeded: ClarificationNeedListSchema,
+  authorizations: defaultArray(AgentAuthorizationSchema),
   allowBroaden: booleanWithDefault(false),
 });

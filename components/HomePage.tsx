@@ -285,7 +285,11 @@ export const HomePage: React.FC = () => {
     : null;
 
   // 渲染加载状态
-  if (state.step === 'UNDERSTANDING' || state.step === 'SEARCHING') {
+  if (
+    state.step === 'UNDERSTANDING'
+    || state.step === 'SEARCHING'
+    || state.step === 'AGENT_QUESTION'
+  ) {
     return (
       <Layout>
         <LoadingSteps

@@ -39,7 +39,7 @@ export interface SearchResultRestaurant {
 /**
  * Agent SSE 事件类型
  */
-export type AgentEvent =
+type AgentEventPayload =
   | { type: 'thinking'; message: string }
   | { type: 'searching'; keywords: string[]; round: number }
   | { type: 'search_result'; found: number; total: number; restaurants: SearchResultRestaurant[] }
@@ -73,6 +73,15 @@ export type AgentEvent =
       unmetConstraints: string[];
     };
 
+export type AgentEvent = AgentEventPayload & { traceId?: string };
+
+export interface AgentTraceEvent {
+  traceId?: string;
+  type: AgentEvent['type'];
+  message?: string;
+  createdAt: number;
+}
+
 /**
  * Agent 搜索回调
  */
@@ -92,6 +101,57 @@ export interface AgentSearchCallbacks {
   onSessionPaused?: (sessionId: string) => void;
   onSessionResumed?: (sessionId: string) => void;
   onSessionUpdated?: (sessionId: string) => void;
+  onTrace?: (trace: AgentTraceEvent) => void;
+}
+
+function emitTraceCallback(callbacks: AgentSearchCallbacks | undefined, event: AgentEvent): void {
+  if (!event.traceId) {
+    return;
+  }
+
+  callbacks?.onTrace?.({
+    traceId: event.traceId,
+    type: event.type,
+    message: summarizeAgentTraceEvent(event),
+    createdAt: Date.now(),
+  });
+}
+
+function summarizeAgentTraceEvent(event: AgentEvent): string | undefined {
+  switch (event.type) {
+    case 'thinking':
+    case 'status':
+    case 'filtering':
+    case 'guardrail':
+    case 'error':
+      return event.message;
+    case 'searching':
+      return `搜索「${event.keywords.join('、')}」`;
+    case 'search_result':
+      return `找到 ${event.total} 家餐厅`;
+    case 'action':
+      return event.summary;
+    case 'observation':
+      return `观察到 ${event.found} 家，${event.accepted} 家可进主推荐`;
+    case 'question':
+      return event.question;
+    case 'final':
+    case 'done':
+      return event.explanation;
+    case 'tool_start':
+      return `调用 ${event.tool}`;
+    case 'tool_result':
+      return `${event.tool} 返回结果`;
+    case 'strategy_change':
+      return event.reason;
+    case 'partial_results':
+    case 'session_paused':
+    case 'session_resumed':
+    case 'session_updated':
+      return undefined;
+  }
+
+  return undefined;
 }
 
 /**
@@ -486,6 +546,7 @@ export async function agentSearch(
         if (line.startsWith('data: ')) {
           try {
             const event: AgentEvent = JSON.parse(line.slice(6));
+            emitTraceCallback(callbacks, event);
 
             switch (event.type) {
               case 'thinking':
@@ -712,6 +773,7 @@ async function requestAgentStream(
 
         try {
           const event: AgentEvent = JSON.parse(line.slice(6));
+          emitTraceCallback(callbacks, event);
 
           switch (event.type) {
             case 'thinking':

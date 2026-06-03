@@ -4,6 +4,10 @@ import type {
   SearchAttempt,
   UserGoal,
 } from './types';
+import {
+  isSearchIntentAuthorizedForPrimary,
+  primaryAuthorizationReason,
+} from './authorization';
 
 type BroadenAdmissionState = {
   goal?: UserGoal;
@@ -22,13 +26,13 @@ const PROMOTION_REASON_NOTE = '用户已授权放宽，可进入主推荐。';
 export function promoteAuthorizedBroadenedResults(
   state: BroadenAdmissionState
 ): BroadenAdmissionPromotion {
-  if (!state.goal?.allowBroaden) {
+  if (!state.goal) {
     return { promotedAttempts: 0, promotedCandidates: 0 };
   }
 
   const promotedAttemptNumbers = new Set<number>();
   state.attempts = state.attempts.map((attempt, index) => {
-    if (!isPromotableAttempt(attempt)) {
+    if (!isPromotableAttempt(state.goal!, attempt)) {
       return attempt;
     }
 
@@ -36,7 +40,10 @@ export function promoteAuthorizedBroadenedResults(
     return {
       ...attempt,
       allowedForPrimary: true,
-      reason: appendPromotionReason(attempt.reason),
+      reason: appendPromotionReason(
+        attempt.reason,
+        primaryAuthorizationReason(state.goal!, attempt.searchIntent, attempt.keywords)
+      ),
     };
   });
 
@@ -103,9 +110,10 @@ export function hasPromotedBroadenedPrimaryCandidates(state: BroadenAdmissionSta
   });
 }
 
-function isPromotableAttempt(attempt: SearchAttempt): boolean {
+function isPromotableAttempt(goal: UserGoal, attempt: SearchAttempt): boolean {
   return attempt.allowedForPrimary === false
-    && isBroadenedAttempt(attempt);
+    && isBroadenedAttempt(attempt)
+    && isSearchIntentAuthorizedForPrimary(goal, attempt.searchIntent, attempt.keywords);
 }
 
 function isBroadenedAttempt(attempt: SearchAttempt): boolean {
@@ -113,10 +121,14 @@ function isBroadenedAttempt(attempt: SearchAttempt): boolean {
 }
 
 function canPromoteCandidate(candidate: RestaurantCandidate): boolean {
-  return candidate.verification.status === 'passed'
+  return candidate.stale !== true
+    && candidate.verification.status === 'passed'
     && candidate.verification.hardFailures.length === 0;
 }
 
-function appendPromotionReason(reason: string): string {
-  return reason.includes(PROMOTION_REASON_NOTE) ? reason : `${reason} ${PROMOTION_REASON_NOTE}`;
+function appendPromotionReason(reason: string, authorizationReason?: string): string {
+  const note = authorizationReason
+    ? `${PROMOTION_REASON_NOTE} 授权原因：${authorizationReason}`
+    : PROMOTION_REASON_NOTE;
+  return reason.includes(PROMOTION_REASON_NOTE) ? reason : `${reason} ${note}`;
 }

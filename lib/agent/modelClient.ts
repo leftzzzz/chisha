@@ -14,6 +14,13 @@ interface ChatFunctionDefinition {
   parameters: unknown;
 }
 
+export interface JsonFunctionAgentInputEnvelope {
+  trustedContext?: unknown;
+  userMessage?: unknown;
+  toolObservations?: unknown;
+  policy?: unknown;
+}
+
 export const JSON_FUNCTION_MAX_TOKENS = 4096;
 export const JSON_FUNCTION_RETRY_MAX_TOKENS = 8192;
 
@@ -23,7 +30,7 @@ export interface JsonFunctionAgentOptions<T> {
   baseUrl: string;
   model: string;
   systemPrompt: string;
-  input: unknown;
+  input: JsonFunctionAgentInputEnvelope | unknown;
   functionDefinition: ChatFunctionDefinition;
   functionName: string;
   schema: z.ZodType<T, z.ZodTypeDef, unknown>;
@@ -159,8 +166,12 @@ async function requestJsonFunctionAgent<T>(
         model: options.model,
         messages: [
           {
+            role: 'system',
+            content: options.systemPrompt,
+          },
+          {
             role: 'user',
-            content: `${options.systemPrompt}\n\n${JSON.stringify(options.input)}`,
+            content: JSON.stringify(normalizeAgentInput(options.input)),
           },
         ],
         functions: [options.functionDefinition],
@@ -177,6 +188,27 @@ async function requestJsonFunctionAgent<T>(
   }
 
   return response.json();
+}
+
+function normalizeAgentInput(input: JsonFunctionAgentInputEnvelope | unknown): JsonFunctionAgentInputEnvelope {
+  if (isRecord(input) && hasEnvelopeKeys(input)) {
+    return input as JsonFunctionAgentInputEnvelope;
+  }
+
+  return { trustedContext: input };
+}
+
+function hasEnvelopeKeys(input: Record<string, unknown>): boolean {
+  return [
+    'trustedContext',
+    'userMessage',
+    'toolObservations',
+    'policy',
+  ].some((key) => key in input);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function shouldRetryTruncatedFunctionArguments<T>(

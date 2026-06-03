@@ -92,6 +92,7 @@ function createInMemoryAgentSession(message: string, location: Location): AgentS
     candidates: [],
     actions: [],
     observations: [],
+    trace: [],
   };
 
   sessions.set(session.id, session);
@@ -155,6 +156,7 @@ export function applyRuntimeStateToSession(
   session.candidates = state.candidates;
   session.actions = state.actions ?? [];
   session.observations = state.observations ?? [];
+  session.trace = state.trace ?? session.trace ?? [];
   session.pendingQuestion = state.pendingQuestion;
   return saveAgentSession(session);
 }
@@ -170,6 +172,7 @@ export async function applyRuntimeStateToSessionAsync(
   session.candidates = state.candidates;
   session.actions = state.actions ?? [];
   session.observations = state.observations ?? [];
+  session.trace = state.trace ?? session.trace ?? [];
   session.pendingQuestion = state.pendingQuestion;
   return saveAgentSessionAsync(session);
 }

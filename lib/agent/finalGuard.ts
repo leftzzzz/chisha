@@ -3,6 +3,12 @@ import type {
   FinishRecommendation,
   RestaurantCandidate,
 } from './types';
+import { isCandidateFreshForContext } from './goalVersion';
+import {
+  isBroadSearchIntent,
+  isOpenExplorationAuthorized,
+  isSearchIntentAuthorizedForPrimary,
+} from './authorization';
 
 export interface FinalGuardResult {
   primaryCandidates: RestaurantCandidate[];
@@ -38,6 +44,10 @@ export function isPrimaryRecommendationAllowed(
   candidate: RestaurantCandidate,
   context: AgentContext
 ): boolean {
+  if (!isCandidateFreshForContext(candidate, context)) {
+    return false;
+  }
+
   if (candidate.verification.status !== 'passed') {
     return false;
   }
@@ -55,9 +65,28 @@ export function isPrimaryRecommendationAllowed(
     return false;
   }
 
+  if (
+    isBroadSearchIntent(sourceAttempt.searchIntent)
+    && !isSearchIntentAuthorizedForPrimary(
+      context.goal,
+      sourceAttempt.searchIntent,
+      sourceAttempt.keywords
+    )
+  ) {
+    return false;
+  }
+
   if (hasRequiredItems(context)) {
     return candidate.verification.itemMatches.length > 0
-      || (context.goal.allowBroaden === true && candidate.verification.primaryEligible);
+      || (
+        candidate.verification.primaryEligible
+        && isBroadSearchIntent(sourceAttempt.searchIntent)
+        && isSearchIntentAuthorizedForPrimary(
+          context.goal,
+          sourceAttempt.searchIntent,
+          sourceAttempt.keywords
+        )
+      );
   }
 
   return true;
@@ -86,7 +115,7 @@ function orderCandidates(
 }
 
 function isRandomRecommendationContext(context: AgentContext): boolean {
-  return context.goal.allowBroaden
+  return isOpenExplorationAuthorized(context.goal)
     && !hasExplicitPrimaryTargets(context)
     && context.attempts.some((attempt) => attempt.searchIntent === 'fallback');
 }
@@ -177,11 +206,19 @@ function buildUnmetConstraints(
   }
 
   const hasUnauthorizedBroadened = context.attempts.some((attempt) =>
-    attempt.allowedForPrimary === false
-    && (attempt.searchIntent === 'broadened' || attempt.searchIntent === 'fallback')
+    isBroadSearchIntent(attempt.searchIntent)
+    && (
+      attempt.allowedForPrimary === false
+      || !isSearchIntentAuthorizedForPrimary(context.goal, attempt.searchIntent, attempt.keywords)
+    )
   );
   if (hasUnauthorizedBroadened) {
-    unmet.push('未授权放宽或兜底结果只作为候补，不进入主推荐。');
+    unmet.push('未获得对应授权 scope 的放宽或兜底结果只作为候补，不进入主推荐。');
+  }
+
+  const hasStaleCandidates = context.candidates.some((candidate) => candidate.stale);
+  if (hasStaleCandidates) {
+    unmet.push('部分候选来自旧目标或旧位置，需重新验证后才能进入主推荐。');
   }
 
   for (const constraint of context.goal.hardConstraints) {

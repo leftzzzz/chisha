@@ -77,4 +77,10 @@ export const EvaluationAgentOutputSchema = z.object({
   candidateIds: StringArraySchema,
   explanation: ExplanationSchema,
   unmetConstraints: StringArraySchema,
+  source: z.enum(['model', 'cache', 'error']).optional(),
+  error: z.object({
+    code: z.string().min(1),
+    message: z.string().min(1),
+    retryable: z.boolean(),
+  }).optional(),
 });

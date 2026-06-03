@@ -1,5 +1,7 @@
 import { applyFinalGuard } from '@/lib/agent/finalGuard';
+import { finalizeRecommendations } from '@/lib/agent/resultAssembler';
 import type { AgentContext, RestaurantCandidate, SearchAttempt, UserGoal } from '@/lib/agent/types';
+import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
 import type { Location, Restaurant } from '@/types';
 
 const location: Location = { lat: 31.2304, lng: 121.4737 };
@@ -115,5 +117,108 @@ describe('FinalGuard random recommendations', () => {
 
     expect(guarded.primaryCandidates.map((item) => item.restaurant.id))
       .toEqual(['r1', 'r2', 'r3', 'r4']);
+  });
+
+  it('rejects primary candidates verified against an older goal version', () => {
+    const versionedGoal = withUpdatedGoalVersion(goal({
+      rawQuery: '想吃牛排',
+      primaryKeywords: ['牛排'],
+      allowBroaden: false,
+    }));
+    const freshCandidate: RestaurantCandidate = {
+      ...candidate('fresh', '当前版本候选', 100),
+      goalId: versionedGoal.goalId,
+      verifiedAgainstGoalVersion: versionedGoal.goalVersion,
+      verifiedAgainstGoalSignature: versionedGoal.goalSignature,
+      locationSignature: deriveLocationSignature(location),
+    };
+    const staleCandidate: RestaurantCandidate = {
+      ...candidate('stale', '旧版本候选', 120),
+      goalId: versionedGoal.goalId,
+      verifiedAgainstGoalVersion: (versionedGoal.goalVersion ?? 1) - 1,
+      verifiedAgainstGoalSignature: versionedGoal.goalSignature,
+      locationSignature: deriveLocationSignature(location),
+    };
+
+    const guarded = applyFinalGuard(context({
+      goal: versionedGoal,
+      attempts: [fallbackAttempt({ searchIntent: 'exact', keywords: ['牛排'] })],
+      candidates: [staleCandidate, freshCandidate],
+    }));
+
+    expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['fresh']);
+  });
+
+  it('does not treat distance-only authorization as category or fallback primary authorization', () => {
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        allowBroaden: true,
+        authorizations: [{
+          id: 'auth_distance',
+          kind: 'distance_expansion',
+          createdAt: 1,
+          reason: '用户只授权扩大距离。',
+          constraints: { maxMeters: 5000 },
+        }],
+      }),
+      attempts: [fallbackAttempt({
+        searchIntent: 'fallback',
+        allowedForPrimary: true,
+      })],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id))
+      .toEqual(['r1', 'r2', 'r3', 'r4']);
+    expect(guarded.unmetConstraints.join('')).toContain('授权 scope');
+  });
+
+  it('keeps backup-only authorization out of primary recommendations', () => {
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        allowBroaden: true,
+        authorizations: [{
+          id: 'auth_backup',
+          kind: 'unverified_backup_only',
+          createdAt: 1,
+          reason: '用户只想先看看候补。',
+        }],
+      }),
+      attempts: [fallbackAttempt({
+        searchIntent: 'fallback',
+        allowedForPrimary: true,
+      })],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toHaveLength(4);
+  });
+
+  it('includes scoped authorization reasons in recommendation warnings', () => {
+    const final = finalizeRecommendations(context({
+      targetCount: 1,
+      goal: goal({
+        requestedItems: [{ name: '炸鸡', required: true, aliases: [] }],
+        primaryKeywords: ['炸鸡'],
+        allowBroaden: true,
+        authorizations: [{
+          id: 'auth_category',
+          kind: 'category_broaden',
+          createdAt: 1,
+          reason: '用户授权放宽到相邻品类。',
+          constraints: { allowedSearchIntents: ['broadened'] },
+        }],
+      }),
+      attempts: [fallbackAttempt({
+        searchIntent: 'broadened',
+        keywords: ['小吃'],
+        allowedForPrimary: true,
+      })],
+    }));
+
+    expect(final.restaurants).toHaveLength(1);
+    expect(final.restaurants[0].recommendationWarnings?.join('')).toContain(
+      '授权来源：用户授权放宽到相邻品类。'
+    );
   });
 });

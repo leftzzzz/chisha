@@ -1,11 +1,13 @@
 import { logger } from '@/lib/logger';
-import { fetchWithTimeout } from '@/lib/withTimeout';
 import {
+  callJsonFunctionAgent,
   JSON_FUNCTION_MAX_TOKENS,
   JSON_FUNCTION_RETRY_MAX_TOKENS,
-  parseJsonFunctionAgentResponse,
 } from '../modelClient';
-import type { ChatCompletionFunctionResponse } from '../modelJson';
+import {
+  isOpenExplorationAuthorized,
+  isSearchIntentAuthorizedForPrimary,
+} from '../authorization';
 import { normalizeSearchKeywords } from '../poiTaxonomy';
 import { PlanningAgentOutputSchema } from '../schemas/plan';
 import type {
@@ -17,7 +19,8 @@ import type {
 
 /**
  * @deprecated Runtime V3 uses SearchSupervisorAction plus runtime guards for
- * planning. This module is retained for legacy tests and design comparison.
+ * planning. This module is retained only for legacy tests and design
+ * comparison; it must not be imported by the Runtime V3 main path.
  */
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -125,20 +128,25 @@ export function deterministicPlanning(input: PlanningAgentInput): PlanningAgentO
 
   const broadTargets = buildTargets(input.goal.broadenedKeywords, input.goal, 'broad');
   if (broadTargets.length > 0 && !hasTriedAllTargets(input.attempts, broadTargets)) {
+    const allowedForPrimary = isSearchIntentAuthorizedForPrimary(
+      input.goal,
+      'broadened',
+      broadTargets.map((target) => target.label)
+    );
     return {
       plans: [{
         targets: filterUntriedTargets(input.attempts, broadTargets),
         radiusMeters,
         searchIntent: 'broadened',
-        allowedForPrimary: input.goal.allowBroaden,
-        reason: input.goal.allowBroaden
+        allowedForPrimary,
+        reason: allowedForPrimary
           ? '用户允许放宽，搜索相邻品类。'
           : '原始目标不足，仅作为候补搜索相邻品类。',
       }],
     };
   }
 
-  if (input.goal.allowBroaden && !input.attempts.some((attempt) => attempt.searchIntent === 'fallback')) {
+  if (isOpenExplorationAuthorized(input.goal) && !input.attempts.some((attempt) => attempt.searchIntent === 'fallback')) {
     return {
       plans: [{
         targets: [{ label: '餐厅', kind: 'generic', strictness: 'broad' }],
@@ -209,77 +217,30 @@ function getGoalRadius(goal: UserGoal): number {
 }
 
 async function callPlanningModel(input: PlanningAgentInput): Promise<PlanningAgentOutput> {
-  const first = parsePlanningModelResult(
-    await requestPlanningModel(input, PLANNING_MAX_TOKENS)
-  );
-
-  if (first.truncated) {
-    const retry = parsePlanningModelResult(
-      await requestPlanningModel(input, PLANNING_RETRY_MAX_TOKENS)
-    );
-    if (retry.ok) {
-      return retry.data as PlanningAgentOutput;
-    }
-
-    if (first.ok) {
-      return first.data as PlanningAgentOutput;
-    }
-
-    throw retry.error ?? first.error ?? new Error('PlanningAgent returned invalid function arguments');
-  }
-
-  if (!first.ok) {
-    throw first.error ?? new Error('PlanningAgent returned invalid function arguments');
-  }
-
-  return first.data as PlanningAgentOutput;
-}
-
-async function requestPlanningModel(
-  input: PlanningAgentInput,
-  maxTokens: number
-): Promise<ChatCompletionFunctionResponse> {
-  const response = await fetchWithTimeout(
-    `${OPENAI_BASE_URL}/chat/completions`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: `${SYSTEM_PROMPT}\n\n${JSON.stringify({
-              goal: input.goal,
-              attempts: input.attempts,
-              failureReason: input.failureReason,
-              targetCount: input.targetCount,
-            })}`,
-          },
-        ],
-        functions: [PLANNING_FUNCTION],
-        function_call: { name: 'planRestaurantSearchTargets' },
-        temperature: 0,
-        max_tokens: maxTokens,
-      }),
-    },
-    PLANNING_TIMEOUT
-  );
-
-  if (!response.ok) {
-    throw new Error(`PlanningAgent API failed: ${response.status}`);
-  }
-
-  return response.json();
-}
-
-function parsePlanningModelResult(data: ChatCompletionFunctionResponse) {
-  return parseJsonFunctionAgentResponse<PlanningAgentOutput>(data, {
+  return callJsonFunctionAgent({
     agentName: 'PlanningAgent',
+    apiKey: OPENAI_API_KEY!,
+    baseUrl: OPENAI_BASE_URL,
+    model: OPENAI_MODEL,
+    systemPrompt: SYSTEM_PROMPT,
+    input: {
+      trustedContext: {
+        goal: input.goal,
+        attempts: input.attempts,
+        failureReason: input.failureReason,
+        targetCount: input.targetCount,
+      },
+      policy: {
+        deprecatedReferenceOnly: true,
+        runtimeV3MainPathMustUseSearchSupervisorAction: true,
+      },
+    },
+    functionDefinition: PLANNING_FUNCTION,
     functionName: 'planRestaurantSearchTargets',
     schema: PlanningAgentOutputSchema,
+    temperature: 0,
+    maxTokens: PLANNING_MAX_TOKENS,
+    retryMaxTokens: PLANNING_RETRY_MAX_TOKENS,
+    timeoutMs: PLANNING_TIMEOUT,
   });
 }

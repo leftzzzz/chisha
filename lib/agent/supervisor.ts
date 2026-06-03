@@ -7,13 +7,16 @@ import {
 import { promoteAuthorizedBroadenedResults } from './broadenAdmission';
 import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
 import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
+import { deriveGoalSignature, withUpdatedGoalVersion } from './goalVersion';
 import type {
+  AgentAuthorization,
   AgentMessage,
   AgentInput,
   AgentSession,
   ClarificationEffect,
   CandidateVerdict,
   Constraint,
+  ConversationMode,
   GoalCategory,
   GoalPatch,
   PendingQuestion,
@@ -45,6 +48,7 @@ export interface SearchSupervisorOutput {
   goal?: UserGoal;
   patch?: GoalPatch;
   question?: PendingQuestion;
+  conversationMode?: ConversationMode;
   nextAction?: 'plan' | 'ask_user' | 'finish';
 }
 
@@ -68,6 +72,7 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 13. 处理 pendingQuestion 的用户回复时，必须结合 previousGoal.rawQuery、pendingQuestion 和历史 messages 重新总结完整需求；当前 message 不是独立新需求。
 14. 如果用户回复命中的是上轮澄清问题的选项标签或分类说明，不要把该标签本身作为搜索词；优先通过 pendingQuestion.optionEffects 或历史上下文恢复被澄清的原始目标。
 15. 否定条件、口味限制、排除项、开放授权和软偏好都不是搜索目标，不能进入 primaryKeywords、requestedItems 或 acceptableCategories。类似“不要辣的，其他都可以”应表达为硬约束/开放授权，并在缺少正向餐饮目标时追问，不要输出“不辣”“都可以”作为关键词。
+16. 如果存在 previousGoal，必须输出 conversationMode：继续查看当前结果用 continue_current_goal；追加预算、口味、距离、排除项或“换成日料”这类基于当前上下文的修改用 patch_current_goal；用户明显开启全新不相关需求时用 start_new_goal。
 
 需求归类：
 1. requestedItems 只放用户想吃的具体菜品、餐食或必须命中的食物目标；acceptableCategories 只放能满足需求的菜系/餐厅类型。
@@ -87,6 +92,10 @@ const SUPERVISOR_FUNCTION = {
       goal: userGoalJsonSchema(),
       patch: goalPatchJsonSchema(),
       question: pendingQuestionJsonSchema(),
+      conversationMode: {
+        type: 'string',
+        enum: ['continue_current_goal', 'patch_current_goal', 'start_new_goal'],
+      },
       nextAction: { type: 'string', enum: ['plan', 'ask_user', 'finish'] },
     },
   },
@@ -118,13 +127,26 @@ function normalizeSupervisorOutput(
   input: SearchSupervisorInput,
   output: SearchSupervisorOutput
 ): SearchSupervisorOutput {
-  if (!input.previousGoal || !input.pendingQuestion) {
-    return output;
+  const conversationMode = inferConversationMode(input, output);
+
+  if (!input.previousGoal) {
+    return {
+      ...output,
+      conversationMode,
+    };
+  }
+
+  if (!input.pendingQuestion) {
+    return {
+      ...output,
+      conversationMode,
+    };
   }
 
   if (output.patch) {
     return {
       patch: normalizePendingAnswerPatch(input.previousGoal, output.patch),
+      conversationMode,
       nextAction: 'plan',
     };
   }
@@ -135,6 +157,7 @@ function normalizeSupervisorOutput(
         ...output.goal,
         clarificationNeeded: [],
       }),
+      conversationMode,
       nextAction: 'plan',
     };
   }
@@ -143,6 +166,39 @@ function normalizeSupervisorOutput(
     question: input.pendingQuestion.question,
   });
   throw new Error('SearchSupervisorAgent returned no goal patch for a pending clarification answer');
+}
+
+function inferConversationMode(
+  input: SearchSupervisorInput,
+  output: SearchSupervisorOutput
+): ConversationMode {
+  if (!input.previousGoal) {
+    return 'start_new_goal';
+  }
+
+  if (output.patch) {
+    return 'patch_current_goal';
+  }
+
+  if (output.conversationMode) {
+    return output.conversationMode;
+  }
+
+  if (input.pendingQuestion) {
+    return 'patch_current_goal';
+  }
+
+  if (!output.goal) {
+    return 'continue_current_goal';
+  }
+
+  if (primaryTargetSignature(input.previousGoal) !== primaryTargetSignature(output.goal)) {
+    return 'start_new_goal';
+  }
+
+  return deriveGoalSignature(input.previousGoal) === deriveGoalSignature(output.goal)
+    ? 'continue_current_goal'
+    : 'patch_current_goal';
 }
 
 function normalizePendingAnswerPatch(previousGoal: UserGoal, patch: GoalPatch): GoalPatch {
@@ -212,6 +268,7 @@ function deterministicClarificationAnswer(
 function deterministicPatchOutput(previousGoal: UserGoal, patch: GoalPatch): SearchSupervisorOutput {
   return {
     patch: normalizePendingAnswerPatch(previousGoal, patch),
+    conversationMode: 'patch_current_goal',
     nextAction: 'plan',
   };
 }
@@ -255,6 +312,11 @@ function buildOpenRecommendationPatch(goal: UserGoal): GoalPatch {
 
   return GoalPatchSchema.parse({
     allowBroaden: true,
+    addAuthorizations: [
+      createAuthorization('fallback_primary', '用户授权开放推荐，可将兜底餐饮候选作为主推荐。', {
+        allowedSearchIntents: ['fallback'],
+      }),
+    ],
     addSoftPreferences: hasDefaultDiversity
       ? undefined
       : [{ name: '默认多样性', weight: 1, verifiable: true }],
@@ -281,7 +343,7 @@ export async function understandSearchGoal(input: AgentInput): Promise<UserGoal>
   });
 
   if (output.goal) {
-    return output.goal;
+    return withUpdatedGoalVersion(output.goal, input.runtimeState?.goal);
   }
 
   if (output.patch && input.runtimeState?.goal) {
@@ -314,6 +376,10 @@ export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal
       ),
       patch.addConstraints ?? []
     ),
+    authorizations: mergeAuthorizations(
+      goal.authorizations ?? [],
+      patch.addAuthorizations ?? inferAuthorizationsFromLegacyPatch(patch, goal)
+    ),
     allowBroaden: patch.allowBroaden ?? goal.allowBroaden,
     ambiguity: mergeStrings(goal.ambiguity, [patch.reason]),
     clarificationNeeded: [],
@@ -337,7 +403,7 @@ export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal
     .filter((constraint) => constraint.kind === 'exclude_category')
     .flatMap((constraint) => constraint.values ?? []);
 
-  return UserGoalSchema.parse(patched);
+  return withUpdatedGoalVersion(UserGoalSchema.parse(patched), goal);
 }
 
 export function applySupervisorClarifyingAnswer(session: AgentSession, answer: string): void {
@@ -389,6 +455,14 @@ function hasPrimaryTargets(goal: UserGoal): boolean {
     ...goal.requestedItems.map((item) => item.name),
     ...goal.acceptableCategories.map((category) => category.name),
   ].some((item) => item.trim().length > 0);
+}
+
+function primaryTargetSignature(goal: UserGoal): string {
+  return Array.from(new Set([
+    ...goal.primaryKeywords,
+    ...goal.requestedItems.map((item) => item.name),
+    ...goal.acceptableCategories.map((category) => category.name),
+  ].map((item) => item.trim()).filter(Boolean))).sort().join('|');
 }
 
 function goalPatchFromClarificationEffect(
@@ -445,9 +519,125 @@ function goalPatchFromClarificationEffect(
     removeConstraints: effect.setDistanceMaxMeters !== undefined
       ? strictDistanceConstraintLabels(previousGoal)
       : undefined,
+    addAuthorizations: effect.addAuthorizations
+      ?? inferAuthorizationsFromClarificationEffect(effect, previousGoal),
     allowBroaden: effect.allowBroaden,
     reason: '根据用户追问选项更新目标。',
   });
+}
+
+function inferAuthorizationsFromClarificationEffect(
+  effect: ClarificationEffect,
+  previousGoal?: UserGoal
+): AgentAuthorization[] | undefined {
+  if (effect.setDistanceMaxMeters !== undefined) {
+    return [
+      createAuthorization('distance_expansion', '用户授权扩大距离范围。', {
+        maxMeters: effect.setDistanceMaxMeters,
+      }),
+    ];
+  }
+
+  if (effect.allowBroaden !== true) {
+    return undefined;
+  }
+
+  return [
+    hasPrimaryTargets(previousGoal ?? emptyGoalForAuthorization())
+      ? createAuthorization('category_broaden', '用户授权放宽到相邻品类。', {
+          allowedSearchIntents: ['broadened'],
+        })
+      : createAuthorization('fallback_primary', '用户授权开放推荐，可将兜底餐饮候选作为主推荐。', {
+          allowedSearchIntents: ['fallback'],
+        }),
+  ];
+}
+
+function inferAuthorizationsFromLegacyPatch(
+  patch: GoalPatch,
+  previousGoal: UserGoal
+): AgentAuthorization[] {
+  if (patch.allowBroaden !== true) {
+    return [];
+  }
+
+  const distanceConstraint = patch.addConstraints?.find((constraint) =>
+    constraint.kind === 'distance' && constraint.maxMeters !== undefined && constraint.strict !== true
+  );
+  if (distanceConstraint?.maxMeters !== undefined) {
+    return [
+      createAuthorization('distance_expansion', '用户授权扩大距离范围。', {
+        maxMeters: distanceConstraint.maxMeters,
+      }),
+    ];
+  }
+
+  return [
+    hasPrimaryTargets(previousGoal)
+      ? createAuthorization('category_broaden', '用户授权放宽到相邻品类。', {
+          allowedSearchIntents: ['broadened'],
+        })
+      : createAuthorization('fallback_primary', '用户授权开放推荐，可将兜底餐饮候选作为主推荐。', {
+          allowedSearchIntents: ['fallback'],
+        }),
+  ];
+}
+
+function createAuthorization(
+  kind: AgentAuthorization['kind'],
+  reason: string,
+  constraints?: AgentAuthorization['constraints']
+): AgentAuthorization {
+  return {
+    id: `auth_${kind}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    kind,
+    createdAt: Date.now(),
+    reason,
+    constraints,
+  };
+}
+
+function mergeAuthorizations(
+  left: AgentAuthorization[],
+  right: AgentAuthorization[]
+): AgentAuthorization[] {
+  const byKey = new Map<string, AgentAuthorization>();
+  for (const authorization of [...left, ...right]) {
+    byKey.set(authorizationKey(authorization), authorization);
+  }
+  return Array.from(byKey.values());
+}
+
+function authorizationKey(authorization: AgentAuthorization): string {
+  return [
+    authorization.kind,
+    authorization.reason,
+    authorization.constraints?.maxMeters ?? '',
+    (authorization.constraints?.allowedSearchIntents ?? []).join('|'),
+    (authorization.constraints?.allowedKeywords ?? []).join('|'),
+  ].join(':');
+}
+
+function emptyGoalForAuthorization(): UserGoal {
+  return {
+    intent: 'find_restaurants',
+    rawQuery: '',
+    requestedItems: [],
+    acceptableCategories: [],
+    alternativeGroups: [],
+    primaryKeywords: [],
+    relatedKeywords: [],
+    broadenedKeywords: [],
+    relatedTargets: [],
+    broadenedTargets: [],
+    hardConstraints: [],
+    softPreferences: [],
+    exclusions: [],
+    ambiguity: [],
+    clarificationNeeded: [],
+    authorizations: [],
+    allowBroaden: false,
+  };
 }
 
 function strictDistanceConstraintLabels(goal: UserGoal | undefined): string[] {
@@ -470,14 +660,28 @@ async function callSupervisorModel(
     model: OPENAI_MODEL,
     systemPrompt: SYSTEM_PROMPT,
     input: {
-      message: input.message,
-      previousGoal: input.previousGoal,
-      pendingQuestion: input.pendingQuestion,
-      messages: input.messages?.slice(-8),
-      failureReason: input.failureReason,
-      attempts: input.attempts,
-      verdictSummary: input.verdictSummary,
-      preferenceSummary: input.preferenceSummary,
+      userMessage: input.message,
+      trustedContext: {
+        previousGoal: input.previousGoal,
+        pendingQuestion: input.pendingQuestion,
+        conversationMessages: input.messages?.slice(-8),
+        failureReason: input.failureReason,
+        preferenceSummary: input.preferenceSummary,
+      },
+      toolObservations: {
+        untrusted: true,
+        attempts: input.attempts,
+        verdictSummary: input.verdictSummary,
+      },
+      policy: {
+        conversationModes: ['continue_current_goal', 'patch_current_goal', 'start_new_goal'],
+        authorizationScopes: [
+          'distance_expansion',
+          'category_broaden',
+          'fallback_primary',
+          'unverified_backup_only',
+        ],
+      },
     },
     functionDefinition: SUPERVISOR_FUNCTION,
     functionName: 'superviseRestaurantSearch',
@@ -619,6 +823,11 @@ function userGoalJsonSchema() {
         type: 'array',
         items: clarificationNeedJsonSchema(),
       },
+      authorizations: {
+        type: 'array',
+        description: '用户明确授权的放宽 scope。距离扩大、品类放宽、兜底主推荐必须分开表达。',
+        items: authorizationJsonSchema(),
+      },
       allowBroaden: {
         type: 'boolean',
         description: '只有用户明确允许放宽、候补、随便推荐等开放需求时才为 true。',
@@ -640,6 +849,7 @@ function userGoalJsonSchema() {
       'exclusions',
       'ambiguity',
       'clarificationNeeded',
+      'authorizations',
       'allowBroaden',
     ],
   };
@@ -700,6 +910,11 @@ function goalPatchJsonSchema() {
         items: constraintJsonSchema(),
       },
       removeConstraints: { type: 'array', items: { type: 'string' } },
+      addAuthorizations: {
+        type: 'array',
+        description: '新增用户授权 scope；扩大距离只写 distance_expansion，放宽品类写 category_broaden，开放兜底主推写 fallback_primary。',
+        items: authorizationJsonSchema(),
+      },
       allowBroaden: { type: 'boolean' },
       reason: { type: 'string' },
     },
@@ -837,7 +1052,38 @@ function clarificationEffectJsonSchema() {
       addCategories: { type: 'array', items: { type: 'string' } },
       addSoftPreferences: { type: 'array', items: preferenceJsonSchema() },
       setDistanceMaxMeters: { type: 'number' },
+      addAuthorizations: { type: 'array', items: authorizationJsonSchema() },
       allowBroaden: { type: 'boolean' },
     },
+  };
+}
+
+function authorizationJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      id: { type: 'string' },
+      kind: {
+        type: 'string',
+        enum: ['distance_expansion', 'category_broaden', 'fallback_primary', 'unverified_backup_only'],
+      },
+      createdAt: { type: 'number' },
+      sourceQuestionId: { type: 'string' },
+      reason: { type: 'string' },
+      constraints: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          maxMeters: { type: 'number' },
+          allowedSearchIntents: {
+            type: 'array',
+            items: { type: 'string', enum: ['exact', 'synonym', 'broadened', 'fallback'] },
+          },
+          allowedKeywords: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+    required: ['kind', 'reason'],
   };
 }

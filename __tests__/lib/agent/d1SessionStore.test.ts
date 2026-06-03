@@ -1,11 +1,28 @@
 import { D1AgentSessionStore } from '@/lib/agent/d1SessionStore';
 import type { AgentSessionD1Row } from '@/lib/agent/d1SessionSchema';
+import type { AgentTraceItem } from '@/lib/agent/types';
 import type { Location } from '@/types';
 
 const location: Location = {
   lat: 31.2304,
   lng: 121.4737,
   address: '上海市黄浦区',
+};
+
+const traceItem: AgentTraceItem = {
+  id: 'trace_1',
+  sessionId: 's1',
+  turnId: 'turn_1',
+  type: 'guard_decision',
+  createdAt: 1,
+  guardDecision: {
+    type: 'allow',
+    action: {
+      type: 'finish',
+      explanation: '测试',
+      confidence: 0.8,
+    },
+  },
 };
 
 class FakeD1PreparedStatement implements D1PreparedStatement {
@@ -130,6 +147,7 @@ describe('D1AgentSessionStore', () => {
       options: ['扩大范围'],
       allowFreeText: true,
     };
+    session.trace = [traceItem];
 
     await store.saveAsync(session);
 
@@ -139,6 +157,7 @@ describe('D1AgentSessionStore', () => {
     expect(restored?.location.address).toBe('上海市黄浦区');
     expect(restored?.goal?.primaryKeywords).toEqual(['餐厅', '美食']);
     expect(restored?.pendingQuestion?.question).toBe('要不要扩大范围？');
+    expect(restored?.trace).toEqual([traceItem]);
 
     await store.deleteAsync(session.id);
 

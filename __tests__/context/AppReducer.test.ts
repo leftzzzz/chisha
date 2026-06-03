@@ -150,6 +150,14 @@ describe('AppReducer', () => {
       expect(newState.agentExplanation).toBe('已按你的需求排序。');
       expect(newState.agentUnmetConstraints).toEqual(['预算无法完全验证。']);
     });
+
+    it('should support Agent question step', () => {
+      const action = { type: 'SET_STEP' as const, payload: 'AGENT_QUESTION' };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.step).toBe('AGENT_QUESTION');
+    });
   });
 
   describe('SET_SELECTED_INDEX', () => {
@@ -200,6 +208,50 @@ describe('AppReducer', () => {
 
       expect(newState.error).toBeNull();
       expect(newState.step).toBe('ERROR'); // step unchanged
+    });
+  });
+
+  describe('Agent session state', () => {
+    it('should set Agent session id', () => {
+      const action = { type: 'SET_AGENT_SESSION_ID' as const, payload: 'session_1' };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.agentSessionId).toBe('session_1');
+    });
+
+    it('should set Agent question and move to question step', () => {
+      const question = {
+        sessionId: 'session_1',
+        question: '要扩大范围吗？',
+        options: ['扩大范围'],
+        allowFreeText: true,
+      };
+      const action = { type: 'SET_AGENT_QUESTION' as const, payload: question };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.agentQuestion).toEqual(question);
+      expect(newState.step).toBe('AGENT_QUESTION');
+      expect(newState.error).toBeNull();
+    });
+
+    it('should append and clear Agent trace refs', () => {
+      const trace = {
+        traceId: 'trace_1',
+        type: 'action',
+        message: '搜索「日料」',
+        createdAt: 123,
+      };
+      const withTrace = appReducer(initialState, {
+        type: 'APPEND_AGENT_TRACE' as const,
+        payload: trace,
+      });
+
+      expect(withTrace.agentTrace).toEqual([trace]);
+
+      const cleared = appReducer(withTrace, { type: 'CLEAR_AGENT_TRACE' as const });
+      expect(cleared.agentTrace).toEqual([]);
     });
   });
 
@@ -502,6 +554,18 @@ describe('AppReducer', () => {
         parsedRequirement: { keywords: ['test'], cuisineTypes: [], searchRadius: 2000 },
         restaurants: [mockRestaurant],
         candidateRestaurants: [],
+        agentUnmetConstraints: [],
+        agentSessionId: 'session_1',
+        agentQuestion: {
+          sessionId: 'session_1',
+          question: '要扩大范围吗？',
+          allowFreeText: true,
+        },
+        agentTrace: [{
+          traceId: 'trace_1',
+          type: 'action',
+          createdAt: 123,
+        }],
         removedRestaurants: [],
         customOptions: [mockCustomOption],
         selectedIndex: 0,

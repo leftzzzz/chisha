@@ -46,6 +46,7 @@ export class D1AgentSessionStore implements AgentSessionStore {
       candidates: [],
       actions: [],
       observations: [],
+      trace: [],
     };
 
     await this.saveAsync(session);

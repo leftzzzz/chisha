@@ -27,7 +27,15 @@
 
 import { useCallback } from 'react';
 import { useAppContext } from '@/context/AppContext';
-import { AppStep, Location, ParsedRequirement, Restaurant, CustomOption } from '@/types';
+import {
+  AgentQuestionState,
+  AgentTraceRef,
+  AppStep,
+  Location,
+  ParsedRequirement,
+  Restaurant,
+  CustomOption,
+} from '@/types';
 
 /**
  * useAppState Hook 返回值
@@ -50,6 +58,11 @@ export interface UseAppStateReturn {
   ) => void;
   setSelectedIndex: (index: number) => void;
   setError: (error: string | null) => void;
+  setAgentSessionId: (sessionId: string | null) => void;
+  setAgentQuestion: (question: AgentQuestionState | null) => void;
+  appendAgentTrace: (trace: AgentTraceRef) => void;
+  setAgentTrace: (trace: AgentTraceRef[]) => void;
+  clearAgentTrace: () => void;
   deleteRestaurant: (index: number) => void;
   restoreRestaurant: (index: number) => void;
   addFromCandidates: (index: number) => void;
@@ -183,6 +196,53 @@ export function useAppState(): UseAppStateReturn {
   );
 
   /**
+   * 设置当前 Agent 会话 ID
+   */
+  const setAgentSessionId = useCallback(
+    (sessionId: string | null) => {
+      dispatch({ type: 'SET_AGENT_SESSION_ID', payload: sessionId });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 设置当前 Agent 追问
+   */
+  const setAgentQuestion = useCallback(
+    (question: AgentQuestionState | null) => {
+      dispatch({ type: 'SET_AGENT_QUESTION', payload: question });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 追加 Agent trace 索引
+   */
+  const appendAgentTrace = useCallback(
+    (trace: AgentTraceRef) => {
+      dispatch({ type: 'APPEND_AGENT_TRACE', payload: trace });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 替换 Agent trace 索引
+   */
+  const setAgentTrace = useCallback(
+    (trace: AgentTraceRef[]) => {
+      dispatch({ type: 'SET_AGENT_TRACE', payload: trace });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 清空 Agent trace 索引
+   */
+  const clearAgentTrace = useCallback(() => {
+    dispatch({ type: 'CLEAR_AGENT_TRACE' });
+  }, [dispatch]);
+
+  /**
    * 删除餐厅
    *
    * 会自动处理:
@@ -274,6 +334,11 @@ export function useAppState(): UseAppStateReturn {
     setRestaurantsWithCandidates,
     setSelectedIndex,
     setError,
+    setAgentSessionId,
+    setAgentQuestion,
+    appendAgentTrace,
+    setAgentTrace,
+    clearAgentTrace,
     deleteRestaurant,
     restoreRestaurant,
     addFromCandidates,

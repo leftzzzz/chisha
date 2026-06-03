@@ -248,6 +248,9 @@ describe('SearchSupervisorAgent', () => {
       messages: [],
       attempts: [],
       candidates: [],
+      actions: [],
+      observations: [],
+      trace: [],
       goal: goal(),
       pendingQuestion: {
         question: '要允许放宽吗？',
@@ -284,6 +287,7 @@ describe('SearchSupervisorAgent', () => {
       candidates: [],
       actions: [],
       observations: [],
+      trace: [],
       goal: goal({
         rawQuery: '港奶',
         primaryKeywords: ['港奶'],
@@ -328,6 +332,9 @@ describe('SearchSupervisorAgent', () => {
       messages: [],
       attempts: [],
       candidates: [],
+      actions: [],
+      observations: [],
+      trace: [],
       goal: goal({ primaryKeywords: [] }),
       pendingQuestion: {
         question: '你想找哪类餐厅，或具体想吃什么？',
@@ -480,5 +487,15 @@ describe('SearchSupervisorAgent', () => {
     });
 
     expect(parsed.patch?.reason).toBe('SearchSupervisorAgent 更新目标。');
+  });
+
+  it('accepts conversation mode from Supervisor output', () => {
+    const parsed = SearchSupervisorOutputSchema.parse({
+      goal: goal({ primaryKeywords: ['火锅'] }),
+      conversationMode: 'start_new_goal',
+      nextAction: 'plan',
+    });
+
+    expect(parsed.conversationMode).toBe('start_new_goal');
   });
 });

@@ -25,6 +25,7 @@ export function agentSessionToD1Row(session: AgentSession): AgentSessionD1Row {
       candidates: session.candidates,
       actions: session.actions,
       observations: session.observations,
+      trace: session.trace,
     } satisfies AgentRuntimeState),
     pending_question_json: session.pendingQuestion
       ? JSON.stringify(session.pendingQuestion)
@@ -51,6 +52,7 @@ export function agentSessionFromD1Row(row: AgentSessionD1Row): AgentSession {
     candidates: runtimeState.candidates ?? [],
     actions: runtimeState.actions ?? [],
     observations: runtimeState.observations ?? [],
+    trace: runtimeState.trace ?? [],
     pendingQuestion: row.pending_question_json
       ? JSON.parse(row.pending_question_json) as AgentSession['pendingQuestion']
       : undefined,

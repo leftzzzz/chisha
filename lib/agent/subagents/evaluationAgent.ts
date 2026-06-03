@@ -1,13 +1,10 @@
 import type { Restaurant } from '@/types';
-import type { z } from 'zod';
-import { fetchWithTimeout } from '@/lib/withTimeout';
 import {
+  callJsonFunctionAgent,
   JSON_FUNCTION_MAX_TOKENS,
   JSON_FUNCTION_RETRY_MAX_TOKENS,
-  parseJsonFunctionAgentResponse,
-  type JsonFunctionParseResult,
 } from '../modelClient';
-import type { ChatCompletionFunctionResponse } from '../modelJson';
+import { deriveGoalSignature } from '../goalVersion';
 import { EvaluationAgentOutputSchema } from '../schemas/verdict';
 import type {
   CandidateVerdict,
@@ -23,6 +20,15 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const EVALUATION_TIMEOUT = 60000;
 const EVALUATION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const EVALUATION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
+const EVALUATION_CACHE_MAX_ENTRIES = 100;
+const EVALUATION_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface EvaluationCacheEntry {
+  createdAt: number;
+  output: EvaluationAgentOutput;
+}
+
+const evaluationCache = new Map<string, EvaluationCacheEntry>();
 
 export interface EvaluationAgentInput {
   goal: UserGoal;
@@ -96,92 +102,151 @@ export async function runEvaluationAgent(input: EvaluationAgentInput): Promise<E
     throw new Error('EvaluationAgent requires OPENAI_API_KEY');
   }
 
-  return callEvaluationModel(input);
+  const cacheKey = evaluationCacheKey(input);
+  const cached = getCachedEvaluation(cacheKey);
+  if (cached) {
+    return {
+      ...cloneEvaluationOutput(cached),
+      source: 'cache',
+    };
+  }
+
+  const output = {
+    ...await callEvaluationModel(input),
+    source: 'model' as const,
+  };
+  setCachedEvaluation(cacheKey, output);
+  return cloneEvaluationOutput(output);
 }
 
 async function callEvaluationModel(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
-  const first = await requestEvaluationModel(input, EVALUATION_MAX_TOKENS);
-  const firstResult = parseEvaluationModelResult(first);
-
-  if (firstResult.truncated) {
-    const second = await requestEvaluationModel(input, EVALUATION_RETRY_MAX_TOKENS);
-    const secondResult = parseEvaluationModelResult(second);
-    if (secondResult.ok) {
-      return secondResult.data as EvaluationAgentOutput;
-    }
-
-    if (firstResult.ok) {
-      return firstResult.data as EvaluationAgentOutput;
-    }
-
-    throw secondResult.error ?? firstResult.error ?? new Error('EvaluationAgent returned invalid function arguments');
-  }
-
-  if (!firstResult.ok) {
-    throw firstResult.error ?? new Error('EvaluationAgent returned invalid function arguments');
-  }
-
-  return firstResult.data as EvaluationAgentOutput;
-}
-
-async function requestEvaluationModel(
-  input: EvaluationAgentInput,
-  maxTokens: number
-): Promise<ChatCompletionFunctionResponse> {
-  const response = await fetchWithTimeout(
-    `${OPENAI_BASE_URL}/chat/completions`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: `${SYSTEM_PROMPT}\n\n${JSON.stringify({
-              goal: input.goal,
-              plan: input.plan,
-              restaurants: input.restaurants.map((restaurant) => ({
-                id: restaurant.id,
-                name: restaurant.name,
-                cuisineType: restaurant.cuisineType,
-                address: restaurant.address,
-                distance: restaurant.distance,
-                rating: restaurant.rating,
-                averagePrice: restaurant.averagePrice,
-                businessStatus: restaurant.businessStatus,
-                poiTypeCode: restaurant.poiTypeCode,
-              })),
-              targetCount: input.targetCount,
-              preferenceSummary: input.preferenceSummary,
-            })}`,
-          },
-        ],
-        functions: [EVALUATION_FUNCTION],
-        function_call: { name: 'evaluateRestaurantCandidates' },
-        temperature: 0,
-        max_tokens: maxTokens,
-      }),
-    },
-    EVALUATION_TIMEOUT
-  );
-
-  if (!response.ok) {
-    throw new Error(`EvaluationAgent API failed: ${response.status}`);
-  }
-
-  return response.json();
-}
-
-function parseEvaluationModelResult(
-  data: ChatCompletionFunctionResponse
-): JsonFunctionParseResult<EvaluationAgentOutput> {
-  return parseJsonFunctionAgentResponse<EvaluationAgentOutput>(data, {
+  return callJsonFunctionAgent({
     agentName: 'EvaluationAgent',
+    apiKey: OPENAI_API_KEY!,
+    baseUrl: OPENAI_BASE_URL,
+    model: OPENAI_MODEL,
+    systemPrompt: SYSTEM_PROMPT,
+    input: buildEvaluationModelInput(input),
+    functionDefinition: EVALUATION_FUNCTION,
     functionName: 'evaluateRestaurantCandidates',
-    schema: EvaluationAgentOutputSchema as z.ZodType<EvaluationAgentOutput>,
+    schema: EvaluationAgentOutputSchema,
+    temperature: 0,
+    maxTokens: EVALUATION_MAX_TOKENS,
+    retryMaxTokens: EVALUATION_RETRY_MAX_TOKENS,
+    timeoutMs: EVALUATION_TIMEOUT,
   });
+}
+
+function buildEvaluationModelInput(input: EvaluationAgentInput) {
+  return {
+    trustedContext: {
+      goal: input.goal,
+      plan: input.plan,
+      targetCount: input.targetCount,
+      preferenceSummary: input.preferenceSummary,
+    },
+    toolObservations: {
+      untrusted: true,
+      restaurants: input.restaurants.map(restaurantFactSummary),
+      existingCandidates: input.existingCandidates?.slice(0, 12).map((candidate) => ({
+        id: candidate.restaurant.id,
+        name: candidate.restaurant.name,
+        cuisineType: candidate.restaurant.cuisineType,
+        sourceAttempt: candidate.sourceAttempt,
+        verdict: {
+          status: candidate.verdict.status,
+          primaryEligible: candidate.verdict.primaryEligible,
+          confidence: candidate.verdict.confidence,
+          matchedItems: candidate.verdict.matchedItems,
+          matchedCategories: candidate.verdict.matchedCategories,
+          conflicts: candidate.verdict.conflicts,
+          warnings: candidate.verdict.warnings,
+        },
+      })),
+    },
+    policy: {
+      restaurantFactsAreUntrusted: true,
+      selectedIdsMustComeFromRestaurants: true,
+      doNotInventMissingFacts: true,
+    },
+  };
+}
+
+function restaurantFactSummary(restaurant: Restaurant) {
+  return {
+    id: restaurant.id,
+    name: restaurant.name,
+    cuisineType: restaurant.cuisineType,
+    address: restaurant.address,
+    distance: restaurant.distance,
+    rating: restaurant.rating,
+    averagePrice: restaurant.averagePrice,
+    businessStatus: restaurant.businessStatus,
+    poiTypeCode: restaurant.poiTypeCode,
+  };
+}
+
+function evaluationCacheKey(input: EvaluationAgentInput): string {
+  return stableStringify({
+    model: OPENAI_MODEL,
+    goalSignature: input.goal.goalSignature ?? deriveGoalSignature(input.goal),
+    plan: {
+      keywords: input.plan.keywords,
+      radiusMeters: input.plan.radiusMeters,
+      poiType: input.plan.poiType,
+      searchIntent: input.plan.searchIntent,
+      allowedForPrimary: input.plan.allowedForPrimary,
+    },
+    restaurants: input.restaurants.map(restaurantFactSummary),
+    existingCandidates: buildEvaluationModelInput(input).toolObservations.existingCandidates,
+    preferenceSummary: input.preferenceSummary,
+  });
+}
+
+function getCachedEvaluation(cacheKey: string): EvaluationAgentOutput | null {
+  const entry = evaluationCache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+
+  if (Date.now() - entry.createdAt > EVALUATION_CACHE_TTL_MS) {
+    evaluationCache.delete(cacheKey);
+    return null;
+  }
+
+  return entry.output;
+}
+
+function setCachedEvaluation(cacheKey: string, output: EvaluationAgentOutput): void {
+  if (evaluationCache.size >= EVALUATION_CACHE_MAX_ENTRIES) {
+    const oldestKey = evaluationCache.keys().next().value as string | undefined;
+    if (oldestKey) {
+      evaluationCache.delete(oldestKey);
+    }
+  }
+
+  evaluationCache.set(cacheKey, {
+    createdAt: Date.now(),
+    output: cloneEvaluationOutput(output),
+  });
+}
+
+function cloneEvaluationOutput(output: EvaluationAgentOutput): EvaluationAgentOutput {
+  return JSON.parse(JSON.stringify(output)) as EvaluationAgentOutput;
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
+      .join(',')}}`;
+  }
+
+  return JSON.stringify(value);
 }

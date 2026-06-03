@@ -101,6 +101,7 @@ export type AppStep =
   | 'INPUT'        // 输入需求
   | 'UNDERSTANDING' // 理解需求中
   | 'SEARCHING'    // 搜索中
+  | 'AGENT_QUESTION' // Agent 等待用户补充
   | 'READY'        // 转盘就绪
   | 'SPINNING'     // 转盘选择中
   | 'RESULT'       // 显示结果
@@ -121,6 +122,20 @@ export function isCustomOption(option: TurntableOption): option is CustomOption 
   return 'isCustom' in option && option.isCustom === true;
 }
 
+export interface AgentQuestionState {
+  sessionId: string;
+  question: string;
+  options?: string[];
+  allowFreeText: boolean;
+}
+
+export interface AgentTraceRef {
+  traceId?: string;
+  type: string;
+  message?: string;
+  createdAt: number;
+}
+
 // 应用状态
 export interface AppState {
   step: AppStep;
@@ -131,6 +146,9 @@ export interface AppState {
   candidateRestaurants: Restaurant[]; // 候补池餐厅
   agentExplanation?: string; // Agent 整体推荐说明
   agentUnmetConstraints: string[]; // 未完全满足或无法验证的约束
+  agentSessionId: string | null; // 当前 Agent 会话 ID
+  agentQuestion: AgentQuestionState | null; // Agent 当前追问
+  agentTrace: AgentTraceRef[]; // Agent 可回放事件索引
   removedRestaurants: Restaurant[]; // 已移除的餐厅（可恢复）
   customOptions: CustomOption[]; // 转盘上的自定义选项
   selectedIndex: number; // 选中的餐厅索引 (-1 表示未选中)
@@ -155,6 +173,11 @@ export type AppAction =
     }
   | { type: 'SET_SELECTED_INDEX'; payload: number }
   | { type: 'SET_ERROR'; payload: string | null }
+  | { type: 'SET_AGENT_SESSION_ID'; payload: string | null }
+  | { type: 'SET_AGENT_QUESTION'; payload: AgentQuestionState | null }
+  | { type: 'APPEND_AGENT_TRACE'; payload: AgentTraceRef }
+  | { type: 'SET_AGENT_TRACE'; payload: AgentTraceRef[] }
+  | { type: 'CLEAR_AGENT_TRACE' }
   | { type: 'DELETE_RESTAURANT'; payload: number }
   | { type: 'RESTORE_RESTAURANT'; payload: number } // 从已移除恢复到转盘
   | { type: 'ADD_FROM_CANDIDATES'; payload: number } // 从候补池添加到转盘
