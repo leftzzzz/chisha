@@ -168,8 +168,8 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
       const retryRequest = JSON.parse(fetchWithTimeout.mock.calls[1][1].body as string);
 
       expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
-      expect(initialRequest.max_tokens).toBe(4096);
-      expect(retryRequest.max_tokens).toBe(8192);
+      expect(initialRequest.max_completion_tokens).toBe(4096);
+      expect(retryRequest.max_completion_tokens).toBe(8192);
       expect(output.goal?.primaryKeywords).toEqual(['日料']);
     } finally {
       if (originalApiKey === undefined) {

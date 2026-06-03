@@ -81,12 +81,86 @@ describe('modelClient', () => {
 
     const firstBody = JSON.parse(fetchWithTimeoutMock.mock.calls[0][1].body);
     const retryBody = JSON.parse(fetchWithTimeoutMock.mock.calls[1][1].body);
-    expect(firstBody.max_tokens).toBe(10);
-    expect(retryBody.max_tokens).toBe(20);
+    expect(firstBody.max_completion_tokens).toBe(10);
+    expect(retryBody.max_completion_tokens).toBe(20);
+    expect(firstBody.tools).toEqual([{
+      type: 'function',
+      function: {
+        name: 'testFunction',
+        parameters: { type: 'object' },
+      },
+    }]);
+    expect(firstBody.tool_choice).toEqual({
+      type: 'function',
+      function: { name: 'testFunction' },
+    });
     expect(firstBody.messages).toEqual([
       { role: 'system', content: 'Return JSON.' },
       { role: 'user', content: JSON.stringify({ trustedContext: { query: 'test' } }) },
     ]);
+  });
+
+  it('omits temperature for GPT-5 reasoning models', async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
+
+    await callJsonFunctionAgent({
+      agentName: 'TestAgent',
+      apiKey: 'test-key',
+      baseUrl: 'https://example.test/v1',
+      model: 'gpt-5.2',
+      systemPrompt: 'Return JSON.',
+      input: { query: 'test' },
+      functionDefinition: {
+        name: 'testFunction',
+        parameters: { type: 'object' },
+      },
+      functionName: 'testFunction',
+      schema: TestSchema,
+      temperature: 0,
+      maxTokens: 10,
+      timeoutMs: 1000,
+    });
+
+    const requestBody = JSON.parse(fetchWithTimeoutMock.mock.calls[0][1].body);
+    expect(requestBody.temperature).toBeUndefined();
+  });
+
+  it('includes API error details when a chat completion request fails', async () => {
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(errorResponse({
+        error: {
+          message: "Unsupported parameter: 'temperature'",
+          type: 'invalid_request_error',
+          code: 'unsupported_parameter',
+        },
+      }))
+      .mockResolvedValueOnce(errorResponse({
+        error: {
+          message: "Legacy function_call is also unsupported",
+          type: 'invalid_request_error',
+          code: 'unsupported_parameter',
+        },
+      }));
+
+    await expect(callJsonFunctionAgent({
+      agentName: 'TestAgent',
+      apiKey: 'test-key',
+      baseUrl: 'https://example.test/v1',
+      model: 'test-model',
+      systemPrompt: 'Return JSON.',
+      input: { query: 'test' },
+      functionDefinition: {
+        name: 'testFunction',
+        parameters: { type: 'object' },
+      },
+      functionName: 'testFunction',
+      schema: TestSchema,
+      temperature: 0,
+      maxTokens: 10,
+      timeoutMs: 1000,
+    })).rejects.toThrow(
+      "TestAgent API failed: 400 - Legacy function_call is also unsupported; type=invalid_request_error; code=unsupported_parameter"
+    );
   });
 });
 
@@ -104,5 +178,16 @@ function modelResponse(argumentsJson: string, finishReason?: string) {
         },
       }],
     }),
+  };
+}
+
+function errorResponse(body: unknown) {
+  return {
+    ok: false,
+    status: 400,
+    headers: {
+      get: () => null,
+    },
+    text: async () => JSON.stringify(body),
   };
 }

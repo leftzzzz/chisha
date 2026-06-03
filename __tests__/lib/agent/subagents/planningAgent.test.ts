@@ -107,7 +107,7 @@ describe('PlanningAgent', () => {
       });
 
       const requestBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(requestBody.max_tokens).toBe(4096);
+      expect(requestBody.max_completion_tokens).toBe(4096);
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
       if (originalApiKey === undefined) {

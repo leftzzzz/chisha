@@ -242,8 +242,8 @@ describe('EvaluationAgent', () => {
 
     const firstBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
     const secondBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
-    expect(firstBody.max_tokens).toBe(4096);
-    expect(secondBody.max_tokens).toBe(8192);
+    expect(firstBody.max_completion_tokens).toBe(4096);
+    expect(secondBody.max_completion_tokens).toBe(8192);
   });
 
   it('reuses cached model verdicts for identical evaluation requests', async () => {

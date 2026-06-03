@@ -46,6 +46,8 @@ npm run dev
 OPENAI_API_KEY=sk-...
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-5.2
+# 兼容旧 OpenAI-compatible 端点时可选
+# OPENAI_TOOL_CALL_MODE=functions
 
 AMAP_API_KEY=...
 NEXT_PUBLIC_AMAP_KEY=...
@@ -727,6 +729,7 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 | `OPENAI_API_KEY` | 是 | OpenAI 或兼容服务 API Key | - |
 | `OPENAI_BASE_URL` | 否 | OpenAI 兼容 API 地址 | `https://api.openai.com/v1` |
 | `OPENAI_MODEL` | 否 | Agent 使用的模型 | 代码默认 `gpt-4o`，`.env.example` 使用 `gpt-5.2` |
+| `OPENAI_TOOL_CALL_MODE` | 否 | 模型函数调用请求格式；默认使用 `tools/tool_choice`，旧兼容端点可设为 `functions` | - |
 | `AMAP_API_KEY` | 是 | 高德 Web 服务 API Key | - |
 | `NEXT_PUBLIC_AMAP_KEY` | 否 | 前端地图 JS API Key | - |
 | `AMAP_SECURITY_CODE` | 否 | 高德安全码或签名密钥 | - |

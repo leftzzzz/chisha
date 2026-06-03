@@ -14,6 +14,26 @@ interface ChatFunctionDefinition {
   parameters: unknown;
 }
 
+type ChatToolCallMode = 'tools' | 'functions';
+
+interface ChatCompletionRequestBody {
+  model: string;
+  messages: Array<{ role: 'system' | 'user'; content: string }>;
+  tools?: Array<{
+    type: 'function';
+    function: ChatFunctionDefinition;
+  }>;
+  tool_choice?: {
+    type: 'function';
+    function: { name: string };
+  };
+  functions?: ChatFunctionDefinition[];
+  function_call?: { name: string };
+  temperature?: number;
+  max_completion_tokens?: number;
+  max_tokens?: number;
+}
+
 export interface JsonFunctionAgentInputEnvelope {
   trustedContext?: unknown;
   userMessage?: unknown;
@@ -154,40 +174,153 @@ async function requestJsonFunctionAgent<T>(
   options: JsonFunctionAgentOptions<T>,
   maxTokens: number
 ): Promise<ChatCompletionFunctionResponse> {
-  const response = await fetchWithTimeout(
-    `${options.baseUrl}/chat/completions`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${options.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: options.model,
-        messages: [
-          {
-            role: 'system',
-            content: options.systemPrompt,
-          },
-          {
-            role: 'user',
-            content: JSON.stringify(normalizeAgentInput(options.input)),
-          },
-        ],
-        functions: [options.functionDefinition],
-        function_call: { name: options.functionName },
-        temperature: options.temperature,
-        max_tokens: maxTokens,
-      }),
-    },
-    options.timeoutMs
-  );
+  const modes = preferredToolCallModes();
+  let lastError: Error | undefined;
 
-  if (!response.ok) {
-    throw new Error(`${options.agentName} API failed: ${response.status}`);
+  for (const mode of modes) {
+    const response = await fetchWithTimeout(
+      `${options.baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${options.apiKey}`,
+        },
+        body: JSON.stringify(buildChatCompletionRequestBody(options, maxTokens, mode)),
+      },
+      options.timeoutMs
+    );
+
+    if (response.ok) {
+      return response.json();
+    }
+
+    const error = await buildChatCompletionError(options.agentName, options.model, mode, response);
+    if (mode === 'tools' && response.status === 400 && modes.includes('functions')) {
+      logger.warn(`${options.agentName} modern tool call request failed; retrying legacy function_call format`, {
+        error: error.message,
+        model: options.model,
+      });
+      lastError = error;
+      continue;
+    }
+
+    throw error;
   }
 
-  return response.json();
+  throw lastError ?? new Error(`${options.agentName} API failed`);
+}
+
+function buildChatCompletionRequestBody<T>(
+  options: JsonFunctionAgentOptions<T>,
+  maxTokens: number,
+  mode: ChatToolCallMode
+): ChatCompletionRequestBody {
+  const body: ChatCompletionRequestBody = {
+    model: options.model,
+    messages: [
+      {
+        role: 'system',
+        content: options.systemPrompt,
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(normalizeAgentInput(options.input)),
+      },
+    ],
+  };
+
+  if (mode === 'tools') {
+    body.tools = [{
+      type: 'function',
+      function: options.functionDefinition,
+    }];
+    body.tool_choice = {
+      type: 'function',
+      function: { name: options.functionName },
+    };
+    body.max_completion_tokens = maxTokens;
+  } else {
+    body.functions = [options.functionDefinition];
+    body.function_call = { name: options.functionName };
+    body.max_tokens = maxTokens;
+  }
+
+  if (shouldIncludeTemperature(options.model)) {
+    body.temperature = options.temperature;
+  }
+
+  return body;
+}
+
+function preferredToolCallModes(): ChatToolCallMode[] {
+  return process.env.OPENAI_TOOL_CALL_MODE === 'functions'
+    ? ['functions']
+    : ['tools', 'functions'];
+}
+
+function shouldIncludeTemperature(model: string): boolean {
+  return !isReasoningChatModel(model);
+}
+
+function isReasoningChatModel(model: string): boolean {
+  const normalized = model.toLowerCase();
+  return /^o\d/.test(normalized) || normalized.startsWith('gpt-5');
+}
+
+async function buildChatCompletionError(
+  agentName: string,
+  model: string,
+  mode: ChatToolCallMode,
+  response: Response
+): Promise<Error> {
+  const responseBody = await readResponseBody(response);
+  const apiMessage = extractApiErrorMessage(responseBody);
+  const requestId = response.headers.get('x-request-id') ?? response.headers.get('openai-request-id');
+  const details = [
+    apiMessage,
+    requestId ? `request_id=${requestId}` : undefined,
+    `model=${model}`,
+    `tool_call_mode=${mode}`,
+  ].filter(Boolean).join('; ');
+
+  return new Error(`${agentName} API failed: ${response.status}${details ? ` - ${details}` : ''}`);
+}
+
+async function readResponseBody(response: Response): Promise<string | null> {
+  try {
+    const text = await response.text();
+    return text.trim() ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractApiErrorMessage(responseBody: string | null): string | undefined {
+  if (!responseBody) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(responseBody) as {
+      error?: {
+        message?: string;
+        type?: string;
+        code?: string;
+      };
+      message?: string;
+    };
+    const message = parsed.error?.message ?? parsed.message;
+    const type = parsed.error?.type;
+    const code = parsed.error?.code;
+    return [
+      message,
+      type ? `type=${type}` : undefined,
+      code ? `code=${code}` : undefined,
+    ].filter(Boolean).join('; ');
+  } catch {
+    return responseBody.slice(0, 500);
+  }
 }
 
 function normalizeAgentInput(input: JsonFunctionAgentInputEnvelope | unknown): JsonFunctionAgentInputEnvelope {
