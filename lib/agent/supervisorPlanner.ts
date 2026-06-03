@@ -84,6 +84,7 @@ const ACTION_SYSTEM_PROMPT = `你是 SupervisorPlannerAgent，也是餐厅搜索
 - selectedIds 只能来自候选摘要中的 id；未验证或 failed 候选不能作为主推荐。
 - relatedKeywords 还有未尝试词且主推荐少于目标数时，优先继续 search，不要过早 finish。
 - 当 goal 没有明确主目标但 allowBroaden=true 时，第一轮优先 fallback 到通用餐饮词；通用结果不足时再尝试 broadenedKeywords。
+- ask_user 必须包含非空 question.question，且 question.question 必须是可直接展示给用户的中文问句。
 - ask_user 如果给出选项，尽量为选项提供 optionEffects。选项标签只是分类说明时，effect 必须指向历史上下文里的真实目标，不能把选项标签当搜索词。`;
 const ACTION_REWRITE_PROMPT = `如果输入里包含 rewriteInstruction，说明上一轮 action 被 Runtime Guard 拒绝或要求重写。你必须根据 rewriteInstruction 修正 action；不要重复输出相同违规动作。`;
 
@@ -108,15 +109,16 @@ const ACTION_FUNCTION = {
       question: {
         type: 'object',
         properties: {
-          reason: { type: 'string' },
-          question: { type: 'string' },
-          options: { type: 'array', items: { type: 'string' } },
+          reason: { type: 'string', minLength: 1, maxLength: 240 },
+          question: { type: 'string', minLength: 1, maxLength: 160 },
+          options: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 32 } },
           allowFreeText: { type: 'boolean' },
           optionEffects: {
             type: 'object',
             additionalProperties: actionClarificationEffectJsonSchema(),
           },
         },
+        required: ['question'],
       },
       selectedIds: { type: 'array', items: { type: 'string' } },
       candidateIds: { type: 'array', items: { type: 'string' } },

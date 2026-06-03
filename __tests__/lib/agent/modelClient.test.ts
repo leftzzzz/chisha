@@ -107,6 +107,38 @@ describe('modelClient', () => {
     ]);
   });
 
+  it('retries invalid schema responses with a repair instruction', async () => {
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(modelResponse('{}'))
+      .mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
+
+    const result = await callJsonFunctionAgent({
+      agentName: 'TestAgent',
+      apiKey: 'test-key',
+      baseUrl: 'https://example.test/v1',
+      model: 'test-model',
+      systemPrompt: 'Return JSON.',
+      input: { query: 'test' },
+      functionDefinition: {
+        name: 'testFunction',
+        parameters: { type: 'object' },
+      },
+      functionName: 'testFunction',
+      schema: TestSchema,
+      temperature: 0,
+      maxTokens: 10,
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({ value: 'ok', items: [] });
+    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+
+    const retryBody = JSON.parse(fetchWithTimeoutMock.mock.calls[1][1].body);
+    expect(retryBody.messages[0].content).toContain('schema 校验');
+    expect(JSON.parse(retryBody.messages[1].content).policy.schemaRepair.previousError)
+      .toContain('TestAgent returned invalid schema');
+  });
+
   it('omits temperature for GPT-5 reasoning models', async () => {
     fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
 

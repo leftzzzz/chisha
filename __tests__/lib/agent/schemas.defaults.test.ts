@@ -1,4 +1,5 @@
 import { AgentActionSchema } from '@/lib/agent/schemas/action';
+import { SearchSupervisorOutputSchema } from '@/lib/agent/schemas/clarification';
 import { UserGoalSchema } from '@/lib/agent/schemas/goal';
 import { KeywordExpansionOutputSchema } from '@/lib/agent/schemas/keywordExpansion';
 import { PlanningAgentOutputSchema, SearchPlanSchema } from '@/lib/agent/schemas/plan';
@@ -115,6 +116,47 @@ describe('Agent schema defaults', () => {
     if (action.type === 'finish') {
       expect(action.candidateIds).toBeUndefined();
     }
+  });
+
+  it('repairs blank or missing pending questions from model output', () => {
+    const supervisorOutput = SearchSupervisorOutputSchema.parse({
+      question: {
+        reason: '',
+        question: '   ',
+      },
+      nextAction: 'ask_user',
+    });
+
+    expect(supervisorOutput.question).toEqual({
+      question: '你想找哪类餐厅，或具体想吃什么？',
+      allowFreeText: true,
+    });
+
+    const action = AgentActionSchema.parse({
+      type: 'ask_user',
+      question: {
+        question: '',
+      },
+    });
+
+    expect(action).toEqual({
+      type: 'ask_user',
+      question: {
+        question: '你想找哪类餐厅，或具体想吃什么？',
+        allowFreeText: true,
+      },
+    });
+
+    expect(SearchSupervisorOutputSchema.parse({
+      question: {
+        reason: '用户需求缺少明确餐饮目标。',
+      },
+      nextAction: 'ask_user',
+    }).question).toEqual({
+      reason: '用户需求缺少明确餐饮目标。',
+      question: '你想找哪类餐厅，或具体想吃什么？',
+      allowFreeText: true,
+    });
   });
 
   it('tolerates common scalar fields in keyword expansion output', () => {

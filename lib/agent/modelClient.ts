@@ -44,6 +44,10 @@ export interface JsonFunctionAgentInputEnvelope {
 
 export const JSON_FUNCTION_MAX_TOKENS = 4096;
 export const JSON_FUNCTION_RETRY_MAX_TOKENS = 8192;
+const SCHEMA_REPAIR_PROMPT = `上一轮函数参数没有通过运行时 schema 校验。你必须重新调用同一个函数，只修复字段结构，不改变用户目标。
+- 不要省略 required 字段。
+- required 字符串字段必须是非空文本。
+- 如果输出追问，question.question 必须是一句可直接展示给用户的中文问题，不能留空或省略。`;
 
 export interface JsonFunctionAgentOptions<T> {
   agentName: string;
@@ -114,6 +118,26 @@ export async function callJsonFunctionAgent<T>(
     }
 
     throw retry.error ?? first.error ?? truncatedFunctionArgumentsError(options.agentName);
+  }
+
+  if (shouldRetryInvalidFunctionArguments(first)) {
+    logger.warn(`${options.agentName} returned invalid function arguments, retrying with a schema repair instruction`, {
+      error: first.error?.message,
+    });
+
+    const retry = parseJsonFunctionAgentResponse(
+      await requestJsonFunctionAgent(
+        withSchemaRepairInstruction(options, first.error),
+        options.maxTokens
+      ),
+      options
+    );
+
+    if (retry.ok) {
+      return retry.data as T;
+    }
+
+    throw retry.error ?? first.error ?? new Error(`${options.agentName} returned invalid function arguments`);
   }
 
   if (first.ok) {
@@ -377,6 +401,41 @@ function shouldRetryTruncatedFunctionArguments<T>(
   return result.truncated
     && typeof options.retryMaxTokens === 'number'
     && options.retryMaxTokens > options.maxTokens;
+}
+
+function shouldRetryInvalidFunctionArguments<T>(
+  result: JsonFunctionParseResult<T>
+): boolean {
+  return !result.ok && !result.truncated;
+}
+
+function withSchemaRepairInstruction<T>(
+  options: JsonFunctionAgentOptions<T>,
+  error: Error | undefined
+): JsonFunctionAgentOptions<T> {
+  return {
+    ...options,
+    systemPrompt: `${options.systemPrompt}\n\n${SCHEMA_REPAIR_PROMPT}`,
+    input: buildSchemaRepairInput(options.input, error),
+  };
+}
+
+function buildSchemaRepairInput(
+  input: JsonFunctionAgentInputEnvelope | unknown,
+  error: Error | undefined
+): JsonFunctionAgentInputEnvelope {
+  const normalized = normalizeAgentInput(input);
+  const previousPolicy = isRecord(normalized.policy) ? normalized.policy : {};
+
+  return {
+    ...normalized,
+    policy: {
+      ...previousPolicy,
+      schemaRepair: {
+        previousError: error?.message ?? 'Unknown schema validation error',
+      },
+    },
+  };
 }
 
 function truncatedFunctionArgumentsError(agentName: string): Error {

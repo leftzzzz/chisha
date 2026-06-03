@@ -73,6 +73,7 @@ const SYSTEM_PROMPT = `你是 SupervisorPlannerAgent，是餐厅搜索主 Agent�
 14. 如果用户回复命中的是上轮澄清问题的选项标签或分类说明，不要把该标签本身作为搜索词；优先通过 pendingQuestion.optionEffects 或历史上下文恢复被澄清的原始目标。
 15. 否定条件、口味限制、排除项、开放授权和软偏好都不是搜索目标，不能进入 primaryKeywords、requestedItems 或 acceptableCategories。类似“不要辣的，其他都可以”应表达为硬约束/开放授权，并在缺少正向餐饮目标时追问，不要输出“不辣”“都可以”作为关键词。
 16. 如果存在 previousGoal，必须输出 conversationMode：继续查看当前结果用 continue_current_goal；追加预算、口味、距离、排除项或“换成日料”这类基于当前上下文的修改用 patch_current_goal；用户明显开启全新不相关需求时用 start_new_goal。
+17. 如果输出 question 或 clarificationNeeded，question.question 必须是非空、可直接展示给用户的中文问句；不能只输出 reason，不能把 question.question 留空或省略。
 
 需求归类：
 1. requestedItems 只放用户想吃的具体菜品、餐食或必须命中的食物目标；acceptableCategories 只放能满足需求的菜系/餐厅类型。
@@ -927,9 +928,9 @@ function pendingQuestionJsonSchema() {
     type: 'object',
     additionalProperties: false,
     properties: {
-      reason: { type: 'string' },
-      question: { type: 'string' },
-      options: { type: 'array', items: { type: 'string' } },
+      reason: { type: 'string', minLength: 1, maxLength: 240 },
+      question: { type: 'string', minLength: 1, maxLength: 160 },
+      options: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 32 } },
       allowFreeText: { type: 'boolean' },
       optionEffects: {
         type: 'object',
@@ -1019,16 +1020,16 @@ function clarificationNeedJsonSchema() {
     type: 'object',
     additionalProperties: false,
     properties: {
-      reason: { type: 'string' },
-      question: { type: 'string' },
+      reason: { type: 'string', minLength: 1 },
+      question: { type: 'string', minLength: 1 },
       options: {
         type: 'array',
         items: {
           type: 'object',
           additionalProperties: false,
           properties: {
-            label: { type: 'string' },
-            value: { type: 'string' },
+            label: { type: 'string', minLength: 1 },
+            value: { type: 'string', minLength: 1 },
             effect: clarificationEffectJsonSchema(),
           },
           required: ['label', 'value'],
