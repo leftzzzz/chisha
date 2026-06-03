@@ -4,11 +4,14 @@
  * Agent 搜索进度显示，支持动态多轮搜索和实时餐厅列表展示
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import type { SearchProgress } from '@/hooks/useRestaurantSearch';
+import { Button } from './ui';
 
 export interface LoadingStepsProps {
   progress: SearchProgress;
+  onQuestionReply?: (answer: string) => Promise<void> | void;
+  isReplying?: boolean;
 }
 
 /**
@@ -45,6 +48,22 @@ function StatusIcon({ status }: { status: SearchProgress['status'] }) {
             strokeLinejoin="round"
             strokeWidth={2}
             d="M6 18L18 6M6 6l12 12"
+          />
+        </svg>
+      );
+    case 'question':
+      return (
+        <svg
+          className="w-5 h-5 text-white"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M8.25 9a3.75 3.75 0 117.15 1.61c-.9.5-1.65 1.12-1.65 2.39M12 17h.01"
           />
         </svg>
       );
@@ -88,6 +107,8 @@ function getStatusLabel(status: SearchProgress['status']): string {
       return '完成';
     case 'error':
       return '出错';
+    case 'question':
+      return '补充需求';
     default:
       return '准备中';
   }
@@ -102,13 +123,30 @@ function getStatusColor(status: SearchProgress['status']): string {
       return 'bg-green-500';
     case 'error':
       return 'bg-red-500';
+    case 'question':
+      return 'bg-amber-500';
     default:
       return 'bg-primary';
   }
 }
 
-export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
-  const { status, message, currentKeywords, round, total, foundRestaurants } = progress;
+export const LoadingSteps: React.FC<LoadingStepsProps> = ({
+  progress,
+  onQuestionReply,
+  isReplying = false,
+}) => {
+  const { status, message, currentKeywords, round, total, foundRestaurants, question } = progress;
+  const [reply, setReply] = useState('');
+
+  const submitReply = async (answer: string) => {
+    const cleanedAnswer = answer.trim();
+    if (!cleanedAnswer || isReplying) {
+      return;
+    }
+
+    setReply('');
+    await onQuestionReply?.(cleanedAnswer);
+  };
 
   return (
     <div className="w-full max-w-md mx-auto p-8 bg-white rounded-lg shadow-lg">
@@ -127,11 +165,65 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
           <h3 className="text-lg font-semibold text-gray-800">
             {getStatusLabel(status)}
           </h3>
-          <p className="text-sm text-gray-600 mt-1">
-            {message}
-          </p>
+          {status !== 'question' && message && (
+            <p className="text-sm text-gray-600 mt-1">
+              {message}
+            </p>
+          )}
         </div>
       </div>
+
+      {status === 'question' && question && (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700">
+            {question.question}
+          </p>
+
+          {question.options && question.options.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {question.options.map((option) => (
+                <Button
+                  key={option}
+                  variant="secondary"
+                  size="md"
+                  onClick={() => submitReply(option)}
+                  disabled={isReplying}
+                  loading={isReplying}
+                  className="w-full"
+                >
+                  {option}
+                </Button>
+              ))}
+            </div>
+          )}
+
+          {question.allowFreeText && (
+            <form
+              className="flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitReply(reply);
+              }}
+            >
+              <input
+                value={reply}
+                onChange={(event) => setReply(event.target.value)}
+                disabled={isReplying}
+                className="min-w-0 flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+                maxLength={120}
+              />
+              <Button
+                type="submit"
+                size="md"
+                disabled={!reply.trim() || isReplying}
+                loading={isReplying}
+              >
+                继续
+              </Button>
+            </form>
+          )}
+        </div>
+      )}
 
       {/* 搜索进度详情 */}
       {(status === 'searching' || status === 'filtering') && (
@@ -203,7 +295,7 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
       )}
 
       {/* 进度条 */}
-      {status !== 'error' && status !== 'done' && (
+      {status !== 'error' && status !== 'done' && status !== 'question' && (
         <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
           <div
             className="bg-primary h-full rounded-full transition-all duration-500 ease-out"
@@ -229,7 +321,7 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
       )}
 
       {/* 提示文本 */}
-      {status !== 'done' && status !== 'error' && (
+      {status !== 'done' && status !== 'error' && status !== 'question' && (
         <div className="mt-6 text-center">
           <p className="text-xs text-gray-400">
             AI 正在智能搜索，请稍候...

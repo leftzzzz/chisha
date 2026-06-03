@@ -627,6 +627,98 @@ pm2 restart chisha
    - 配置 CORS
    - API 限流
 
+## Cloudflare D1 会话存储与迁移
+
+Agent 多轮会话需要持久化到 D1，避免 Cloudflare Workers 多实例、冷启动或重新部署后丢失追问状态。
+
+### 首次创建 D1 数据库
+
+每个 Cloudflare 账号/环境只需要创建一次数据库：
+
+```bash
+npx wrangler d1 create chisha
+```
+
+命令会输出 `database_id`。将它加入 `wrangler.jsonc`：
+
+```jsonc
+{
+  "d1_databases": [
+    {
+      "binding": "CHISHA_DB",
+      "database_name": "chisha",
+      "database_id": "<cloudflare-created-id>"
+    }
+  ]
+}
+```
+
+不要手动建表。表结构由 `migrations/` 下的 SQL 迁移管理。
+
+### 本地和远程迁移
+
+本地开发数据库：
+
+```bash
+npm run db:migrate:local
+```
+
+远程生产数据库：
+
+```bash
+npm run db:migrate:remote
+```
+
+当前迁移会创建 `agent_sessions` 表，并建立 `expires_at`、`updated_at` 索引。迁移文件使用 `IF NOT EXISTS`，搬环境后重复执行是安全的。
+
+### 自动部署迁移
+
+`npm run deploy` 已配置为先执行远程 D1 迁移，再部署 Worker：
+
+```bash
+npm run deploy
+```
+
+迁移由 `wrangler.jsonc` 里的 `build.command = "npm run wrangler:build"` 触发。因此部署平台即使直接执行 `npx wrangler deploy` 或 `npx wrangler versions upload`，Wrangler 也会在上传前先运行远程 D1 迁移。`wrangler dev` 不会触发远程迁移。若部署平台已经先执行了 `npm run build:cloudflare`，脚本会复用已有的 `.open-next/worker.js`，避免重复构建；否则会自动执行 OpenNext 构建。
+
+Wrangler 在 CI/CD 或其它非交互命令行中会跳过迁移确认提示；本地终端可能会要求确认。需要紧急跳过迁移时使用：
+
+```bash
+npm run deploy:skip-migrations
+```
+
+如果使用 Cloudflare Versions 流程，推荐命令是：
+
+```bash
+npm run versions:upload
+```
+
+直接使用平台的 Version command `npx wrangler versions upload` 也可以，因为会走上面的 Wrangler build hook。
+
+### 搬环境检查清单
+
+- 创建目标环境 D1 数据库：`npx wrangler d1 create chisha`
+- 将新的 `database_id` 写入 `wrangler.jsonc`
+- 配置环境变量：`OPENAI_API_KEY`、`AMAP_API_KEY`
+- 执行：`npm run deploy`
+- 确认迁移已应用：`npx wrangler d1 migrations list chisha --remote`
+
+### 确认线上正在使用 D1 会话存储
+
+部署后触发一次会产生 Agent 追问的搜索，再查询远程表：
+
+```bash
+npx wrangler d1 execute chisha --remote --command "SELECT COUNT(*) AS count FROM agent_sessions;"
+```
+
+如果 `count` 增加，说明线上请求已经通过 `CHISHA_DB` binding 写入 D1。也可以查看最近写入时间：
+
+```bash
+npx wrangler d1 execute chisha --remote --command "SELECT id, updated_at, expires_at FROM agent_sessions ORDER BY updated_at DESC LIMIT 5;"
+```
+
+生产代码从 Cloudflare/OpenNext runtime 读取 `CHISHA_DB` binding；如果 binding 缺失，会回退到内存 session store，适合本地 Next.js/Jest，但不适合生产。
+
 ## 成本估算
 
 ### Vercel（推荐）

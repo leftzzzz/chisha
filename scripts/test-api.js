@@ -56,6 +56,34 @@ async function testEndpoint(name, url, body) {
   }
 }
 
+async function testSseEndpoint(name, url, body) {
+  log(`\n${'='.repeat(60)}`, 'cyan');
+  log(`Testing: ${name}`, 'blue');
+  log(`Endpoint: POST ${url}`, 'yellow');
+  log(`Request:`, 'yellow');
+  console.log(JSON.stringify(body, null, 2));
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+
+    log(`\nResponse (${response.status}):`, 'yellow');
+    console.log(text.slice(0, 1200));
+
+    if (response.ok && text.includes('"type"')) {
+      log(`✓ ${name} - SUCCESS`, 'green');
+    } else {
+      log(`✗ ${name} - FAILED`, 'red');
+    }
+  } catch (error) {
+    log(`✗ ${name} - ERROR: ${error.message}`, 'red');
+  }
+}
+
 async function main() {
   log('Starting API Tests...', 'cyan');
   log(`API Base URL: ${API_BASE}\n`, 'yellow');
@@ -67,43 +95,26 @@ async function main() {
     address: '北京市朝阳区三里屯',
   };
 
-  // 1. 测试理解 API
-  const understandResult = await testEndpoint(
-    'Understand User Query',
-    `${API_BASE}/api/understand`,
+  // 1. 测试 Agent 对话搜索 API（SSE）
+  await testSseEndpoint(
+    'Agent Chat Search',
+    `${API_BASE}/api/agent/chat`,
     {
-      query: '我想吃附近便宜的火锅',
+      message: '我想吃附近便宜的火锅',
       location: testLocation,
     }
   );
 
-  // 2. 测试搜索 API（使用理解结果）
-  if (understandResult?.success) {
-    const parsed = understandResult.data.parsed;
-    await testEndpoint(
-      'Search Restaurants',
-      `${API_BASE}/api/search`,
-      {
-        keywords: parsed.keywords,
-        location: testLocation,
-        distance: parsed.searchRadius,
-        cuisineTypes: parsed.cuisineTypes,
-        priceRange: parsed.priceRange,
-        count: 8,
-      }
-    );
-  } else {
-    // 直接测试搜索
-    await testEndpoint(
-      'Search Restaurants (Direct)',
-      `${API_BASE}/api/search`,
-      {
-        keywords: ['火锅'],
-        location: testLocation,
-        distance: 2000,
-      }
-    );
-  }
+  // 2. 直接测试搜索 API
+  await testEndpoint(
+    'Search Restaurants (Direct)',
+    `${API_BASE}/api/search`,
+    {
+      keywords: ['火锅'],
+      location: testLocation,
+      distance: 2000,
+    }
+  );
 
   // 3. 测试地理编码
   await testEndpoint(

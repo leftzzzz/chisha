@@ -2,7 +2,7 @@
  * useRestaurantSearch - 餐厅搜索 Hook
  *
  * 使用 Agent API 执行智能搜索:
- * 1. 调用 /api/agent/search (SSE 流式)
+ * 1. 调用 /api/agent/chat (SSE 流式)
  * 2. 实时更新搜索进度
  * 3. 更新应用状态
  *
@@ -17,14 +17,15 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { Location } from '@/types';
-import { agentSearch, APIError, SearchResultRestaurant } from '@/lib/api';
+import { agentChat, APIError, AgentQuestion, AgentTraceEvent, SearchResultRestaurant } from '@/lib/api';
+import { buildUserPreferenceSummary } from '@/lib/storage';
 import { useAppState } from './useAppState';
 
 /**
  * 搜索进度状态
  */
 export interface SearchProgress {
-  status: 'idle' | 'thinking' | 'searching' | 'filtering' | 'done' | 'error';
+  status: 'idle' | 'thinking' | 'searching' | 'filtering' | 'question' | 'done' | 'error';
   message: string;
   currentKeywords?: string[];
   round?: number;
@@ -32,6 +33,8 @@ export interface SearchProgress {
   total?: number;
   /** 已搜索到的餐厅列表（用于实时展示） */
   foundRestaurants?: SearchResultRestaurant[];
+  /** Agent 需要用户补充信息时的追问 */
+  question?: AgentQuestion;
 }
 
 /**
@@ -41,6 +44,18 @@ export interface UseRestaurantSearchReturn {
   isSearching: boolean;
   progress: SearchProgress;
   search: (query: string, location: Location, onError?: (errorCode: string) => void) => Promise<void>;
+  answerQuestion: (answer: string, onError?: (errorCode: string) => void) => Promise<void>;
+}
+
+function isSameQuestion(left?: AgentQuestion | null, right?: AgentQuestion | null): boolean {
+  if (!left || !right) {
+    return false;
+  }
+
+  return left.sessionId === right.sessionId
+    && left.question === right.question
+    && left.allowFreeText === right.allowFreeText
+    && (left.options ?? []).join('\u0000') === (right.options ?? []).join('\u0000');
 }
 
 /**
@@ -70,9 +85,14 @@ export interface UseRestaurantSearchReturn {
  */
 export function useRestaurantSearch(): UseRestaurantSearchReturn {
   const {
+    state,
     setStep,
     setRestaurantsWithCandidates,
     setError,
+    setAgentSessionId,
+    setAgentQuestion,
+    appendAgentTrace,
+    clearAgentTrace,
   } = useAppState();
 
   const [isSearching, setIsSearching] = useState(false);
@@ -83,14 +103,45 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
 
   // 用于取消上一个搜索请求
   const abortControllerRef = useRef<AbortController | null>(null);
+  const activeLocationRef = useRef<Location | null>(null);
+  const activeQuestionRef = useRef<AgentQuestion | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+
+  const setQuestionProgress = useCallback((question: AgentQuestion) => {
+    activeQuestionRef.current = question;
+    activeSessionIdRef.current = question.sessionId;
+    setAgentSessionId(question.sessionId);
+    setAgentQuestion(question);
+    setStep('AGENT_QUESTION');
+    setProgress(prev => {
+      if (prev.status === 'question' && isSameQuestion(prev.question, question)) {
+        return prev;
+      }
+
+      return {
+        status: 'question',
+        message: question.question,
+        question,
+      };
+    });
+  }, [setAgentQuestion, setAgentSessionId, setStep]);
+
+  const appendTraceProgress = useCallback((trace: AgentTraceEvent) => {
+    appendAgentTrace(trace);
+  }, [appendAgentTrace]);
 
   /**
-   * 执行 Agent 搜索
+   * 执行 Agent 搜索或会话续跑
    */
-  const search = useCallback(
-    async (query: string, location: Location, onError?: (errorCode: string) => void) => {
+  const runChatSearch = useCallback(
+    async (
+      message: string,
+      location: Location,
+      onError?: (errorCode: string) => void,
+      sessionId?: string
+    ) => {
       // 验证输入
-      if (!query.trim()) {
+      if (!message.trim()) {
         setError('请输入您想吃什么');
         return;
       }
@@ -112,15 +163,27 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
       setIsSearching(true);
       setStep('SEARCHING');
       setError(null);
+      setAgentQuestion(null);
+      activeLocationRef.current = location;
+
+      if (sessionId) {
+        activeSessionIdRef.current = sessionId;
+        setAgentSessionId(sessionId);
+      } else {
+        activeSessionIdRef.current = null;
+        setAgentSessionId(null);
+        clearAgentTrace();
+      }
 
       // 初始化进度
       setProgress({
         status: 'thinking',
-        message: '正在分析您的需求...',
+        message: sessionId ? '正在继续理解你的补充...' : '正在分析您的需求...',
       });
 
       try {
-        const { restaurants, candidates } = await agentSearch(query, location, {
+        const preferenceSummary = buildUserPreferenceSummary();
+        const result = await agentChat(message, location, {
           onThinking: (message) => {
             setProgress({
               status: 'thinking',
@@ -160,6 +223,68 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
             }));
           },
 
+          onStatus: (message) => {
+            setProgress(prev => ({
+              ...prev,
+              message,
+            }));
+          },
+
+          onStrategyChange: (reason) => {
+            setProgress(prev => ({
+              ...prev,
+              status: 'searching',
+              message: `正在调整策略：${reason}`,
+            }));
+          },
+
+          onAction: (summary, actionType) => {
+            setProgress(prev => ({
+              ...prev,
+              status: actionType === 'search' ? 'searching' : prev.status,
+              message: summary,
+            }));
+          },
+
+          onObservation: (found, accepted, rejected) => {
+            setProgress(prev => ({
+              ...prev,
+              status: 'searching',
+              message: `观察到 ${found} 家，${accepted} 家可进主推荐，${rejected} 家被硬约束过滤`,
+              found,
+            }));
+          },
+
+          onGuardrail: (message) => {
+            setProgress(prev => ({
+              ...prev,
+              message,
+            }));
+          },
+
+          onQuestion: (question) => {
+            setQuestionProgress(question);
+          },
+
+          onSessionPaused: (sessionId) => {
+            activeSessionIdRef.current = sessionId;
+            setAgentSessionId(sessionId);
+          },
+
+          onSessionResumed: (sessionId) => {
+            activeSessionIdRef.current = sessionId;
+            setAgentSessionId(sessionId);
+          },
+
+          onSessionUpdated: (sessionId) => {
+            activeSessionIdRef.current = sessionId;
+            setAgentSessionId(sessionId);
+          },
+
+          onTrace: (trace) => {
+            appendTraceProgress(trace);
+          },
+
           onDone: () => {
             // done 事件现在由 filtering 事件替代进度更新
           },
@@ -170,7 +295,23 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
               message,
             });
           },
-        }, abortController.signal);
+        }, abortController.signal, sessionId, preferenceSummary);
+
+        if (result.paused && result.question) {
+          setQuestionProgress({
+            ...result.question,
+            sessionId: result.sessionId ?? result.question.sessionId,
+          });
+          return;
+        }
+
+        const { restaurants, candidates, explanation, unmetConstraints } = result;
+        activeQuestionRef.current = null;
+        setAgentQuestion(null);
+        if (result.sessionId) {
+          activeSessionIdRef.current = result.sessionId;
+          setAgentSessionId(result.sessionId);
+        }
 
         // 搜索完成
         const totalFound = restaurants.length + candidates.length;
@@ -181,7 +322,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         });
 
         // 直接使用后端返回的选中餐厅和候补餐厅
-        setRestaurantsWithCandidates(restaurants, candidates);
+        setRestaurantsWithCandidates(restaurants, candidates, explanation, unmetConstraints);
         setStep('READY');
 
       } catch (error) {
@@ -201,9 +342,12 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
           message: errorMessage,
         });
 
+        activeQuestionRef.current = null;
+        activeSessionIdRef.current = null;
+        setAgentQuestion(null);
+        setAgentSessionId(null);
         setError(errorMessage);
         onError?.(errorCode);
-        setStep('INPUT');
 
       } finally {
         setIsSearching(false);
@@ -213,12 +357,46 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         }
       }
     },
-    [setStep, setRestaurantsWithCandidates, setError]
+    [
+      appendTraceProgress,
+      clearAgentTrace,
+      setAgentQuestion,
+      setAgentSessionId,
+      setStep,
+      setRestaurantsWithCandidates,
+      setError,
+      setQuestionProgress,
+    ]
+  );
+
+  const search = useCallback(
+    async (query: string, location: Location, onError?: (errorCode: string) => void) => {
+      activeQuestionRef.current = null;
+      const sessionId = activeSessionIdRef.current ?? state.agentSessionId ?? undefined;
+      await runChatSearch(query, location, onError, sessionId);
+    },
+    [runChatSearch, state.agentSessionId]
+  );
+
+  const answerQuestion = useCallback(
+    async (answer: string, onError?: (errorCode: string) => void) => {
+      const question = activeQuestionRef.current ?? progress.question ?? state.agentQuestion;
+      const location = activeLocationRef.current;
+
+      if (!question || !location) {
+        setError('当前没有可继续的 Agent 会话');
+        return;
+      }
+
+      await runChatSearch(answer, location, onError, question.sessionId);
+    },
+    [progress.question, runChatSearch, setError, state.agentQuestion]
   );
 
   return {
     isSearching,
     progress,
     search,
+    answerQuestion,
   };
 }

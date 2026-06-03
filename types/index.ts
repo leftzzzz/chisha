@@ -19,7 +19,11 @@ export interface Restaurant {
   address: string; // 详细地址
   phone?: string; // 联系电话
   openingHours?: string; // 营业时间
+  businessStatus?: 'open' | 'closed' | 'unknown'; // 营业状态（数据源可提供时）
   averagePrice?: number; // 人均消费（元）
+  poiTypeCode?: string; // 数据源返回的 POI 类型码（如高德 typecode）
+  recommendationReason?: string; // 推荐理由
+  recommendationWarnings?: string[]; // 不可验证或放宽匹配说明
   location: Location; // 地理位置
   source: 'amap' | 'osm'; // 数据来源
 }
@@ -97,6 +101,7 @@ export type AppStep =
   | 'INPUT'        // 输入需求
   | 'UNDERSTANDING' // 理解需求中
   | 'SEARCHING'    // 搜索中
+  | 'AGENT_QUESTION' // Agent 等待用户补充
   | 'READY'        // 转盘就绪
   | 'SPINNING'     // 转盘选择中
   | 'RESULT'       // 显示结果
@@ -117,6 +122,20 @@ export function isCustomOption(option: TurntableOption): option is CustomOption 
   return 'isCustom' in option && option.isCustom === true;
 }
 
+export interface AgentQuestionState {
+  sessionId: string;
+  question: string;
+  options?: string[];
+  allowFreeText: boolean;
+}
+
+export interface AgentTraceRef {
+  traceId?: string;
+  type: string;
+  message?: string;
+  createdAt: number;
+}
+
 // 应用状态
 export interface AppState {
   step: AppStep;
@@ -125,6 +144,11 @@ export interface AppState {
   parsedRequirement: ParsedRequirement | null; // 解析后的需求
   restaurants: Restaurant[]; // 转盘上的餐厅
   candidateRestaurants: Restaurant[]; // 候补池餐厅
+  agentExplanation?: string; // Agent 整体推荐说明
+  agentUnmetConstraints: string[]; // 未完全满足或无法验证的约束
+  agentSessionId: string | null; // 当前 Agent 会话 ID
+  agentQuestion: AgentQuestionState | null; // Agent 当前追问
+  agentTrace: AgentTraceRef[]; // Agent 可回放事件索引
   removedRestaurants: Restaurant[]; // 已移除的餐厅（可恢复）
   customOptions: CustomOption[]; // 转盘上的自定义选项
   selectedIndex: number; // 选中的餐厅索引 (-1 表示未选中)
@@ -138,9 +162,22 @@ export type AppAction =
   | { type: 'SET_STEP'; payload: AppStep }
   | { type: 'SET_PARSED_REQUIREMENT'; payload: ParsedRequirement }
   | { type: 'SET_RESTAURANTS'; payload: Restaurant[] }
-  | { type: 'SET_RESTAURANTS_WITH_CANDIDATES'; payload: { turntable: Restaurant[]; candidates: Restaurant[] } }
+  | {
+      type: 'SET_RESTAURANTS_WITH_CANDIDATES';
+      payload: {
+        turntable: Restaurant[];
+        candidates: Restaurant[];
+        explanation?: string;
+        unmetConstraints?: string[];
+      };
+    }
   | { type: 'SET_SELECTED_INDEX'; payload: number }
   | { type: 'SET_ERROR'; payload: string | null }
+  | { type: 'SET_AGENT_SESSION_ID'; payload: string | null }
+  | { type: 'SET_AGENT_QUESTION'; payload: AgentQuestionState | null }
+  | { type: 'APPEND_AGENT_TRACE'; payload: AgentTraceRef }
+  | { type: 'SET_AGENT_TRACE'; payload: AgentTraceRef[] }
+  | { type: 'CLEAR_AGENT_TRACE' }
   | { type: 'DELETE_RESTAURANT'; payload: number }
   | { type: 'RESTORE_RESTAURANT'; payload: number } // 从已移除恢复到转盘
   | { type: 'ADD_FROM_CANDIDATES'; payload: number } // 从候补池添加到转盘
@@ -158,6 +195,7 @@ export interface TurntableRecord {
   query: string; // 用户需求
   location: Location; // 位置
   restaurants: Restaurant[]; // 参与的餐厅
+  rejectedRestaurants?: Restaurant[]; // 用户手动删除的餐厅
   customOptions?: CustomOption[]; // 参与的自定义选项
   selected: Restaurant | CustomOption; // 选中的餐厅或自定义选项
   userFeedback?: 'like' | 'dislike'; // 用户反馈

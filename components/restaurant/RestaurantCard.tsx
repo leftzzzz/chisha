@@ -105,6 +105,18 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
           </div>
         )}
 
+        {/* 营业状态 */}
+        {restaurant.businessStatus && restaurant.businessStatus !== 'unknown' && (
+          <div className="flex items-center gap-2">
+            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-sm text-gray-600">
+              {restaurant.businessStatus === 'open' ? '营业中' : '可能已打烊'}
+            </p>
+          </div>
+        )}
+
         {/* 人均价格 */}
         {restaurant.averagePrice && (
           <div className="flex items-center gap-2">
@@ -112,6 +124,22 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <p className="text-sm text-gray-600">{formatPrice(restaurant.averagePrice)}</p>
+          </div>
+        )}
+
+        {/* 推荐理由 */}
+        {restaurant.recommendationReason && (
+          <div className="rounded-lg bg-primary/5 border border-primary/10 p-3">
+            <p className="text-sm text-gray-700">{restaurant.recommendationReason}</p>
+            {restaurant.recommendationWarnings && restaurant.recommendationWarnings.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {restaurant.recommendationWarnings.map((warning) => (
+                  <p key={warning} className="text-xs text-gray-500">
+                    {warning}
+                  </p>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

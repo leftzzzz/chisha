@@ -43,7 +43,7 @@ export const HomePage: React.FC = () => {
     dispatch,
   } = useAppState();
   const { location: detectedLocation, getAutoLocation, isLocating, error: locationError, geocodeAddress, clearLocation } = useLocation();
-  const { search, isSearching, progress } = useRestaurantSearch();
+  const { search, answerQuestion, isSearching, progress } = useRestaurantSearch();
   const { rotation, selectedIndex, isSpinning, startSpin, reset: resetTurntable } = useTurntable(state.restaurants.length + state.customOptions.length);
   const errorAlert = useErrorAlert();
 
@@ -144,8 +144,10 @@ export const HomePage: React.FC = () => {
     await search(state.userQuery, state.userLocation, (errorCode) => {
       // 获取错误信息并显示弹窗
       const isRetryable = errorCode === 'SEARCH_NO_RESULTS' ||
+                         errorCode === 'NO_RESULTS' ||
                          errorCode === 'NETWORK_ERROR' ||
                          errorCode === 'SEARCH_TIMEOUT' ||
+                         errorCode === 'AGENT_ERROR' ||
                          errorCode === 'SERVICE_BUSY' ||
                          errorCode === 'INSUFFICIENT_RESULTS' ||
                          errorCode === 'API_CALL_FAILED' ||
@@ -191,6 +193,7 @@ export const HomePage: React.FC = () => {
           query: state.userQuery,
           location: state.userLocation,
           restaurants: state.restaurants,
+          rejectedRestaurants: state.removedRestaurants,
           customOptions: state.customOptions.length > 0 ? state.customOptions : undefined,
           selected: selectedOption,
         });
@@ -203,7 +206,7 @@ export const HomePage: React.FC = () => {
       }
     }
     prevStepRef.current = state.step;
-  }, [state.step, selectedIndex, isDesktop, state.restaurants, state.customOptions, state.userQuery, state.userLocation]);
+  }, [state.step, selectedIndex, isDesktop, state.restaurants, state.removedRestaurants, state.customOptions, state.userQuery, state.userLocation]);
 
   // 处理扇区点击
   const handleSegmentClick = useCallback((index: number) => {
@@ -269,6 +272,10 @@ export const HomePage: React.FC = () => {
     reset();
   }, [reset]);
 
+  const handleErrorBack = useCallback(() => {
+    setStep('INPUT');
+  }, [setStep]);
+
   // 选中的餐厅
   const selectedRestaurant = selectedIndex >= 0 ? state.restaurants[selectedIndex] : null;
 
@@ -278,10 +285,18 @@ export const HomePage: React.FC = () => {
     : null;
 
   // 渲染加载状态
-  if (state.step === 'UNDERSTANDING' || state.step === 'SEARCHING') {
+  if (
+    state.step === 'UNDERSTANDING'
+    || state.step === 'SEARCHING'
+    || state.step === 'AGENT_QUESTION'
+  ) {
     return (
       <Layout>
-        <LoadingSteps progress={progress} />
+        <LoadingSteps
+          progress={progress}
+          onQuestionReply={answerQuestion}
+          isReplying={isSearching}
+        />
       </Layout>
     );
   }
@@ -293,7 +308,7 @@ export const HomePage: React.FC = () => {
         <div className="max-w-md mx-auto mt-12">
           <ErrorMessage
             error={searchError || '搜索失败，请重试'}
-            onAction={handleClose}
+            onAction={handleErrorBack}
             actionLabel="返回"
           />
         </div>
@@ -412,6 +427,20 @@ export const HomePage: React.FC = () => {
             onShare={() => handleShare()}
           />
         </div>
+        {(state.agentExplanation || state.agentUnmetConstraints.length > 0) && (
+          <div className="mt-4 mx-2 sm:mx-0 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-sm text-gray-600">
+            {state.agentExplanation && (
+              <p>{state.agentExplanation}</p>
+            )}
+            {state.agentUnmetConstraints.length > 0 && (
+              <div className="mt-2 space-y-1 text-xs text-gray-500">
+                {state.agentUnmetConstraints.slice(0, 3).map((item) => (
+                  <p key={item}>{item}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

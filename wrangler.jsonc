@@ -1,14 +1,26 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "chisha",
-  "main": ".open-next/worker.js",
-  "compatibility_date": "2024-12-01",
-  "compatibility_flags": ["nodejs_compat"],
-  "assets": {
-    "directory": ".open-next/assets",
-    "binding": "ASSETS"
-  },
-  "observability": {
-    "enabled": true
-  }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "chisha",
+	"main": ".open-next/worker.js",
+	"compatibility_date": "2024-12-01",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"assets": {
+		"directory": ".open-next/assets",
+		"binding": "ASSETS"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"build": {
+		"command": "npm run wrangler:build"
+	},
+	"d1_databases": [
+		{
+			"binding": "CHISHA_DB",
+			"database_name": "chisha",
+			"database_id": "899b64a6-84a0-4eda-8a19-7613c83427b1"
+		}
+	]
 }

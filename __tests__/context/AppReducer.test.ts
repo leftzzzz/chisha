@@ -119,7 +119,7 @@ describe('AppReducer', () => {
   describe('SET_RESTAURANTS_WITH_CANDIDATES', () => {
     it('should set turntable and candidate restaurants', () => {
       const turntable = [mockRestaurant];
-      const candidates = [{ ...mockRestaurant, id: 'r2' }];
+      const candidates = [{ ...mockRestaurant, id: 'r2', name: '候补餐厅' }];
       const action = {
         type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
         payload: { turntable, candidates },
@@ -132,6 +132,61 @@ describe('AppReducer', () => {
       expect(newState.removedRestaurants).toEqual([]);
       expect(newState.customOptions).toEqual([]);
       expect(newState.selectedIndex).toBe(-1);
+    });
+
+    it('should keep Agent explanation and unmet constraints', () => {
+      const action = {
+        type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
+        payload: {
+          turntable: [mockRestaurant],
+          candidates: [],
+          explanation: '已按你的需求排序。',
+          unmetConstraints: ['预算无法完全验证。'],
+        },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.agentExplanation).toBe('已按你的需求排序。');
+      expect(newState.agentUnmetConstraints).toEqual(['预算无法完全验证。']);
+    });
+
+    it('should dedupe restaurants across turntable and candidate pool', () => {
+      const duplicate = {
+        ...mockRestaurant,
+        id: 'osm_duplicate',
+        name: mockRestaurant.name,
+        location: {
+          lat: mockRestaurant.location.lat + 0.0001,
+          lng: mockRestaurant.location.lng + 0.0001,
+        },
+        source: 'osm' as const,
+      };
+      const uniqueCandidate = {
+        ...mockRestaurant,
+        id: 'r2',
+        name: '另一家餐厅',
+      };
+      const action = {
+        type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
+        payload: {
+          turntable: [mockRestaurant, duplicate],
+          candidates: [duplicate, uniqueCandidate],
+        },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.restaurants.map((restaurant) => restaurant.id)).toEqual(['r1']);
+      expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual(['r2']);
+    });
+
+    it('should support Agent question step', () => {
+      const action = { type: 'SET_STEP' as const, payload: 'AGENT_QUESTION' };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.step).toBe('AGENT_QUESTION');
     });
   });
 
@@ -183,6 +238,50 @@ describe('AppReducer', () => {
 
       expect(newState.error).toBeNull();
       expect(newState.step).toBe('ERROR'); // step unchanged
+    });
+  });
+
+  describe('Agent session state', () => {
+    it('should set Agent session id', () => {
+      const action = { type: 'SET_AGENT_SESSION_ID' as const, payload: 'session_1' };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.agentSessionId).toBe('session_1');
+    });
+
+    it('should set Agent question and move to question step', () => {
+      const question = {
+        sessionId: 'session_1',
+        question: '要扩大范围吗？',
+        options: ['扩大范围'],
+        allowFreeText: true,
+      };
+      const action = { type: 'SET_AGENT_QUESTION' as const, payload: question };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.agentQuestion).toEqual(question);
+      expect(newState.step).toBe('AGENT_QUESTION');
+      expect(newState.error).toBeNull();
+    });
+
+    it('should append and clear Agent trace refs', () => {
+      const trace = {
+        traceId: 'trace_1',
+        type: 'action',
+        message: '搜索「日料」',
+        createdAt: 123,
+      };
+      const withTrace = appReducer(initialState, {
+        type: 'APPEND_AGENT_TRACE' as const,
+        payload: trace,
+      });
+
+      expect(withTrace.agentTrace).toEqual([trace]);
+
+      const cleared = appReducer(withTrace, { type: 'CLEAR_AGENT_TRACE' as const });
+      expect(cleared.agentTrace).toEqual([]);
     });
   });
 
@@ -437,7 +536,11 @@ describe('AppReducer', () => {
 
   describe('RESTORE_FROM_HISTORY', () => {
     it('should restore state from history record', () => {
-      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }, { ...mockRestaurant, id: 'r3' }];
+      const restaurants = [
+        mockRestaurant,
+        { ...mockRestaurant, id: 'r2', name: '第二家餐厅' },
+        { ...mockRestaurant, id: 'r3', name: '第三家餐厅' },
+      ];
       const action = {
         type: 'RESTORE_FROM_HISTORY' as const,
         payload: {
@@ -485,6 +588,18 @@ describe('AppReducer', () => {
         parsedRequirement: { keywords: ['test'], cuisineTypes: [], searchRadius: 2000 },
         restaurants: [mockRestaurant],
         candidateRestaurants: [],
+        agentUnmetConstraints: [],
+        agentSessionId: 'session_1',
+        agentQuestion: {
+          sessionId: 'session_1',
+          question: '要扩大范围吗？',
+          allowFreeText: true,
+        },
+        agentTrace: [{
+          traceId: 'trace_1',
+          type: 'action',
+          createdAt: 123,
+        }],
         removedRestaurants: [],
         customOptions: [mockCustomOption],
         selectedIndex: 0,

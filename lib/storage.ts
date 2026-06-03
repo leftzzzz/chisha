@@ -15,6 +15,7 @@
  */
 
 import { TurntableRecord, Location, Restaurant, isCustomOption } from '@/types';
+import type { UserPreferenceSummary } from '@/lib/agent/types';
 import { nanoid } from 'nanoid';
 
 /**
@@ -361,6 +362,50 @@ function generateId(): string {
   return `record-${Date.now()}-${nanoid(9)}`;
 }
 
+function addWeight(weights: Map<string, number>, key: string, value: number): void {
+  const normalizedKey = key.trim();
+  if (!normalizedKey || normalizedKey === '自定义') {
+    return;
+  }
+
+  weights.set(normalizedKey, (weights.get(normalizedKey) ?? 0) + value);
+}
+
+function mapToWeightedList(weights: Map<string, number>): Array<{ name: string; weight: number }> {
+  return Array.from(weights.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, weight]) => ({
+      name,
+      weight: Math.round(weight * 100) / 100,
+    }));
+}
+
+function medianNumber(values: number[]): number | undefined {
+  if (values.length === 0) {
+    return undefined;
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+
+  return sorted.length % 2 === 0
+    ? Math.round((sorted[middle - 1] + sorted[middle]) / 2)
+    : sorted[middle];
+}
+
+function buildPreferredPriceRange(values: number[]): { min?: number; max?: number } | undefined {
+  const median = medianNumber(values);
+  if (median === undefined) {
+    return undefined;
+  }
+
+  return {
+    min: Math.max(0, Math.round(median * 0.7)),
+    max: Math.round(median * 1.3),
+  };
+}
+
 /**
  * 搜索历史记录
  *
@@ -496,6 +541,86 @@ export function getStats(): HistoryStats {
     recentDays,
     averageRestaurantsPerRecord: Math.round(averageRestaurantsPerRecord * 10) / 10,
   };
+}
+
+/**
+ * 从本地历史记录生成 Agent 可用的偏好摘要。
+ *
+ * 选中结果是强正向信号；手动删除的餐厅是负向信号。
+ * 历史偏好只用于默认策略和排序，后端仍以当次硬约束为准。
+ */
+export function buildUserPreferenceSummary(records: TurntableRecord[] = getRecords()): UserPreferenceSummary {
+  const recentRecords = records
+    .slice()
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 30);
+  const favoriteCuisineWeights = new Map<string, number>();
+  const avoidedCuisineWeights = new Map<string, number>();
+  const selectedRestaurants: string[] = [];
+  const rejectedRestaurants: string[] = [];
+  const selectedDistances: number[] = [];
+  const selectedPrices: number[] = [];
+
+  recentRecords.forEach((record, index) => {
+    const recencyWeight = Math.max(0.35, 1 - index * 0.03);
+
+    if (!isCustomOption(record.selected)) {
+      addWeight(
+        favoriteCuisineWeights,
+        record.selected.cuisineType,
+        selectedPreferenceWeight(record.selected) * recencyWeight
+      );
+      selectedRestaurants.push(record.selected.name);
+
+      if (record.selected.distance !== undefined) {
+        selectedDistances.push(record.selected.distance);
+      }
+
+      if (record.selected.averagePrice !== undefined) {
+        selectedPrices.push(record.selected.averagePrice);
+      }
+    }
+
+    for (const restaurant of record.restaurants) {
+      if (restaurant.id !== record.selected.id) {
+        addWeight(
+          favoriteCuisineWeights,
+          restaurant.cuisineType,
+          weakPreferenceWeight(restaurant, 0.2) * recencyWeight
+        );
+      }
+    }
+
+    for (const restaurant of record.rejectedRestaurants ?? []) {
+      addWeight(avoidedCuisineWeights, restaurant.cuisineType, 1.5 * recencyWeight);
+      rejectedRestaurants.push(restaurant.name);
+    }
+  });
+
+  return {
+    favoriteCuisines: mapToWeightedList(favoriteCuisineWeights),
+    avoidedCuisines: mapToWeightedList(avoidedCuisineWeights),
+    preferredDistanceMeters: medianNumber(selectedDistances),
+    preferredPriceRange: buildPreferredPriceRange(selectedPrices),
+    recentSelectedRestaurants: Array.from(new Set(selectedRestaurants)).slice(0, 10),
+    recentRejectedRestaurants: Array.from(new Set(rejectedRestaurants)).slice(0, 10),
+  };
+}
+
+function selectedPreferenceWeight(restaurant: Restaurant): number {
+  return isWeakRecommendationSignal(restaurant) ? 0.6 : 3;
+}
+
+function weakPreferenceWeight(restaurant: Restaurant, defaultWeight: number): number {
+  return isWeakRecommendationSignal(restaurant)
+    ? Math.min(defaultWeight, 0.1)
+    : defaultWeight;
+}
+
+function isWeakRecommendationSignal(restaurant: Restaurant): boolean {
+  return (restaurant.recommendationWarnings ?? []).some((warning) =>
+    /候补|放宽|未验证|无法验证|兜底|相关性可能较弱/.test(warning)
+  );
 }
 
 /**

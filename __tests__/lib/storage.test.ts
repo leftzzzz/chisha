@@ -18,6 +18,7 @@ import {
   setReuseRecord,
   getReuseRecord,
   saveRecordAndReplaceSameSession,
+  buildUserPreferenceSummary,
   STORAGE_CONFIG,
 } from '@/lib/storage';
 import type { TurntableRecord, Restaurant, Location } from '@/types';
@@ -392,6 +393,89 @@ describe('Storage', () => {
       expect(stats.totalRestaurants).toBe(2);
       expect(stats.mostVisited).toHaveLength(2);
       expect(stats.favoriteCuisines[0].cuisine).toBe('川菜');
+    });
+  });
+
+  describe('buildUserPreferenceSummary', () => {
+    it('should convert selected and rejected restaurants into preference weights', () => {
+      const cantoneseRestaurant: Restaurant = {
+        ...mockRestaurant,
+        id: 'r2',
+        name: '粤菜餐厅',
+        cuisineType: '粤菜',
+        distance: 800,
+        averagePrice: 100,
+      };
+      const hotpotRestaurant: Restaurant = {
+        ...mockRestaurant,
+        id: 'r3',
+        name: '火锅餐厅',
+        cuisineType: '火锅',
+        distance: 1200,
+      };
+      const record: TurntableRecord = {
+        id: 'rec1',
+        timestamp: 2000,
+        query: '随便吃点',
+        location: mockLocation,
+        restaurants: [cantoneseRestaurant, hotpotRestaurant],
+        rejectedRestaurants: [hotpotRestaurant],
+        selected: cantoneseRestaurant,
+      };
+
+      const summary = buildUserPreferenceSummary([record]);
+
+      expect(summary.favoriteCuisines?.[0]).toEqual(
+        expect.objectContaining({ name: '粤菜' })
+      );
+      expect(summary.avoidedCuisines?.[0]).toEqual(
+        expect.objectContaining({ name: '火锅' })
+      );
+      expect(summary.preferredDistanceMeters).toBe(800);
+      expect(summary.preferredPriceRange).toEqual({ min: 70, max: 130 });
+      expect(summary.recentSelectedRestaurants).toContain('粤菜餐厅');
+      expect(summary.recentRejectedRestaurants).toContain('火锅餐厅');
+    });
+
+    it('should learn unverified or backup selections only as weak cuisine signals', () => {
+      const verifiedRestaurant: Restaurant = {
+        ...mockRestaurant,
+        id: 'r2',
+        name: '粤菜餐厅',
+        cuisineType: '粤菜',
+      };
+      const unverifiedRestaurant: Restaurant = {
+        ...mockRestaurant,
+        id: 'r3',
+        name: '候补西餐',
+        cuisineType: '西餐',
+        recommendationWarnings: ['未验证到明确菜品，作为候补保留。'],
+      };
+      const records: TurntableRecord[] = [
+        {
+          id: 'rec1',
+          timestamp: 3000,
+          query: '想吃粤菜',
+          location: mockLocation,
+          restaurants: [verifiedRestaurant],
+          selected: verifiedRestaurant,
+        },
+        {
+          id: 'rec2',
+          timestamp: 2000,
+          query: '想吃牛排',
+          location: mockLocation,
+          restaurants: [unverifiedRestaurant],
+          selected: unverifiedRestaurant,
+        },
+      ];
+
+      const summary = buildUserPreferenceSummary(records);
+      const westernWeight = summary.favoriteCuisines?.find((item) => item.name === '西餐')?.weight;
+      const cantoneseWeight = summary.favoriteCuisines?.find((item) => item.name === '粤菜')?.weight;
+
+      expect(westernWeight).toBeLessThan(1);
+      expect(cantoneseWeight).toBeGreaterThan(westernWeight ?? 0);
     });
   });
 
