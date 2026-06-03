@@ -32,6 +32,7 @@ interface ChatCompletionRequestBody {
   temperature?: number;
   max_completion_tokens?: number;
   max_tokens?: number;
+  enable_thinking?: boolean;
 }
 
 export interface JsonFunctionAgentInputEnvelope {
@@ -250,6 +251,10 @@ function buildChatCompletionRequestBody<T>(
     body.temperature = options.temperature;
   }
 
+  if (shouldDisableQwenThinkingForForcedTool(options)) {
+    body.enable_thinking = false;
+  }
+
   return body;
 }
 
@@ -266,6 +271,27 @@ function shouldIncludeTemperature(model: string): boolean {
 function isReasoningChatModel(model: string): boolean {
   const normalized = model.toLowerCase();
   return /^o\d/.test(normalized) || normalized.startsWith('gpt-5');
+}
+
+function shouldDisableQwenThinkingForForcedTool<T>(options: JsonFunctionAgentOptions<T>): boolean {
+  const override = process.env.QWEN_ENABLE_THINKING?.toLowerCase();
+  if (override === 'true') {
+    return false;
+  }
+
+  if (override === 'false') {
+    return true;
+  }
+
+  return isQwenCompatibleRequest(options.model, options.baseUrl);
+}
+
+function isQwenCompatibleRequest(model: string, baseUrl: string): boolean {
+  const normalizedModel = model.toLowerCase();
+  const normalizedBaseUrl = baseUrl.toLowerCase();
+  return normalizedModel.startsWith('qwen')
+    || normalizedBaseUrl.includes('dashscope')
+    || normalizedBaseUrl.includes('qwen');
 }
 
 async function buildChatCompletionError(

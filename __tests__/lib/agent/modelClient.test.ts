@@ -17,13 +17,20 @@ const TestSchema = z.object({
 
 describe('modelClient', () => {
   let warnSpy: jest.SpyInstance;
+  const originalQwenEnableThinking = process.env.QWEN_ENABLE_THINKING;
 
   beforeEach(() => {
     fetchWithTimeoutMock.mockReset();
+    delete process.env.QWEN_ENABLE_THINKING;
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
+    if (originalQwenEnableThinking === undefined) {
+      delete process.env.QWEN_ENABLE_THINKING;
+    } else {
+      process.env.QWEN_ENABLE_THINKING = originalQwenEnableThinking;
+    }
     warnSpy.mockRestore();
   });
 
@@ -123,6 +130,31 @@ describe('modelClient', () => {
 
     const requestBody = JSON.parse(fetchWithTimeoutMock.mock.calls[0][1].body);
     expect(requestBody.temperature).toBeUndefined();
+  });
+
+  it('disables Qwen thinking mode when forcing a tool call', async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
+
+    await callJsonFunctionAgent({
+      agentName: 'TestAgent',
+      apiKey: 'test-key',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      model: 'qwen3.6-flash-2026-04-16',
+      systemPrompt: 'Return JSON.',
+      input: { query: 'test' },
+      functionDefinition: {
+        name: 'testFunction',
+        parameters: { type: 'object' },
+      },
+      functionName: 'testFunction',
+      schema: TestSchema,
+      temperature: 0,
+      maxTokens: 10,
+      timeoutMs: 1000,
+    });
+
+    const requestBody = JSON.parse(fetchWithTimeoutMock.mock.calls[0][1].body);
+    expect(requestBody.enable_thinking).toBe(false);
   });
 
   it('includes API error details when a chat completion request fails', async () => {
