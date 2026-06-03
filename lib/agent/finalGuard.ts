@@ -15,11 +15,14 @@ export function applyFinalGuard(
   proposed?: FinishRecommendation
 ): FinalGuardResult {
   const orderedCandidates = orderCandidates(context, proposed);
-  const primaryCandidates = orderedCandidates
+  const recommendationCandidates = isRandomRecommendationContext(context)
+    ? seededShuffleCandidates(orderedCandidates, randomRecommendationSeed(context))
+    : orderedCandidates;
+  const primaryCandidates = recommendationCandidates
     .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
     .slice(0, context.targetCount);
   const primaryIds = new Set(primaryCandidates.map((candidate) => candidate.restaurant.id));
-  const backupCandidates = orderedCandidates
+  const backupCandidates = recommendationCandidates
     .filter((candidate) => !primaryIds.has(candidate.restaurant.id))
     .filter((candidate) => isBackupRecommendationAllowed(candidate))
     .slice(0, 20);
@@ -80,6 +83,56 @@ function orderCandidates(
   const remaining = context.candidates.filter((candidate) => !seen.has(candidate.restaurant.id));
 
   return [...proposedCandidates, ...remaining].sort(compareCandidate);
+}
+
+function isRandomRecommendationContext(context: AgentContext): boolean {
+  return context.goal.allowBroaden
+    && !hasExplicitPrimaryTargets(context)
+    && context.attempts.some((attempt) => attempt.searchIntent === 'fallback');
+}
+
+function hasExplicitPrimaryTargets(context: AgentContext): boolean {
+  return [
+    ...context.goal.primaryKeywords,
+    ...context.goal.requestedItems.map((item) => item.name),
+    ...context.goal.acceptableCategories.map((category) => category.name),
+  ].some((target) => target.trim().length > 0);
+}
+
+function randomRecommendationSeed(context: AgentContext): string {
+  return [
+    context.sessionId,
+    context.goal.rawQuery,
+    context.location.lat.toFixed(4),
+    context.location.lng.toFixed(4),
+    context.attempts.map((attempt) =>
+      `${attempt.searchIntent}:${attempt.keywords.join(',')}:${attempt.radius}`
+    ).join(';'),
+  ].filter(Boolean).join('|');
+}
+
+function seededShuffleCandidates(
+  candidates: RestaurantCandidate[],
+  seed: string
+): RestaurantCandidate[] {
+  return candidates
+    .map((candidate, index) => ({
+      candidate,
+      index,
+      key: hashString(`${seed}:${candidate.restaurant.id}:${candidate.restaurant.name}`),
+    }))
+    .sort((left, right) => left.key - right.key || left.index - right.index)
+    .map((item) => item.candidate);
+}
+
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return hash >>> 0;
 }
 
 function compareCandidate(a: RestaurantCandidate, b: RestaurantCandidate): number {

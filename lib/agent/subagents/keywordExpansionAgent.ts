@@ -21,6 +21,21 @@ const KEYWORD_EXPANSION_TIMEOUT = 60000;
 const KEYWORD_EXPANSION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const KEYWORD_EXPANSION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 const KEYWORD_EXPANSION_LIMIT = 3;
+const OPEN_EXPLORATION_FALLBACK_TARGETS: SearchKeywordTarget[] = [
+  { keyword: '小吃', poiTypes: ['050310'], confidence: 0.7 },
+  { keyword: '中餐', poiTypes: ['050100'], confidence: 0.65 },
+  { keyword: '快餐', poiTypes: ['050300'], confidence: 0.62 },
+];
+const OPEN_EXPLORATION_DEMOTED_KEYWORDS = new Set([
+  '日料',
+  '日本料理',
+  '日本菜',
+  '寿司',
+  '刺身',
+  '拉面',
+  '日式拉面',
+  '居酒屋',
+]);
 
 export interface KeywordExpansionAgentInput {
   goal: UserGoal;
@@ -226,14 +241,62 @@ function sanitizeExpansion(
   const normalizedBroadenedTargets = broadenedTargets.length > 0
     ? broadenedTargets
     : broadenedKeywords.map((keyword) => buildTarget(keyword));
+  const stableBroadenedTargets = isOpenExplorationGoal(goal)
+    ? stabilizeOpenExplorationTargets(normalizedBroadenedTargets, attempts)
+    : normalizedBroadenedTargets;
 
   return KeywordExpansionOutputSchema.parse({
     relatedTargets: normalizedRelatedTargets,
-    broadenedTargets: normalizedBroadenedTargets,
+    broadenedTargets: stableBroadenedTargets,
     relatedKeywords: normalizedRelatedTargets.map((target) => target.keyword),
-    broadenedKeywords: normalizedBroadenedTargets.map((target) => target.keyword),
+    broadenedKeywords: stableBroadenedTargets.map((target) => target.keyword),
     rationale: expansion.rationale || '根据用户目标生成搜索联想词。',
   });
+}
+
+function stabilizeOpenExplorationTargets(
+  targets: SearchKeywordTarget[],
+  attempts: SearchAttempt[]
+): SearchKeywordTarget[] {
+  const attemptedKeywords = new Set(
+    attempts.flatMap((attempt) => normalizeSearchKeywords(attempt.keywords))
+  );
+  const seen = new Set<string>();
+  const preferred: SearchKeywordTarget[] = [];
+  const demoted: SearchKeywordTarget[] = [];
+
+  for (const target of targets) {
+    const [keyword] = normalizeSearchKeywords([target.keyword]);
+    if (!keyword || attemptedKeywords.has(keyword) || seen.has(keyword)) {
+      continue;
+    }
+
+    seen.add(keyword);
+    const normalizedTarget = buildTarget(keyword, target);
+    if (isDemotedOpenExplorationKeyword(keyword)) {
+      demoted.push(normalizedTarget);
+    } else {
+      preferred.push(normalizedTarget);
+    }
+  }
+
+  const fallbackTargets = OPEN_EXPLORATION_FALLBACK_TARGETS
+    .map((target) => buildTarget(target.keyword, target))
+    .filter((target) => !attemptedKeywords.has(target.keyword))
+    .filter((target) => !seen.has(target.keyword));
+
+  return [
+    ...preferred,
+    ...fallbackTargets,
+    ...demoted,
+  ].slice(0, KEYWORD_EXPANSION_LIMIT);
+}
+
+function isDemotedOpenExplorationKeyword(keyword: string): boolean {
+  const normalizedKeywords = normalizeSearchKeywords([keyword]);
+  return normalizedKeywords.some((normalizedKeyword) =>
+    OPEN_EXPLORATION_DEMOTED_KEYWORDS.has(normalizedKeyword)
+  );
 }
 
 function sanitizeTargets(

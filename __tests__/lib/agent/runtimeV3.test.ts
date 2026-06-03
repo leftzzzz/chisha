@@ -498,6 +498,46 @@ describe('runSearchAgentV3', () => {
     expect(result.restaurants.length).toBeGreaterThan(0);
   });
 
+  it('clears model-invented primary targets for explicit random recommendations', async () => {
+    const supervisorMock = runSearchSupervisor as jest.Mock;
+    supervisorMock.mockResolvedValueOnce({
+      goal: goal({
+        rawQuery: '没有具体想吃的，你来选',
+        requestedItems: [{ name: '日料', required: true, aliases: [] }],
+        acceptableCategories: [{ name: '日料', confidence: 0.9 }],
+        primaryKeywords: ['日料'],
+        clarificationNeeded: [],
+        allowBroaden: false,
+      }),
+      nextAction: 'plan',
+    });
+
+    const searchedPlans: SearchPlan[] = [];
+    const result = await runSearchAgentV3(
+      {
+        query: '没有具体想吃的，你来选',
+        location,
+        runtimeState: {
+          attempts: [],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      async (plan) => {
+        searchedPlans.push(plan);
+        return [restaurant('r1', '社区餐厅', '餐饮', 300)];
+      }
+    );
+
+    expect(searchedPlans[0].searchIntent).toBe('fallback');
+    expect(searchedPlans[0].keywords).toEqual(['餐厅']);
+    expect(result.runtimeState?.goal.primaryKeywords).toEqual([]);
+    expect(result.runtimeState?.goal.requestedItems).toEqual([]);
+    expect(result.runtimeState?.goal.allowBroaden).toBe(true);
+  });
+
   it('falls back to an open recommendation goal if Supervisor truncates an explicit random request', async () => {
     const supervisorMock = runSearchSupervisor as jest.Mock;
     supervisorMock.mockRejectedValueOnce(

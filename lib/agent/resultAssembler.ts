@@ -48,7 +48,7 @@ function buildExplanation(
   }
 
   if (fallback) {
-    return '需求较开放，已按通用餐饮候选、硬约束和距离生成默认推荐。';
+    return '需求较开放，已按通用餐饮候选和硬约束筛选后随机打散生成推荐。';
   }
 
   if (unmetConstraints.length > 0) {

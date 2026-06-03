@@ -261,10 +261,6 @@ function normalizeExplicitOpenRecommendation(
     return output;
   }
 
-  if (output.goal && hasPrimaryTargets(output.goal)) {
-    return output;
-  }
-
   return {
     goal: buildOpenRecommendationGoal(input.query, output.goal),
     nextAction: 'plan',
@@ -328,14 +324,6 @@ function buildOpenRecommendationGoal(query: string, modelGoal?: UserGoal): UserG
     clarificationNeeded: [],
     allowBroaden: true,
   });
-}
-
-function hasPrimaryTargets(goal: UserGoal): boolean {
-  return [
-    ...goal.primaryKeywords,
-    ...goal.requestedItems.map((item) => item.name),
-    ...goal.acceptableCategories.map((category) => category.name),
-  ].some((item) => item.trim().length > 0);
 }
 
 function createInitialContext(input: AgentInput, goal: UserGoal, resetSearchState = false): AgentV3Context {

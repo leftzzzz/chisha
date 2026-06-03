@@ -170,6 +170,58 @@ describe('KeywordExpansionAgent', () => {
     }
   });
 
+  it('demotes Japanese-cuisine targets for open recommendations', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.NODE_ENV = 'production';
+    process.env.OPENAI_API_KEY = 'test-key';
+    jest.resetModules();
+
+    const fetchWithTimeout = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            function_call: {
+              name: 'expandRestaurantSearchKeywords',
+              arguments: JSON.stringify({
+                relatedTargets: [],
+                broadenedTargets: [
+                  { keyword: '日料', poiTypes: ['050202'] },
+                  { keyword: '寿司', poiTypes: ['050202'] },
+                ],
+                rationale: '模型偏向了日料。',
+              }),
+            },
+          },
+        }],
+      }),
+    }));
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    try {
+      const { runKeywordExpansionAgent } = await import('@/lib/agent/subagents/keywordExpansionAgent');
+      const expansion = await runKeywordExpansionAgent({
+        goal: goal({
+          rawQuery: '没有具体想吃的，你来选',
+          requestedItems: [],
+          acceptableCategories: [],
+          primaryKeywords: [],
+          allowBroaden: true,
+          softPreferences: [{ name: '默认多样性', weight: 1, verifiable: true }],
+        }),
+        attempts: [],
+      });
+
+      expect(expansion.relatedKeywords).toEqual([]);
+      expect(expansion.broadenedKeywords).toEqual(['小吃', '中餐', '快餐']);
+      expect(expansion.broadenedKeywords[0]).not.toBe('日料');
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
   it('uses model-generated expansions when the Agent is available', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     const originalApiKey = process.env.OPENAI_API_KEY;

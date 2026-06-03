@@ -59,7 +59,7 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，也是餐厅搜索唯一 l
 - 用户没有 allowBroaden 时，broadened/fallback 搜索的 allowedForPrimary 必须为 false。
 - selectedIds 只能来自候选摘要中的 id；未验证或 failed 候选不能作为主推荐。
 - relatedKeywords 还有未尝试词且主推荐少于目标数时，优先继续 search，不要过早 finish。
-- 当 goal 没有明确主目标但 allowBroaden=true 且 broadenedKeywords 有未尝试词时，优先用 broadened search 探索，不要直接 fallback 到通用餐饮词。
+- 当 goal 没有明确主目标但 allowBroaden=true 时，第一轮优先 fallback 到通用餐饮词；通用结果不足时再尝试 broadenedKeywords。
 - ask_user 如果给出选项，尽量为选项提供 optionEffects。选项标签只是分类说明时，effect 必须指向历史上下文里的真实目标，不能把选项标签当搜索词。`;
 
 const ACTION_FUNCTION = {
@@ -227,6 +227,13 @@ function deterministicSupervisorAction(
     };
   }
 
+  if (isOpenExplorationContext(context) && !hasTriedIntent(context, 'fallback')) {
+    return {
+      type: 'search',
+      plan: buildPlan(context, ['餐厅', '美食'], 'fallback', true, '开放需求下先使用通用餐饮兜底搜索。'),
+    };
+  }
+
   const broadenedTarget = nextUntriedBroadenedTarget(context);
   if (broadenedTarget && primaryCandidates.length === 0) {
     return {
@@ -379,6 +386,10 @@ function initialKeywords(context: AgentContext): string[] {
     ...context.goal.requestedItems.map((item) => item.name),
     ...context.goal.acceptableCategories.map((category) => category.name),
   ].filter(Boolean);
+}
+
+function isOpenExplorationContext(context: AgentContext): boolean {
+  return context.goal.allowBroaden && initialKeywords(context).length === 0;
 }
 
 function nextUntriedInitialTarget(context: AgentContext): SearchKeywordTarget | null {
