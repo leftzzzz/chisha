@@ -8,6 +8,7 @@ import type {
   SearchPlan,
 } from './types';
 import { deriveGoalSignature, deriveLocationSignature } from './goalVersion';
+import { getRestaurantIdentityKeys, getRestaurantInfoScore } from '@/lib/restaurantIdentity';
 
 export function evaluateSearchResult(
   restaurants: Restaurant[],
@@ -44,26 +45,17 @@ export function mergeCandidates(
   incomingCandidates: RestaurantCandidate[]
 ): void {
   const candidateMap = new Map<string, RestaurantCandidate>();
+  const candidates: RestaurantCandidate[] = [];
 
   for (const candidate of context.candidates) {
-    candidateMap.set(candidateKey(candidate.restaurant), candidate);
+    mergeCandidateInto(candidates, candidateMap, candidate);
   }
 
   for (const incoming of incomingCandidates) {
-    const key = candidateKey(incoming.restaurant);
-    const existing = candidateMap.get(key);
-
-    if (!existing || (existing.stale && !incoming.stale) || incoming.score > existing.score) {
-      candidateMap.set(key, incoming);
-      continue;
-    }
-
-    existing.matched = mergeStrings(existing.matched, incoming.matched);
-    existing.warnings = mergeStrings(existing.warnings, incoming.warnings);
+    mergeCandidateInto(candidates, candidateMap, incoming);
   }
 
-  context.candidates = Array.from(candidateMap.values())
-    .sort((a, b) => b.score - a.score);
+  context.candidates = candidates.sort((a, b) => b.score - a.score);
 }
 
 function buildCandidate(
@@ -182,8 +174,76 @@ function buildObservationReason(found: number, accepted: number, plan: SearchPla
   return `搜索「${plan.keywords.join('、')}」接受 ${accepted} 家候选。`;
 }
 
-function candidateKey(restaurant: Restaurant): string {
-  return `${restaurant.id}:${restaurant.name}:${restaurant.location.lat.toFixed(3)}:${restaurant.location.lng.toFixed(3)}`;
+function mergeCandidateInto(
+  candidates: RestaurantCandidate[],
+  candidateMap: Map<string, RestaurantCandidate>,
+  incoming: RestaurantCandidate
+): void {
+  const incomingKeys = getRestaurantIdentityKeys(incoming.restaurant);
+  const existing = incomingKeys
+    .map((key) => candidateMap.get(key))
+    .find((candidate): candidate is RestaurantCandidate => Boolean(candidate));
+
+  if (!existing) {
+    candidates.push(incoming);
+    incomingKeys.forEach((key) => candidateMap.set(key, incoming));
+    return;
+  }
+
+  const merged = mergeCandidate(existing, incoming);
+  const existingIndex = candidates.indexOf(existing);
+
+  if (existingIndex >= 0) {
+    candidates[existingIndex] = merged;
+  }
+
+  const mergedKeys = new Set([
+    ...getRestaurantIdentityKeys(existing.restaurant),
+    ...incomingKeys,
+    ...getRestaurantIdentityKeys(merged.restaurant),
+  ]);
+  mergedKeys.forEach((key) => candidateMap.set(key, merged));
+}
+
+function mergeCandidate(
+  existing: RestaurantCandidate,
+  incoming: RestaurantCandidate
+): RestaurantCandidate {
+  const preferred = shouldReplaceCandidate(existing, incoming) ? incoming : existing;
+  const other = preferred === incoming ? existing : incoming;
+
+  return {
+    ...preferred,
+    matched: mergeStrings(preferred.matched, other.matched),
+    warnings: mergeStrings(preferred.warnings, other.warnings),
+    verification: {
+      ...preferred.verification,
+      categoryMatches: mergeStrings(
+        preferred.verification.categoryMatches,
+        other.verification.categoryMatches
+      ),
+      warnings: mergeStrings(
+        preferred.verification.warnings,
+        other.verification.warnings
+      ),
+    },
+  };
+}
+
+function shouldReplaceCandidate(existing: RestaurantCandidate, incoming: RestaurantCandidate): boolean {
+  if (existing.stale && !incoming.stale) {
+    return true;
+  }
+
+  if (!existing.stale && incoming.stale) {
+    return false;
+  }
+
+  if (incoming.score !== existing.score) {
+    return incoming.score > existing.score;
+  }
+
+  return getRestaurantInfoScore(incoming.restaurant) > getRestaurantInfoScore(existing.restaurant);
 }
 
 function mergeStrings(left: string[], right: string[]): string[] {

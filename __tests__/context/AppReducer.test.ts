@@ -119,7 +119,7 @@ describe('AppReducer', () => {
   describe('SET_RESTAURANTS_WITH_CANDIDATES', () => {
     it('should set turntable and candidate restaurants', () => {
       const turntable = [mockRestaurant];
-      const candidates = [{ ...mockRestaurant, id: 'r2' }];
+      const candidates = [{ ...mockRestaurant, id: 'r2', name: '候补餐厅' }];
       const action = {
         type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
         payload: { turntable, candidates },
@@ -149,6 +149,36 @@ describe('AppReducer', () => {
 
       expect(newState.agentExplanation).toBe('已按你的需求排序。');
       expect(newState.agentUnmetConstraints).toEqual(['预算无法完全验证。']);
+    });
+
+    it('should dedupe restaurants across turntable and candidate pool', () => {
+      const duplicate = {
+        ...mockRestaurant,
+        id: 'osm_duplicate',
+        name: mockRestaurant.name,
+        location: {
+          lat: mockRestaurant.location.lat + 0.0001,
+          lng: mockRestaurant.location.lng + 0.0001,
+        },
+        source: 'osm' as const,
+      };
+      const uniqueCandidate = {
+        ...mockRestaurant,
+        id: 'r2',
+        name: '另一家餐厅',
+      };
+      const action = {
+        type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
+        payload: {
+          turntable: [mockRestaurant, duplicate],
+          candidates: [duplicate, uniqueCandidate],
+        },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.restaurants.map((restaurant) => restaurant.id)).toEqual(['r1']);
+      expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual(['r2']);
     });
 
     it('should support Agent question step', () => {
@@ -506,7 +536,11 @@ describe('AppReducer', () => {
 
   describe('RESTORE_FROM_HISTORY', () => {
     it('should restore state from history record', () => {
-      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }, { ...mockRestaurant, id: 'r3' }];
+      const restaurants = [
+        mockRestaurant,
+        { ...mockRestaurant, id: 'r2', name: '第二家餐厅' },
+        { ...mockRestaurant, id: 'r3', name: '第三家餐厅' },
+      ];
       const action = {
         type: 'RESTORE_FROM_HISTORY' as const,
         payload: {

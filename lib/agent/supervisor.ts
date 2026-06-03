@@ -238,28 +238,10 @@ function deterministicClarificationAnswer(
   }
 
   const exactEffect = input.pendingQuestion?.optionEffects?.[normalizedAnswer];
-  if (isBroadeningAnswer(normalizedAnswer)) {
-    const broadeningEffect = mergeBroadeningEffect(
-      input.previousGoal,
-      exactEffect ?? findBroadeningEffect(input.pendingQuestion)
-    );
-    return deterministicPatchOutput(
-      input.previousGoal,
-      goalPatchFromClarificationEffect(broadeningEffect, input.previousGoal)
-    );
-  }
-
   if (exactEffect) {
     return deterministicPatchOutput(
       input.previousGoal,
       goalPatchFromClarificationEffect(exactEffect, input.previousGoal)
-    );
-  }
-
-  if (isOpenRecommendationAnswer(normalizedAnswer)) {
-    return deterministicPatchOutput(
-      input.previousGoal,
-      buildOpenRecommendationPatch(input.previousGoal)
     );
   }
 
@@ -272,67 +254,6 @@ function deterministicPatchOutput(previousGoal: UserGoal, patch: GoalPatch): Sea
     conversationMode: 'patch_current_goal',
     nextAction: 'plan',
   };
-}
-
-function findBroadeningEffect(
-  pendingQuestion: PendingQuestion | undefined
-): ClarificationEffect | undefined {
-  return Object.values(pendingQuestion?.optionEffects ?? {}).find((effect) =>
-    effect.allowBroaden === true || effect.setDistanceMaxMeters !== undefined
-  );
-}
-
-function buildBroadeningEffect(goal: UserGoal): ClarificationEffect {
-  const strictDistance = goal.hardConstraints.find((constraint) =>
-    constraint.kind === 'distance' && constraint.strict
-  );
-
-  return {
-    allowBroaden: true,
-    setDistanceMaxMeters: strictDistance ? 5000 : undefined,
-  };
-}
-
-function mergeBroadeningEffect(
-  goal: UserGoal,
-  effect: ClarificationEffect | undefined
-): ClarificationEffect {
-  const fallback = buildBroadeningEffect(goal);
-
-  return {
-    ...effect,
-    allowBroaden: effect?.allowBroaden ?? fallback.allowBroaden,
-    setDistanceMaxMeters: effect?.setDistanceMaxMeters ?? fallback.setDistanceMaxMeters,
-  };
-}
-
-function buildOpenRecommendationPatch(goal: UserGoal): GoalPatch {
-  const hasDefaultDiversity = goal.softPreferences.some((preference) =>
-    preference.name === '默认多样性'
-  );
-
-  return GoalPatchSchema.parse({
-    allowBroaden: true,
-    addAuthorizations: [
-      createAuthorization('fallback_primary', '用户授权开放推荐，可将兜底餐饮候选作为主推荐。', {
-        allowedSearchIntents: ['fallback'],
-      }),
-    ],
-    addSoftPreferences: hasDefaultDiversity
-      ? undefined
-      : [{ name: '默认多样性', weight: 1, verifiable: true }],
-    reason: '用户授权开放推荐。',
-  });
-}
-
-function isBroadeningAnswer(answer: string): boolean {
-  return /^(允许放宽|可以放宽|放宽|放宽范围|扩大范围|扩大搜索|扩大一点|扩大点|范围大点|远一点|可以远一点|搜远一点|再远点|周边也行)$/u
-    .test(answer);
-}
-
-function isOpenRecommendationAnswer(answer: string): boolean {
-  return /^(都行|都可以|随便|随意|随机|无所谓|你决定|你看着办|帮我决定|直接推荐|按你推荐|你推荐吧|看着办吧)$/u
-    .test(answer);
 }
 
 export async function understandSearchGoal(input: AgentInput): Promise<UserGoal> {

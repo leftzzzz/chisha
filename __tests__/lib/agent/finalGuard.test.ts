@@ -119,6 +119,29 @@ describe('FinalGuard random recommendations', () => {
       .toEqual(['r1', 'r2', 'r3', 'r4']);
   });
 
+  it('dedupes the same physical restaurant before filling primary recommendations', () => {
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        rawQuery: '想吃牛排',
+        requestedItems: [],
+        acceptableCategories: [{ name: '西餐', confidence: 0.9 }],
+        primaryKeywords: ['牛排'],
+        softPreferences: [],
+        allowBroaden: false,
+      }),
+      attempts: [fallbackAttempt({ searchIntent: 'exact', keywords: ['牛排'] })],
+      candidates: [
+        candidate('amap_dup', '同一家店', 120),
+        candidate('osm_dup', '同一家店', 110),
+        candidate('unique', '另一家店', 100),
+      ],
+      targetCount: 2,
+    }));
+
+    expect(guarded.primaryCandidates.map((item) => item.restaurant.id))
+      .toEqual(['amap_dup', 'unique']);
+  });
+
   it('rejects primary candidates verified against an older goal version', () => {
     const versionedGoal = withUpdatedGoalVersion(goal({
       rawQuery: '想吃牛排',

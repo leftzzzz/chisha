@@ -313,6 +313,14 @@ function deterministicSupervisorPlannerAction(
     };
   }
 
+  const relatedTarget = nextUntriedRelatedTarget(context);
+  if (relatedTarget && !hasTriedIntent(context, 'synonym')) {
+    return {
+      type: 'search',
+      plan: buildPlan(context, relatedTarget, 'synonym', true, '原始搜索不足，继续尝试同义词和近似表达。'),
+    };
+  }
+
   const broadenedTarget = nextUntriedBroadenedTarget(context);
   const broadenedTargetAuthorized = broadenedTarget
     ? isSearchIntentAuthorizedForPrimary(context.goal, 'broadened', [broadenedTarget.keyword])
@@ -332,7 +340,6 @@ function deterministicSupervisorPlannerAction(
     };
   }
 
-  const relatedTarget = nextUntriedRelatedTarget(context);
   if (relatedTarget) {
     return {
       type: 'search',

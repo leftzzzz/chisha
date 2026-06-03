@@ -24,6 +24,7 @@ interface PoiTaxonomyEntry {
 }
 
 export const POI_TAXONOMY: PoiTaxonomyEntry[] = [
+  { canonical: '中餐', terms: ['中餐', '中餐厅', '家常菜', '本帮菜'], relatedTerms: ['特色菜', '私房菜'], poiTypes: ['050100'], targetKinds: ['cuisine', 'restaurant_type'] },
   { canonical: '江浙菜', terms: ['江浙菜'], relatedTerms: ['杭帮菜', '苏菜', '浙菜'], poiTypes: ['050105', '050106'], targetKinds: ['cuisine'] },
   { canonical: '川菜', terms: ['川菜', '川味', '麻辣'], relatedTerms: ['酸菜鱼', '冒菜', '串串'], poiTypes: ['050102'], targetKinds: ['cuisine'] },
   { canonical: '粤菜', terms: ['粤菜', '广东菜', '茶餐厅', '烧腊', '点心'], relatedTerms: ['早茶', '港式茶餐厅'], poiTypes: ['050103'], targetKinds: ['cuisine'] },
@@ -34,13 +35,18 @@ export const POI_TAXONOMY: PoiTaxonomyEntry[] = [
   { canonical: '闽菜', terms: ['闽菜', '福建菜'], poiTypes: ['050110'], targetKinds: ['cuisine'] },
   { canonical: '徽菜', terms: ['徽菜', '安徽菜'], poiTypes: ['050109'], targetKinds: ['cuisine'] },
   { canonical: '火锅', terms: ['火锅', '涮锅', '牛肉火锅', '潮汕牛肉火锅', '串串'], relatedTerms: ['重庆火锅', '海底捞'], broadenedTerms: ['中餐'], poiTypes: ['050117'], targetKinds: ['dish', 'cuisine', 'restaurant_type'] },
-  { canonical: '日本料理', terms: ['日料', '日本料理', '寿司', '刺身', '拉面', '日式拉面', '日本菜'], relatedTerms: ['居酒屋', '鳗鱼饭', '丼饭'], broadenedTerms: ['亚洲料理'], poiTypes: ['050202'], targetKinds: ['dish', 'cuisine'] },
-  { canonical: '韩国料理', terms: ['韩餐', '韩国料理', '韩式', '石锅拌饭', '韩式烤肉'], relatedTerms: ['部队锅', '烤肉'], broadenedTerms: ['亚洲料理'], poiTypes: ['050203'], targetKinds: ['dish', 'cuisine'] },
-  { canonical: '东南亚菜', terms: ['东南亚菜', '泰国菜', '越南菜', '泰餐', '越南粉'], relatedTerms: ['泰国料理', '越南料理'], broadenedTerms: ['亚洲料理'], poiTypes: ['050206', '050217'], targetKinds: ['cuisine'] },
+  { canonical: '日本料理', terms: ['日料', '日本料理', '寿司', '刺身', '拉面', '日式拉面', '日本菜'], relatedTerms: ['居酒屋', '鳗鱼饭', '丼饭'], broadenedTerms: ['亚洲料理', '韩国料理', '东南亚菜'], poiTypes: ['050202'], targetKinds: ['dish', 'cuisine'] },
+  { canonical: '韩国料理', terms: ['韩餐', '韩国料理', '韩式', '石锅拌饭', '韩式烤肉'], relatedTerms: ['部队锅', '烤肉'], broadenedTerms: ['亚洲料理', '日本料理', '东南亚菜'], poiTypes: ['050203'], targetKinds: ['dish', 'cuisine'] },
+  { canonical: '东南亚菜', terms: ['东南亚菜', '泰国菜', '越南菜', '泰餐', '越南粉'], relatedTerms: ['泰国料理', '越南料理'], broadenedTerms: ['亚洲料理', '日本料理', '韩国料理'], poiTypes: ['050206', '050217'], targetKinds: ['cuisine'] },
+  { canonical: '亚洲料理', terms: ['亚洲料理', '亚洲菜', '其他亚洲菜', '其它亚洲菜'], relatedTerms: ['东南亚菜', '韩国料理', '日本料理'], poiTypes: ['050217'], targetKinds: ['cuisine'] },
   { canonical: '西餐', terms: ['西餐', '牛排', '意面', '披萨', '比萨', '意大利菜'], relatedTerms: ['汉堡', 'brunch'], broadenedTerms: ['餐厅'], poiTypes: ['050201', '050211'], targetKinds: ['dish', 'cuisine'] },
   { canonical: '烧烤', terms: ['烧烤', '烤串', '烤肉', 'bbq'], relatedTerms: ['烤鱼'], broadenedTerms: ['小吃'], poiTypes: ['050000'], targetKinds: ['dish', 'restaurant_type'] },
   { canonical: '快餐', terms: ['快餐', '汉堡', '炸鸡', '薯条', '鸡排'], relatedTerms: ['简餐'], broadenedTerms: ['小吃'], poiTypes: ['050300'], targetKinds: ['dish', 'restaurant_type'] },
   { canonical: '小吃', terms: ['小吃', '麻辣烫', '冒菜', '米线'], relatedTerms: ['面馆', '简餐'], broadenedTerms: ['快餐'], poiTypes: ['050310'], targetKinds: ['dish', 'restaurant_type'] },
+  { canonical: '简餐', terms: ['简餐', '轻餐'], relatedTerms: ['快餐', '小吃'], poiTypes: ['050300'], targetKinds: ['restaurant_type'] },
+  { canonical: '面馆', terms: ['面馆', '面条', '拉面馆', '粉面'], relatedTerms: ['米线', '兰州拉面'], poiTypes: ['050300'], targetKinds: ['dish', 'restaurant_type'] },
+  { canonical: '轻食', terms: ['轻食', '沙拉', '健康餐'], relatedTerms: ['简餐'], poiTypes: ['050400'], targetKinds: ['dish', 'restaurant_type'] },
+  { canonical: '粥', terms: ['粥', '粥店', '白粥', '砂锅粥'], relatedTerms: ['简餐'], poiTypes: ['050300'], targetKinds: ['dish', 'restaurant_type'] },
   { canonical: '咖啡', terms: ['咖啡', '咖啡店', '咖啡厅'], poiTypes: ['050500'], targetKinds: ['restaurant_type'] },
   { canonical: '奶茶', terms: ['奶茶', '果茶', '柠檬茶'], poiTypes: ['050700'], targetKinds: ['dish', 'restaurant_type'] },
   { canonical: '饮品', terms: ['饮品', '喝点', '喝的'], poiTypes: ['050700', '050500'], targetKinds: ['restaurant_type'] },
@@ -133,7 +139,7 @@ function normalizeKeywordText(keyword: string): string[] {
 function stripSearchIntentWords(text: string): string {
   return text
     .trim()
-    .replace(/^(我|我们|一个|一家|个|附近|周边|今天|今晚|中午|晚上|午餐|晚餐|夜宵|现在|随便|都行|想要|想|要|找|搜|搜索|推荐|来点|吃点|吃|喝点|喝|有没有|有啥|有什么)+/u, '')
+    .replace(/^(我|我们|一个|一家|个|附近|周边|今天|今晚|中午|晚上|午餐|晚餐|夜宵|现在|想要|想|要|找|搜|搜索|推荐|来点|吃点|吃|喝点|喝|有没有|有啥|有什么)+/u, '')
     .replace(/(附近|周边|好吃的|吃的|喝的|一点|一些|吧|吗|呢|呀|啊|的)+$/u, '')
     .trim();
 }

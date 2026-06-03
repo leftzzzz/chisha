@@ -43,6 +43,8 @@ describe('KeywordExpansionAgent', () => {
     expect(expansion.broadenedKeywords).toEqual(expect.arrayContaining(['亚洲料理']));
     expect(expansion.relatedTargets?.find((target) => target.keyword === '日本料理')?.poiTypes)
       .toEqual(['050202']);
+    expect(expansion.broadenedTargets?.find((target) => target.keyword === '亚洲料理')?.poiTypes)
+      .toEqual(['050217']);
   });
 
   it('applies agent-generated keyword expansion without overwriting primary targets', () => {
@@ -162,7 +164,7 @@ describe('KeywordExpansionAgent', () => {
       expect(expansion.broadenedKeywords).toEqual(['简餐', '面馆', '小吃']);
       expect(expansion.broadenedTargets?.map((target) => [target.keyword, target.poiTypes])).toEqual([
         ['简餐', ['050300']],
-        ['面馆', []],
+        ['面馆', ['050300']],
         ['小吃', ['050310']],
       ]);
     } finally {

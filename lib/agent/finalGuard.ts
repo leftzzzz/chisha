@@ -9,6 +9,7 @@ import {
   isOpenExplorationAuthorized,
   isSearchIntentAuthorizedForPrimary,
 } from './authorization';
+import { getRestaurantIdentityKeys, getRestaurantInfoScore } from '@/lib/restaurantIdentity';
 
 export interface FinalGuardResult {
   primaryCandidates: RestaurantCandidate[];
@@ -23,7 +24,7 @@ export function applyFinalGuard(
   const orderedCandidates = orderCandidates(context, proposed);
   const recommendationCandidates = isRandomRecommendationContext(context)
     ? seededShuffleCandidates(orderedCandidates, randomRecommendationSeed(context))
-    : orderedCandidates;
+    : dedupeCandidatesForRecommendation(orderedCandidates);
   const primaryCandidates = recommendationCandidates
     .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
     .slice(0, context.targetCount);
@@ -144,7 +145,7 @@ function seededShuffleCandidates(
   candidates: RestaurantCandidate[],
   seed: string
 ): RestaurantCandidate[] {
-  return candidates
+  return dedupeCandidatesForRecommendation(candidates)
     .map((candidate, index) => ({
       candidate,
       index,
@@ -162,6 +163,52 @@ function hashString(value: string): number {
   }
 
   return hash >>> 0;
+}
+
+function dedupeCandidatesForRecommendation(
+  candidates: RestaurantCandidate[]
+): RestaurantCandidate[] {
+  const candidateMap = new Map<string, RestaurantCandidate>();
+  const deduped: RestaurantCandidate[] = [];
+
+  for (const candidate of candidates) {
+    const keys = getRestaurantIdentityKeys(candidate.restaurant);
+    const existing = keys
+      .map((key) => candidateMap.get(key))
+      .find((item): item is RestaurantCandidate => Boolean(item));
+
+    if (!existing) {
+      deduped.push(candidate);
+      keys.forEach((key) => candidateMap.set(key, candidate));
+      continue;
+    }
+
+    if (shouldReplaceRecommendationCandidate(existing, candidate)) {
+      const existingIndex = deduped.indexOf(existing);
+      if (existingIndex >= 0) {
+        deduped[existingIndex] = candidate;
+      }
+
+      new Set([
+        ...getRestaurantIdentityKeys(existing.restaurant),
+        ...keys,
+      ]).forEach((key) => candidateMap.set(key, candidate));
+    }
+  }
+
+  return deduped;
+}
+
+function shouldReplaceRecommendationCandidate(
+  existing: RestaurantCandidate,
+  candidate: RestaurantCandidate
+): boolean {
+  const rank = compareCandidate(candidate, existing);
+  if (rank !== 0) {
+    return rank < 0;
+  }
+
+  return getRestaurantInfoScore(candidate.restaurant) > getRestaurantInfoScore(existing.restaurant);
 }
 
 function compareCandidate(a: RestaurantCandidate, b: RestaurantCandidate): number {

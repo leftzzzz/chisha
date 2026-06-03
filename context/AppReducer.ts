@@ -10,7 +10,8 @@
  * ERROR 状态可以重试回到之前的状态
  */
 
-import { AppState, AppAction } from '@/types';
+import { AppState, AppAction, Restaurant } from '@/types';
+import { getRestaurantIdentityKeys } from '@/lib/restaurantIdentity';
 
 /**
  * 初始状态
@@ -89,7 +90,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_RESTAURANTS':
       return {
         ...state,
-        restaurants: action.payload,
+        restaurants: dedupeRestaurants(action.payload),
         selectedIndex: -1, // 重置选中索引
         error: null,
       };
@@ -97,11 +98,15 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     /**
      * 保存搜索结果（带候补池）
      */
-    case 'SET_RESTAURANTS_WITH_CANDIDATES':
+    case 'SET_RESTAURANTS_WITH_CANDIDATES': {
+      const seenRestaurantKeys = new Set<string>();
+      const turntable = dedupeRestaurants(action.payload.turntable, seenRestaurantKeys);
+      const candidates = dedupeRestaurants(action.payload.candidates, seenRestaurantKeys);
+
       return {
         ...state,
-        restaurants: action.payload.turntable,
-        candidateRestaurants: action.payload.candidates,
+        restaurants: turntable,
+        candidateRestaurants: candidates,
         agentExplanation: action.payload.explanation,
         agentUnmetConstraints: action.payload.unmetConstraints ?? [],
         agentQuestion: null,
@@ -110,6 +115,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedIndex: -1,
         error: null,
       };
+    }
 
     /**
      * 设置选中的餐厅索引
@@ -290,6 +296,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       }
 
       const addedRestaurant = state.candidateRestaurants[indexToAdd];
+      if (hasRestaurant(state.restaurants, addedRestaurant)) {
+        return {
+          ...state,
+          candidateRestaurants: state.candidateRestaurants.filter((_, index) => index !== indexToAdd),
+          error: '该餐厅已在转盘上',
+        };
+      }
+
       const newCandidateRestaurants = state.candidateRestaurants.filter((_, index) => index !== indexToAdd);
       const newRestaurants = [...state.restaurants, addedRestaurant];
 
@@ -373,7 +387,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       }
 
       // 检查是否已存在（通过 id）
-      if (state.restaurants.some(r => r.id === action.payload.id)) {
+      if (hasRestaurant(state.restaurants, action.payload)) {
         return {
           ...state,
           error: '该餐厅已在转盘上',
@@ -414,9 +428,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
      */
     case 'RESTORE_FROM_HISTORY': {
       const { query, location, restaurants, customOptions } = action.payload;
+      const restoredRestaurants = dedupeRestaurants(restaurants);
 
       // 验证餐厅数量
-      const totalOptions = restaurants.length + (customOptions?.length || 0);
+      const totalOptions = restoredRestaurants.length + (customOptions?.length || 0);
       if (totalOptions < 3) {
         return {
           ...state,
@@ -429,7 +444,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         step: 'READY',
         userQuery: query,
         userLocation: location,
-        restaurants: restaurants,
+        restaurants: restoredRestaurants,
         candidateRestaurants: [],
         agentExplanation: undefined,
         agentUnmetConstraints: [],
@@ -454,4 +469,27 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       // TypeScript 会确保所有 action 都被处理
       return state;
   }
+}
+
+function dedupeRestaurants(restaurants: Restaurant[], seenKeys = new Set<string>()): Restaurant[] {
+  const deduped: Restaurant[] = [];
+
+  for (const restaurant of restaurants) {
+    const keys = getRestaurantIdentityKeys(restaurant);
+    if (keys.some((key) => seenKeys.has(key))) {
+      continue;
+    }
+
+    deduped.push(restaurant);
+    keys.forEach((key) => seenKeys.add(key));
+  }
+
+  return deduped;
+}
+
+function hasRestaurant(restaurants: Restaurant[], target: Restaurant): boolean {
+  const targetKeys = new Set(getRestaurantIdentityKeys(target));
+  return restaurants.some((restaurant) =>
+    getRestaurantIdentityKeys(restaurant).some((key) => targetKeys.has(key))
+  );
 }

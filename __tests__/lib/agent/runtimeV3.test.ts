@@ -530,6 +530,68 @@ describe('runSearchAgentV3', () => {
     expect(result.restaurants).toEqual([]);
   });
 
+  it('does not ask for broadening again after authorized broadened targets are exhausted', async () => {
+    const searchGoal = withUpdatedGoalVersion(goal({
+      rawQuery: '想吃日料，允许放宽',
+      relatedKeywords: ['日本料理', '寿司', '刺身'],
+      relatedTargets: [
+        { keyword: '日本料理', poiTypes: ['050202'], confidence: 0.8 },
+        { keyword: '寿司', poiTypes: ['050202'], confidence: 0.8 },
+        { keyword: '刺身', poiTypes: ['050202'], confidence: 0.8 },
+      ],
+      broadenedKeywords: ['亚洲料理', '韩国料理', '东南亚菜'],
+      broadenedTargets: [
+        { keyword: '亚洲料理', poiTypes: ['050217'], confidence: 0.7 },
+        { keyword: '韩国料理', poiTypes: ['050203'], confidence: 0.7 },
+        { keyword: '东南亚菜', poiTypes: ['050206', '050217'], confidence: 0.7 },
+      ],
+      allowBroaden: true,
+      authorizations: [{
+        id: 'auth_category_broaden_test',
+        kind: 'category_broaden',
+        createdAt: 1,
+        reason: '用户授权放宽到相邻品类。',
+        constraints: {
+          allowedSearchIntents: ['broadened'],
+        },
+      }],
+    }));
+    const searchPlaces = jest.fn(async () => []);
+
+    const result = await runSearchAgentV3(
+      {
+        query: '允许放宽',
+        location,
+        runtimeState: {
+          goal: searchGoal,
+          attempts: [
+            { keywords: ['日料'], radius: 1800, searchIntent: 'exact', allowedForPrimary: true, reason: 'exact', found: 0, accepted: 0 },
+            { keywords: ['亚洲料理'], radius: 2250, poiType: '050217', searchIntent: 'broadened', allowedForPrimary: true, reason: 'broadened', found: 0, accepted: 0 },
+            { keywords: ['韩国料理'], radius: 2813, poiType: '050203', searchIntent: 'broadened', allowedForPrimary: true, reason: 'broadened', found: 0, accepted: 0 },
+            { keywords: ['东南亚菜'], radius: 3516, poiType: '050206|050217', searchIntent: 'broadened', allowedForPrimary: true, reason: 'broadened', found: 0, accepted: 0 },
+            { keywords: ['日本料理'], radius: 4395, poiType: '050202', searchIntent: 'synonym', allowedForPrimary: true, reason: 'synonym', found: 0, accepted: 0 },
+            { keywords: ['寿司'], radius: 5000, poiType: '050202', searchIntent: 'synonym', allowedForPrimary: true, reason: 'synonym', found: 0, accepted: 0 },
+            { keywords: ['刺身'], radius: 5000, poiType: '050202', searchIntent: 'synonym', allowedForPrimary: true, reason: 'synonym', found: 0, accepted: 0 },
+          ],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      searchPlaces
+    );
+
+    expect(searchPlaces).not.toHaveBeenCalled();
+    expect(result.paused).toBe(true);
+    expect(result.question?.question).not.toContain('允许放宽');
+    expect(result.question?.options).toEqual(['随便推荐', '换个类型']);
+    expect(result.question?.optionEffects?.['随便推荐']).toEqual(expect.objectContaining({
+      allowBroaden: true,
+    }));
+    expect(result.restaurants).toEqual([]);
+  });
+
   it('clarifies soft-preference-only initial requests before searching', async () => {
     const searchPlaces = jest.fn(async () => [restaurant('r1', '测试餐厅', '餐饮')]);
     const result = await runSearchAgentV3(
@@ -552,9 +614,30 @@ describe('runSearchAgentV3', () => {
     expect(searchPlaces).not.toHaveBeenCalled();
   });
 
-  it('uses fallback search when the user explicitly asks for a random recommendation', async () => {
+  it('uses fallback search when the Supervisor returns an open recommendation goal', async () => {
     const supervisorMock = runSupervisorPlanner as jest.Mock;
     supervisorMock.mockClear();
+    supervisorMock.mockResolvedValueOnce({
+      goal: goal({
+        rawQuery: '没有具体想吃的，你来选',
+        requestedItems: [],
+        acceptableCategories: [],
+        primaryKeywords: [],
+        softPreferences: [{ name: '默认多样性', weight: 1, verifiable: true }],
+        allowBroaden: true,
+        authorizations: [{
+          id: 'auth_fallback_primary_test',
+          kind: 'fallback_primary',
+          createdAt: 1,
+          reason: 'Supervisor 理解为开放推荐。',
+          constraints: {
+            allowedSearchIntents: ['fallback'],
+          },
+        }],
+      }),
+      conversationMode: 'start_new_goal',
+      nextAction: 'plan',
+    });
     const searchedPlans: SearchPlan[] = [];
     const result = await runSearchAgentV3(
       {
@@ -606,54 +689,14 @@ describe('runSearchAgentV3', () => {
     ]));
   });
 
-  it('clears model-invented primary targets for explicit random recommendations', async () => {
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
-    supervisorMock.mockResolvedValueOnce({
-      goal: goal({
-        rawQuery: '没有具体想吃的，你来选',
-        requestedItems: [{ name: '日料', required: true, aliases: [] }],
-        acceptableCategories: [{ name: '日料', confidence: 0.9 }],
-        primaryKeywords: ['日料'],
-        clarificationNeeded: [],
-        allowBroaden: false,
-      }),
-      nextAction: 'plan',
-    });
-
-    const searchedPlans: SearchPlan[] = [];
-    const result = await runSearchAgentV3(
-      {
-        query: '没有具体想吃的，你来选',
-        location,
-        runtimeState: {
-          attempts: [],
-          candidates: [],
-          actions: [],
-          observations: [],
-        },
-      },
-      () => undefined,
-      async (plan) => {
-        searchedPlans.push(plan);
-        return [restaurant('r1', '社区餐厅', '餐饮', 300)];
-      }
-    );
-
-    expect(searchedPlans[0].searchIntent).toBe('fallback');
-    expect(searchedPlans[0].keywords).toEqual(['餐厅']);
-    expect(result.runtimeState?.goal.primaryKeywords).toEqual([]);
-    expect(result.runtimeState?.goal.requestedItems).toEqual([]);
-    expect(result.runtimeState?.goal.allowBroaden).toBe(true);
-  });
-
-  it('falls back to an open recommendation goal if Supervisor truncates an explicit random request', async () => {
+  it('does not infer an open recommendation goal if the Supervisor truncates', async () => {
     const supervisorMock = runSupervisorPlanner as jest.Mock;
     supervisorMock.mockRejectedValueOnce(
       new Error('SupervisorPlannerAgent returned truncated function arguments')
     );
     const searchedPlans: SearchPlan[] = [];
 
-    const result = await runSearchAgentV3(
+    await expect(runSearchAgentV3(
       {
         query: '没有具体想吃的，你来选',
         location,
@@ -669,11 +712,9 @@ describe('runSearchAgentV3', () => {
         searchedPlans.push(plan);
         return [restaurant('r1', '社区餐厅', '餐饮', 300)];
       }
-    );
+    )).rejects.toThrow('SupervisorPlannerAgent returned truncated function arguments');
 
-    expect(result.paused).not.toBe(true);
-    expect(searchedPlans[0].searchIntent).toBe('fallback');
-    expect(searchedPlans[0].keywords).toEqual(['餐厅']);
+    expect(searchedPlans).toEqual([]);
   });
 
   it('records the observed provider when search falls back to OSM results', async () => {

@@ -734,7 +734,7 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 | `OPENAI_TOOL_CALL_MODE` | 否 | 模型函数调用请求格式；默认使用 `tools/tool_choice`，旧兼容端点可设为 `functions` | - |
 | `QWEN_ENABLE_THINKING` | 否 | Qwen/DashScope 兼容端点的 thinking mode 开关；强制工具调用场景默认自动关闭 | - |
 | `AMAP_API_KEY` | 是 | 高德 Web 服务 API Key | - |
-| `NEXT_PUBLIC_AMAP_KEY` | 否 | 前端地图 JS API Key | - |
+| `NEXT_PUBLIC_AMAP_KEY` | 否 | 前端地图 JS API Key；只用于浏览器加载高德 JS API，不要使用服务端 `AMAP_API_KEY` 代替 | - |
 | `AMAP_SECURITY_CODE` | 否 | 高德安全码或签名密钥 | - |
 | `AMAP_MAX_QPS` | 否 | 高德 Web 服务每实例最高请求速率 | `4` |
 | `AMAP_MAX_RETRIES` | 否 | 高德 QPS/网络错误重试次数 | `2` |

@@ -10,17 +10,16 @@ import { evaluateSearchResult, mergeCandidates } from './evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import {
+  isOpenExplorationAuthorized,
   isSearchIntentAuthorizedForPrimary,
 } from './authorization';
 import {
   hasPromotedBroadenedPrimaryCandidates,
   promoteAuthorizedBroadenedResults,
 } from './broadenAdmission';
-import { UserGoalSchema } from './schemas/goal';
 import { SearchPlanSchema } from './schemas/plan';
 import { finalizeRecommendations } from './resultAssembler';
 import {
-  extractKnownFoodTerms,
   DEFAULT_POI_TYPE,
   isGenericSearchKeyword,
   lookupFoodPoiTypes,
@@ -90,10 +89,7 @@ export async function runSearchAgentV3(
   emit({ type: 'thinking', message: '正在理解你的需求...' });
   emit({ type: 'status', message: 'SupervisorPlannerAgent 正在维护目标并选择下一步动作...' });
 
-  const supervisorOutput = normalizeExplicitOpenRecommendation(
-    input,
-    await getSupervisorPlannerOutput(input)
-  );
+  const supervisorOutput = await getSupervisorPlannerOutput(input);
   const conversationMode = inferRuntimeConversationMode(input, supervisorOutput);
   const baseGoal = withUpdatedGoalVersion(
     resolveSupervisorGoal(input, supervisorOutput),
@@ -272,114 +268,13 @@ function resolveSupervisorGoal(
 async function getSupervisorPlannerOutput(
   input: AgentInput
 ): Promise<Awaited<ReturnType<typeof runSupervisorPlanner>>> {
-  try {
-    return await runSupervisorPlanner({
-      message: input.query,
-      previousGoal: input.runtimeState?.goal,
-      pendingQuestion: input.runtimeState?.pendingQuestion,
-      messages: input.messages,
-      preferenceSummary: input.preferenceSummary,
-      attempts: input.runtimeState?.attempts,
-    });
-  } catch (error) {
-    if (isInitialExplicitOpenRecommendation(input) && isTruncatedFunctionArgumentsError(error)) {
-      return {
-        goal: buildOpenRecommendationGoal(input.query),
-        conversationMode: 'start_new_goal',
-        nextAction: 'plan',
-      };
-    }
-
-    throw error;
-  }
-}
-
-function normalizeExplicitOpenRecommendation(
-  input: AgentInput,
-  output: Awaited<ReturnType<typeof runSupervisorPlanner>>
-): Awaited<ReturnType<typeof runSupervisorPlanner>> {
-  if (
-    input.runtimeState?.pendingQuestion
-    || input.runtimeState?.goal
-    || !isExplicitOpenRecommendationQuery(input.query)
-  ) {
-    return output;
-  }
-
-  return {
-    goal: buildOpenRecommendationGoal(input.query, output.goal),
-    conversationMode: 'start_new_goal',
-    nextAction: 'plan',
-  };
-}
-
-function isInitialExplicitOpenRecommendation(input: AgentInput): boolean {
-  return !input.runtimeState?.pendingQuestion
-    && !input.runtimeState?.goal
-    && isExplicitOpenRecommendationQuery(input.query);
-}
-
-function isExplicitOpenRecommendationQuery(query: string): boolean {
-  const normalized = query.trim();
-  if (!normalized) {
-    return false;
-  }
-
-  if (extractKnownFoodTerms(normalized).length > 0) {
-    return false;
-  }
-
-  return /(随便|随意|随机|都行|都可以|无所谓|你决定|你看着办|帮我决定|直接推荐|不知道吃啥|不知道吃什么|不知道吃啥好|不知道吃什么好|没有具体|没具体)/u
-    .test(normalized);
-}
-
-function isTruncatedFunctionArgumentsError(error: unknown): boolean {
-  return error instanceof Error
-    && error.message.includes('returned truncated function arguments');
-}
-
-function buildOpenRecommendationGoal(query: string, modelGoal?: UserGoal): UserGoal {
-  const existingPreferences = modelGoal?.softPreferences ?? [];
-  const hasDefaultDiversity = existingPreferences.some((preference) =>
-    preference.name === '默认多样性'
-  );
-
-  return UserGoalSchema.parse({
-    intent: 'find_restaurants',
-    rawQuery: modelGoal?.rawQuery || query,
-    requestedItems: [],
-    acceptableCategories: [],
-    alternativeGroups: [],
-    primaryKeywords: [],
-    relatedKeywords: [],
-    broadenedKeywords: [],
-    relatedTargets: [],
-    broadenedTargets: [],
-    hardConstraints: modelGoal?.hardConstraints ?? [],
-    softPreferences: hasDefaultDiversity
-      ? existingPreferences
-      : [
-          ...existingPreferences,
-          { name: '默认多样性', weight: 1, verifiable: true },
-        ],
-    exclusions: modelGoal?.exclusions ?? [],
-    ambiguity: [
-      ...(modelGoal?.ambiguity ?? []),
-      '用户明确表示随意或随机推荐，已按开放餐饮候选处理。',
-    ],
-    clarificationNeeded: [],
-    authorizations: [
-      {
-        id: `auth_fallback_primary_${Date.now().toString(36)}`,
-        kind: 'fallback_primary',
-        createdAt: Date.now(),
-        reason: '用户授权开放推荐，可将兜底餐饮候选作为主推荐。',
-        constraints: {
-          allowedSearchIntents: ['fallback'],
-        },
-      },
-    ],
-    allowBroaden: true,
+  return runSupervisorPlanner({
+    message: input.query,
+    previousGoal: input.runtimeState?.goal,
+    pendingQuestion: input.runtimeState?.pendingQuestion,
+    messages: input.messages,
+    preferenceSummary: input.preferenceSummary,
+    attempts: input.runtimeState?.attempts,
   });
 }
 
@@ -795,7 +690,30 @@ async function guardAction(action: AgentAction, context: AgentV3Context): Promis
     return guardFinishAction(action, context);
   }
 
+  if (action.type === 'ask_user') {
+    return guardAskUserAction(action, context);
+  }
+
   return { type: 'allow', action };
+}
+
+function guardAskUserAction(
+  action: Extract<AgentAction, { type: 'ask_user' }>,
+  context: AgentV3Context
+): GuardrailDecision {
+  const exhaustedQuestion = buildPostAuthorizationNoPrimaryQuestion(context);
+  if (!exhaustedQuestion || !questionAsksForBroadenAuthorization(action.question)) {
+    return { type: 'allow', action };
+  }
+
+  return {
+    type: 'allow',
+    action: {
+      type: 'ask_user',
+      question: exhaustedQuestion,
+    },
+    notes: ['已避免重复询问“允许放宽”，改为请求用户更换类型或授权开放推荐。'],
+  };
 }
 
 async function guardSearchAction(
@@ -980,7 +898,7 @@ function buildExpansionSearchBeforeFinish(context: AgentV3Context): AgentAction 
   }
 
   const relatedTarget = nextUntriedGoalTarget(context, context.goal.relatedTargets, context.goal.relatedKeywords);
-  if (relatedTarget) {
+  if (relatedTarget && !hasTriedIntent(context, 'synonym')) {
     return {
       type: 'search',
       plan: buildRuntimePlan(context, relatedTarget, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
@@ -1002,6 +920,13 @@ function buildExpansionSearchBeforeFinish(context: AgentV3Context): AgentAction 
           ? '用户允许放宽，继续尝试 Agent 联想到的相邻品类。'
           : '没有主推荐，搜索 Agent 联想到的相邻品类作为候补。'
       ),
+    };
+  }
+
+  if (relatedTarget) {
+    return {
+      type: 'search',
+      plan: buildRuntimePlan(context, relatedTarget, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
     };
   }
 
@@ -1523,6 +1448,11 @@ function buildNoPrimaryQuestion(context: AgentV3Context): PendingQuestion {
     };
   }
 
+  const exhaustedQuestion = buildPostAuthorizationNoPrimaryQuestion(context);
+  if (exhaustedQuestion) {
+    return exhaustedQuestion;
+  }
+
   return {
     reason: '没有找到通过主推荐准入的餐厅。',
     question: target
@@ -1534,6 +1464,67 @@ function buildNoPrimaryQuestion(context: AgentV3Context): PendingQuestion {
       '允许放宽': allowBroadenQuestionEffect(context.goal),
     },
   };
+}
+
+function buildPostAuthorizationNoPrimaryQuestion(context: AgentV3Context): PendingQuestion | null {
+  if (hasPrimaryCandidates(context)) {
+    return null;
+  }
+
+  const hasPrimaryTarget = hasPositiveFoodTarget(context.goal);
+  if (hasPrimaryTarget) {
+    if (!hasCategoryBroadenAuthorization(context) || hasUntriedBroadenedTarget(context)) {
+      return null;
+    }
+
+    const target = primaryTargetLabel(context.goal);
+    const canAskFallback = !isOpenExplorationAuthorized(context.goal)
+      && !hasTriedIntent(context, 'fallback');
+    const options = canAskFallback ? ['随便推荐', '换个类型'] : ['换个类型'];
+    const optionEffects = canAskFallback
+      ? { '随便推荐': fallbackPrimaryQuestionEffect() }
+      : undefined;
+    const attemptedBroadenedSearch = hasTriedIntent(context, 'broadened');
+
+    return {
+      reason: attemptedBroadenedSearch
+        ? '已授权并尝试放宽到相邻品类，但没有找到通过主推荐准入的餐厅。'
+        : '已授权放宽，但没有更多可尝试的相邻品类。',
+      question: target
+        ? postBroadenQuestionText(target, attemptedBroadenedSearch)
+        : postBroadenQuestionText(undefined, attemptedBroadenedSearch),
+      options,
+      allowFreeText: true,
+      optionEffects,
+    };
+  }
+
+  if (
+    isOpenExplorationAuthorized(context.goal)
+    && hasTriedIntent(context, 'fallback')
+    && !hasUntriedBroadenedTarget(context)
+  ) {
+    return {
+      reason: '已按开放推荐搜索，但没有找到通过主推荐准入的餐厅。',
+      question: '已经按开放推荐搜索过，仍没有找到合适餐厅。换个类型或补充一个想吃的方向吧。',
+      options: ['换个类型'],
+      allowFreeText: true,
+    };
+  }
+
+  return null;
+}
+
+function postBroadenQuestionText(target: string | undefined, attemptedBroadenedSearch: boolean): string {
+  if (attemptedBroadenedSearch) {
+    return target
+      ? `已经放宽搜索过「${target}」相关品类，仍没有找到合适餐厅。要换个类型，还是改成随便推荐？`
+      : '已经放宽搜索过相邻品类，仍没有找到合适餐厅。要换个类型，还是改成随便推荐？';
+  }
+
+  return target
+    ? `没有更多「${target}」相关品类可继续搜索。要换个类型，还是改成随便推荐？`
+    : '没有更多相邻品类可继续搜索。要换个类型，还是改成随便推荐？';
 }
 
 function allowBroadenQuestionEffect(goal: UserGoal): NonNullable<PendingQuestion['optionEffects']>[string] {
@@ -1556,6 +1547,22 @@ function allowBroadenQuestionEffect(goal: UserGoal): NonNullable<PendingQuestion
         : '用户授权开放推荐，可将兜底餐饮候选作为主推荐。',
       constraints: {
         allowedSearchIntents: [searchIntent],
+      },
+    }],
+  };
+}
+
+function fallbackPrimaryQuestionEffect(): NonNullable<PendingQuestion['optionEffects']>[string] {
+  return {
+    allowBroaden: true,
+    addSoftPreferences: [{ name: '默认多样性', weight: 1, verifiable: true }],
+    addAuthorizations: [{
+      id: `auth_fallback_primary_${Date.now().toString(36)}`,
+      kind: 'fallback_primary',
+      createdAt: Date.now(),
+      reason: '用户授权改为开放推荐，可将兜底餐饮候选作为主推荐。',
+      constraints: {
+        allowedSearchIntents: ['fallback'],
       },
     }],
   };
@@ -1589,11 +1596,60 @@ function nextUntriedGoalTarget(
   return baseTargets.find((target) => !hasTriedKeyword(context, target.keyword)) ?? null;
 }
 
+function hasUntriedBroadenedTarget(context: AgentV3Context): boolean {
+  return Boolean(nextUntriedGoalTarget(
+    context,
+    context.goal.broadenedTargets,
+    context.goal.broadenedKeywords
+  ));
+}
+
 function hasTriedKeyword(context: AgentV3Context, keyword: string): boolean {
   const normalizedKeywords = normalizeSearchKeywords([keyword]);
   return context.attempts.some((attempt) =>
     attempt.keywords.some((attemptKeyword) => normalizedKeywords.includes(attemptKeyword))
   );
+}
+
+function hasTriedIntent(context: AgentV3Context, intent: SearchPlan['searchIntent']): boolean {
+  return context.attempts.some((attempt) => attempt.searchIntent === intent);
+}
+
+function hasCategoryBroadenAuthorization(context: AgentV3Context): boolean {
+  return isSearchIntentAuthorizedForPrimary(
+    context.goal,
+    'broadened',
+    broadenedGoalKeywords(context.goal)
+  );
+}
+
+function broadenedGoalKeywords(goal: UserGoal): string[] {
+  return [
+    ...goal.broadenedKeywords,
+    ...(goal.broadenedTargets ?? []).map((target) => target.keyword),
+  ].filter(Boolean);
+}
+
+function hasPositiveFoodTarget(goal: UserGoal): boolean {
+  return [
+    ...goal.primaryKeywords,
+    ...goal.requestedItems.map((item) => item.name),
+    ...goal.acceptableCategories.map((category) => category.name),
+  ].some((item) => item.trim().length > 0);
+}
+
+function primaryTargetLabel(goal: UserGoal): string {
+  return [
+    ...goal.requestedItems.map((item) => item.name),
+    ...goal.primaryKeywords,
+    ...goal.acceptableCategories.map((category) => category.name),
+  ].filter(Boolean).slice(0, 3).join('、');
+}
+
+function questionAsksForBroadenAuthorization(question: PendingQuestion): boolean {
+  return question.options?.some((option) => option.includes('放宽')) === true
+    || question.question.includes('允许放宽')
+    || Object.values(question.optionEffects ?? {}).some((effect) => effect.allowBroaden === true);
 }
 
 function buildRuntimePlan(
