@@ -5,7 +5,7 @@ import type { FinishRecommendation, PendingQuestion } from './types';
 /**
  * @deprecated Runtime V3 does not use AI SDK tool calling directly. This file
  * is legacy migration reference only; do not import it into the active Agent
- * runtime path. Active orchestration lives in runtimeV3 + supervisorAction.
+ * runtime path. Active orchestration lives in runtimeV3 + supervisorPlanner.
  */
 
 const LocationSchema = z.object({

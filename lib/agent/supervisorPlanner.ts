@@ -12,6 +12,11 @@ import {
   isSearchIntentAuthorizedForPrimary,
 } from './authorization';
 import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
+import {
+  runSearchSupervisor,
+  type SearchSupervisorInput,
+  type SearchSupervisorOutput,
+} from './supervisor';
 import type {
   AgentAction,
   AgentActionRecord,
@@ -25,15 +30,23 @@ import type {
   UserPreferenceSummary,
 } from './types';
 
+export {
+  applyGoalPatch,
+  applySupervisorClarifyingAnswer,
+  clarificationNeedToPendingQuestion,
+  understandSearchGoal,
+} from './supervisor';
+export type { SearchSupervisorInput, SearchSupervisorOutput } from './supervisor';
+
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-const SUPERVISOR_ACTION_TIMEOUT = 60000;
-const SUPERVISOR_ACTION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
-const SUPERVISOR_ACTION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
+const SUPERVISOR_PLANNER_ACTION_TIMEOUT = 60000;
+const SUPERVISOR_PLANNER_ACTION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
+const SUPERVISOR_PLANNER_ACTION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 const MIN_PRIMARY_BEFORE_OPTIONAL_EXPANSION = 6;
 
-export interface SearchSupervisorActionInput {
+export interface SupervisorPlannerActionInput {
   message: string;
   goal: AgentContext['goal'];
   messages: AgentMessage[];
@@ -49,7 +62,13 @@ export interface SearchSupervisorActionInput {
   };
 }
 
-const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，也是餐厅搜索唯一 loop controller。你必须在每轮只输出一个 AgentAction。
+export type SupervisorPlannerInput = SearchSupervisorInput | SupervisorPlannerActionInput;
+
+export interface SupervisorPlannerOutput extends SearchSupervisorOutput {
+  action?: AgentAction;
+}
+
+const ACTION_SYSTEM_PROMPT = `你是 SupervisorPlannerAgent，也是餐厅搜索唯一策略 planner。你必须在每轮只输出一个 AgentAction。
 
 可选动作：
 1. search：给出下一次 search_restaurants 的 SearchPlan。
@@ -66,7 +85,7 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，也是餐厅搜索唯一 l
 - relatedKeywords 还有未尝试词且主推荐少于目标数时，优先继续 search，不要过早 finish。
 - 当 goal 没有明确主目标但 allowBroaden=true 时，第一轮优先 fallback 到通用餐饮词；通用结果不足时再尝试 broadenedKeywords。
 - ask_user 如果给出选项，尽量为选项提供 optionEffects。选项标签只是分类说明时，effect 必须指向历史上下文里的真实目标，不能把选项标签当搜索词。`;
-const REWRITE_PROMPT = `如果输入里包含 rewriteInstruction，说明上一轮 action 被 Runtime Guard 拒绝或要求重写。你必须根据 rewriteInstruction 修正 action；不要重复输出相同违规动作。`;
+const ACTION_REWRITE_PROMPT = `如果输入里包含 rewriteInstruction，说明上一轮 action 被 Runtime Guard 拒绝或要求重写。你必须根据 rewriteInstruction 修正 action；不要重复输出相同违规动作。`;
 
 const ACTION_FUNCTION = {
   name: 'decideRestaurantSearchAction',
@@ -95,7 +114,7 @@ const ACTION_FUNCTION = {
           allowFreeText: { type: 'boolean' },
           optionEffects: {
             type: 'object',
-            additionalProperties: clarificationEffectJsonSchema(),
+            additionalProperties: actionClarificationEffectJsonSchema(),
           },
         },
       },
@@ -108,7 +127,71 @@ const ACTION_FUNCTION = {
   },
 };
 
-function clarificationEffectJsonSchema() {
+export async function runSupervisorPlanner(
+  input: SupervisorPlannerInput,
+  context?: AgentContext
+): Promise<SupervisorPlannerOutput> {
+  if (isActionPlanningInput(input)) {
+    if (!context) {
+      throw new Error('SupervisorPlannerAgent action planning requires AgentContext');
+    }
+
+    return {
+      action: await decideSupervisorPlannerAction(input, context),
+    };
+  }
+
+  return runSearchSupervisor(input);
+}
+
+export async function decideSupervisorPlannerAction(
+  input: SupervisorPlannerActionInput,
+  context: AgentContext
+): Promise<AgentAction> {
+  if (shouldForceOpenExplorationSearch(input, context)) {
+    return deterministicSupervisorPlannerAction(input, context);
+  }
+
+  if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
+    return deterministicSupervisorPlannerAction(input, context);
+  }
+
+  try {
+    return await callSupervisorPlannerActionModel(input);
+  } catch (error) {
+    logger.warn('SupervisorPlannerAgent action model unavailable, using deterministic action', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return deterministicSupervisorPlannerAction(input, context);
+  }
+}
+
+export function summarizeAction(action: AgentAction): string {
+  if (action.type === 'search') {
+    return `搜索「${action.plan.keywords.join('、')}」：${action.plan.reason}`;
+  }
+
+  if (action.type === 'ask_user') {
+    return action.question.reason ?? action.question.question;
+  }
+
+  return action.explanation;
+}
+
+export function createActionRecord(action: AgentAction): AgentActionRecord {
+  return {
+    id: createActionId(),
+    action,
+    createdAt: Date.now(),
+    summary: summarizeAction(action),
+  };
+}
+
+function isActionPlanningInput(input: SupervisorPlannerInput): input is SupervisorPlannerActionInput {
+  return 'goal' in input && 'limits' in input;
+}
+
+function actionClarificationEffectJsonSchema() {
   return {
     type: 'object',
     additionalProperties: false,
@@ -132,13 +215,13 @@ function clarificationEffectJsonSchema() {
         },
       },
       setDistanceMaxMeters: { type: 'number' },
-      addAuthorizations: { type: 'array', items: authorizationJsonSchema() },
+      addAuthorizations: { type: 'array', items: actionAuthorizationJsonSchema() },
       allowBroaden: { type: 'boolean' },
     },
   };
 }
 
-function authorizationJsonSchema() {
+function actionAuthorizationJsonSchema() {
   return {
     type: 'object',
     additionalProperties: false,
@@ -168,51 +251,8 @@ function authorizationJsonSchema() {
   };
 }
 
-export async function decideSearchSupervisorAction(
-  input: SearchSupervisorActionInput,
-  context: AgentContext
-): Promise<AgentAction> {
-  if (shouldForceOpenExplorationSearch(input, context)) {
-    return deterministicSupervisorAction(input, context);
-  }
-
-  if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
-    return deterministicSupervisorAction(input, context);
-  }
-
-  try {
-    return await callSupervisorActionModel(input);
-  } catch (error) {
-    logger.warn('SearchSupervisorAgent action model unavailable, using deterministic action', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return deterministicSupervisorAction(input, context);
-  }
-}
-
-export function summarizeAction(action: AgentAction): string {
-  if (action.type === 'search') {
-    return `搜索「${action.plan.keywords.join('、')}」：${action.plan.reason}`;
-  }
-
-  if (action.type === 'ask_user') {
-    return action.question.reason ?? action.question.question;
-  }
-
-  return action.explanation;
-}
-
-export function createActionRecord(action: AgentAction): AgentActionRecord {
-  return {
-    id: createActionId(),
-    action,
-    createdAt: Date.now(),
-    summary: summarizeAction(action),
-  };
-}
-
-function deterministicSupervisorAction(
-  input: SearchSupervisorActionInput,
+function deterministicSupervisorPlannerAction(
+  input: SupervisorPlannerActionInput,
   context: AgentContext
 ): AgentAction {
   const primaryCandidates = context.candidates.filter((candidate) =>
@@ -333,7 +373,7 @@ function deterministicSupervisorAction(
 }
 
 function shouldForceOpenExplorationSearch(
-  input: SearchSupervisorActionInput,
+  input: SupervisorPlannerActionInput,
   context: AgentContext
 ): boolean {
   if (
@@ -581,25 +621,25 @@ function inferPoiTypesForGoalKeyword(context: AgentContext, keyword: string): st
   return direct;
 }
 
-async function callSupervisorActionModel(input: SearchSupervisorActionInput): Promise<AgentAction> {
+async function callSupervisorPlannerActionModel(input: SupervisorPlannerActionInput): Promise<AgentAction> {
   return callJsonFunctionAgent({
-    agentName: 'SearchSupervisorAgent action',
+    agentName: 'SupervisorPlannerAgent action',
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
     model: OPENAI_MODEL,
-    systemPrompt: `${SYSTEM_PROMPT}\n\n${REWRITE_PROMPT}`,
+    systemPrompt: `${ACTION_SYSTEM_PROMPT}\n\n${ACTION_REWRITE_PROMPT}`,
     input: buildModelInput(input),
     functionDefinition: ACTION_FUNCTION,
     functionName: 'decideRestaurantSearchAction',
     schema: AgentActionSchema,
     temperature: 0,
-    maxTokens: SUPERVISOR_ACTION_MAX_TOKENS,
-    retryMaxTokens: SUPERVISOR_ACTION_RETRY_MAX_TOKENS,
-    timeoutMs: SUPERVISOR_ACTION_TIMEOUT,
+    maxTokens: SUPERVISOR_PLANNER_ACTION_MAX_TOKENS,
+    retryMaxTokens: SUPERVISOR_PLANNER_ACTION_RETRY_MAX_TOKENS,
+    timeoutMs: SUPERVISOR_PLANNER_ACTION_TIMEOUT,
   }) as Promise<AgentAction>;
 }
 
-function buildModelInput(input: SearchSupervisorActionInput) {
+function buildModelInput(input: SupervisorPlannerActionInput) {
   return {
     userMessage: input.message,
     trustedContext: {

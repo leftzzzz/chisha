@@ -1,20 +1,22 @@
 # Agent 优化技术方案
 
 审计日期：2026-06-03  
-适用范围：`app/api/agent/chat/route.ts`、`lib/agent/runtimeV3.ts`、`lib/agent/supervisor.ts`、`lib/agent/supervisorAction.ts`、`lib/agent/session.ts`、`lib/agent/guards.ts`、`lib/agent/finalGuard.ts`、`lib/agent/subagents/evaluationAgent.ts`、前端 Agent 状态展示链路。
+适用范围：`app/api/agent/chat/route.ts`、`lib/agent/runtimeV3.ts`、`lib/agent/supervisorPlanner.ts`、`lib/agent/supervisor.ts`、`lib/agent/session.ts`、`lib/agent/guards.ts`、`lib/agent/finalGuard.ts`、`lib/agent/subagents/evaluationAgent.ts`、前端 Agent 状态展示链路。
 
 ## 1. 背景
 
 当前 ChiSha Agent 已经从简单 LLM 解析演进为 Runtime V3：
 
-- `SearchSupervisorAgent` 维护用户目标与追问。
-- `KeywordExpansionAgent` 生成搜索联想词。
-- `SearchSupervisorAction` 选择下一步 action。
+- `SupervisorPlannerAgent` 维护用户目标与追问。
+- `KeywordExpansionHelper` 生成搜索联想词。
+- `SupervisorPlannerAgent` 选择下一步 action。
 - `runtimeV3` 执行 loop、调用搜索工具、执行 guard。
 - `EvaluationAgent` 验证候选语义相关性。
 - `FinalGuard` 负责最终主推荐准入。
 
 新的目标架构采用方案 A：收敛为单一 `SupervisorPlannerAgent`，由它同时维护 `UserGoal` 并输出下一步 `AgentAction`。`KeywordExpansionAgent` 降级为 `KeywordExpansionHelper`，只作为搜索词和 POI type 建议工具，不再作为独立主控 Agent。
+
+落地顺序采用小步合并：先新增 `lib/agent/supervisorPlanner.ts` 作为 canonical 入口，把原 `supervisor.ts` 的 goal 维护能力和原 action planner 的决策能力并到同一个模块；Runtime 只通过 `runSupervisorPlanner` 获取 goal/action。此阶段不强求一次模型调用同时完成 goal 和 action，因为 `KeywordExpansionHelper` 仍需要夹在 goal 维护和 action 决策之间。
 
 这个方向整体正确：模型负责理解和提出动作，Runtime 负责执行工具、预算、权限和最终兜底。但当前仍存在控制权分裂、会话恢复脆弱、上下文版本缺失、trace 不完整和授权粒度过粗等问题。
 
@@ -82,13 +84,13 @@ Runtime 仍然必须控制：
 | Trace 不完整 | SSE 有事件，但 session 缺少完整可回放 journal | 每轮 action、guard、tool、observation、state update 都持久化 |
 | 授权粗糙 | `allowBroaden` 表达所有放宽授权 | 结构化 authorization scope |
 | Evaluation 单点失败 | EvaluationAgent 失败导致整条链路失败 | 结构化失败、缓存、重试、暂停或只返回未验证候补 |
-| 迁移残留 | `PlanningAgent`、旧 `tools.ts` 仍在 | 主链路清晰，旧模块归档或仅保留测试参考 |
+| 迁移残留 | `PlanningAgent`、旧 `tools.ts`、旧 action 入口仍在 | 主链路清晰，旧模块归档、删除或仅保留 deprecated 兼容 re-export |
 
 ## 5. 目标架构
 
 ```mermaid
 graph TB
-    U[User Message] --> API[/api/agent/chat]
+    U[User Message] --> API[ /api/agent/chat]
     API --> STORE[AgentSessionStore]
     STORE --> CTX[ContextBuilder]
     CTX --> ORCH[Agent Orchestrator]
@@ -404,7 +406,7 @@ export interface AgentAuthorization {
 改动文件：
 
 - `lib/agent/types.ts`
-- `lib/agent/supervisor.ts`
+- `lib/agent/supervisorPlanner.ts`
 - `lib/agent/runtimeV3.ts`
 - `lib/agent/evaluator.ts`
 - `lib/agent/finalGuard.ts`
@@ -434,7 +436,7 @@ export interface AgentAuthorization {
 改动文件：
 
 - `app/api/agent/chat/route.ts`
-- `lib/agent/supervisor.ts`
+- `lib/agent/supervisorPlanner.ts`
 - `lib/agent/schemas/clarification.ts`
 - `lib/agent/types.ts`
 - `hooks/useRestaurantSearch.ts`
@@ -514,7 +516,7 @@ export interface AgentAuthorization {
 改动文件：
 
 - `lib/agent/types.ts`
-- `lib/agent/supervisor.ts`
+- `lib/agent/supervisorPlanner.ts`
 - `lib/agent/schemas/goal.ts`
 - `lib/agent/schemas/clarification.ts`
 - `lib/agent/broadenAdmission.ts`

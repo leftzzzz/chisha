@@ -52,7 +52,7 @@ export interface SearchSupervisorOutput {
   nextAction?: 'plan' | 'ask_user' | 'finish';
 }
 
-const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent。你负责理解用户消息、维护 UserGoal、生成 GoalPatch、决定是否追问或进入计划阶段。
+const SYSTEM_PROMPT = `你是 SupervisorPlannerAgent，是餐厅搜索主 Agent。你负责理解用户消息、维护 UserGoal、生成 GoalPatch、决定是否追问或进入计划阶段。
 
 边界：
 1. 你可以理解用户意图、菜品、菜系、排除项、偏好和歧义。
@@ -63,12 +63,12 @@ const SYSTEM_PROMPT = `你是 SearchSupervisorAgent，是餐厅搜索主 Agent�
 6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
 7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
 7a. 如果追问给出选项，必须尽量给每个选项设置 optionEffects；选项只是分类说明时，effect 要指向被澄清的原始目标，不能把选项标签当搜索词。
-8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么/没有具体想吃的”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，加入“默认多样性”软偏好，进入 plan 后由 KeywordExpansionAgent 生成开放探索词；不要 ask_user，也不要把这些词当 keywords。
+8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么/没有具体想吃的”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，加入“默认多样性”软偏好，进入 plan 后由 KeywordExpansionHelper 生成开放探索词；不要 ask_user，也不要把这些词当 keywords。
 8a. 用户只是“附近有什么/吃点/清淡点/健康点/便宜点/环境好/人气高”等软偏好或开放询问、但没有明确授权随意/随机推荐且没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
 9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true，加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
 10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
 11. primaryKeywords 只能放用户正向想吃的、适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
-12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords/broadenedKeywords 及 relatedTargets/broadenedTargets 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
+12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords/broadenedKeywords 及 relatedTargets/broadenedTargets 由 KeywordExpansionHelper 负责生成，初始目标保持空数组即可。
 13. 处理 pendingQuestion 的用户回复时，必须结合 previousGoal.rawQuery、pendingQuestion 和历史 messages 重新总结完整需求；当前 message 不是独立新需求。
 14. 如果用户回复命中的是上轮澄清问题的选项标签或分类说明，不要把该标签本身作为搜索词；优先通过 pendingQuestion.optionEffects 或历史上下文恢复被澄清的原始目标。
 15. 否定条件、口味限制、排除项、开放授权和软偏好都不是搜索目标，不能进入 primaryKeywords、requestedItems 或 acceptableCategories。类似“不要辣的，其他都可以”应表达为硬约束/开放授权，并在缺少正向餐饮目标时追问，不要输出“不辣”“都可以”作为关键词。
@@ -110,13 +110,13 @@ export async function runSearchSupervisor(
   }
 
   if (!OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is required for SearchSupervisorAgent');
+    throw new Error('OPENAI_API_KEY is required for SupervisorPlannerAgent');
   }
 
   try {
     return normalizeSupervisorOutput(input, await callSupervisorModel(input));
   } catch (error) {
-    logger.warn('SearchSupervisorAgent unavailable', {
+    logger.warn('SupervisorPlannerAgent unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
@@ -162,10 +162,10 @@ function normalizeSupervisorOutput(
     };
   }
 
-  logger.warn('SearchSupervisorAgent returned no goal patch for a pending clarification answer', {
+  logger.warn('SupervisorPlannerAgent returned no goal patch for a pending clarification answer', {
     question: input.pendingQuestion.question,
   });
-  throw new Error('SearchSupervisorAgent returned no goal patch for a pending clarification answer');
+  throw new Error('SupervisorPlannerAgent returned no goal patch for a pending clarification answer');
 }
 
 function inferConversationMode(
@@ -350,7 +350,7 @@ export async function understandSearchGoal(input: AgentInput): Promise<UserGoal>
     return applyGoalPatch(input.runtimeState.goal, output.patch, input.query);
   }
 
-  throw new Error('SearchSupervisorAgent returned no goal or patch');
+  throw new Error('SupervisorPlannerAgent returned no goal or patch');
 }
 
 export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal.rawQuery): UserGoal {
@@ -654,7 +654,7 @@ async function callSupervisorModel(
   maxTokens = SUPERVISOR_MAX_TOKENS
 ): Promise<SearchSupervisorOutput> {
   return callJsonFunctionAgent({
-    agentName: 'SearchSupervisorAgent',
+    agentName: 'SupervisorPlannerAgent',
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
     model: OPENAI_MODEL,
@@ -791,12 +791,12 @@ function userGoalJsonSchema() {
       },
       relatedTargets: {
         type: 'array',
-        description: '由 KeywordExpansionAgent 维护；Supervisor 初始化时保持空数组。',
+        description: '由 KeywordExpansionHelper 维护；Supervisor 初始化时保持空数组。',
         items: searchKeywordTargetJsonSchema(),
       },
       broadenedTargets: {
         type: 'array',
-        description: '由 KeywordExpansionAgent 维护；Supervisor 初始化时保持空数组。',
+        description: '由 KeywordExpansionHelper 维护；Supervisor 初始化时保持空数组。',
         items: searchKeywordTargetJsonSchema(),
       },
       hardConstraints: {

@@ -31,7 +31,7 @@ const requiredFiles = [
   { path: 'lib/logger.ts', description: '日志工具' },
   { path: 'lib/withTimeout.ts', description: '超时中间件' },
   { path: 'lib/llm.ts', description: 'OpenAI API 兼容封装' },
-  { path: 'lib/agent/supervisor.ts', description: 'SearchSupervisorAgent' },
+  { path: 'lib/agent/supervisorPlanner.ts', description: 'SupervisorPlannerAgent' },
   { path: 'lib/agent/subagents/planningAgent.ts', description: 'PlanningAgent' },
   { path: 'lib/agent/subagents/evaluationAgent.ts', description: 'EvaluationAgent' },
   { path: 'lib/agent/poiTaxonomy.ts', description: '高德 POI Taxonomy' },

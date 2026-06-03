@@ -1,7 +1,7 @@
 import {
   applyGoalPatch,
   applySupervisorClarifyingAnswer,
-} from '@/lib/agent/supervisor';
+} from '@/lib/agent/supervisorPlanner';
 import { SearchSupervisorOutputSchema } from '@/lib/agent/schemas/clarification';
 import type { AgentSession, UserGoal } from '@/lib/agent/types';
 
@@ -25,15 +25,15 @@ function goal(overrides: Partial<UserGoal> = {}): UserGoal {
   };
 }
 
-describe('SearchSupervisorAgent', () => {
+describe('SupervisorPlannerAgent goal maintenance', () => {
   it('requires the model instead of falling back to local parsing', async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
     jest.resetModules();
 
     try {
-      const { runSearchSupervisor } = await import('@/lib/agent/supervisor');
-      await expect(runSearchSupervisor({ message: '想吃牛排' })).rejects.toThrow('OPENAI_API_KEY');
+      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
+      await expect(runSupervisorPlanner({ message: '想吃牛排' })).rejects.toThrow('OPENAI_API_KEY');
     } finally {
       if (originalApiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -49,8 +49,8 @@ describe('SearchSupervisorAgent', () => {
     jest.resetModules();
 
     try {
-      const { runSearchSupervisor } = await import('@/lib/agent/supervisor');
-      const output = await runSearchSupervisor({
+      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
+      const output = await runSupervisorPlanner({
         message: '你看着办',
         previousGoal: goal({
           requestedItems: [],
@@ -83,8 +83,8 @@ describe('SearchSupervisorAgent', () => {
     jest.resetModules();
 
     try {
-      const { runSearchSupervisor } = await import('@/lib/agent/supervisor');
-      const output = await runSearchSupervisor({
+      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
+      const output = await runSupervisorPlanner({
         message: '扩大范围',
         previousGoal: goal({
           hardConstraints: [{
@@ -162,8 +162,8 @@ describe('SearchSupervisorAgent', () => {
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
     try {
-      const { runSearchSupervisor } = await import('@/lib/agent/supervisor');
-      const output = await runSearchSupervisor({ message: '想吃日料' });
+      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
+      const output = await runSupervisorPlanner({ message: '想吃日料' });
       const initialRequest = JSON.parse(fetchWithTimeout.mock.calls[0][1].body as string);
       const retryRequest = JSON.parse(fetchWithTimeout.mock.calls[1][1].body as string);
 
@@ -486,7 +486,7 @@ describe('SearchSupervisorAgent', () => {
       nextAction: 'plan',
     });
 
-    expect(parsed.patch?.reason).toBe('SearchSupervisorAgent 更新目标。');
+    expect(parsed.patch?.reason).toBe('SupervisorPlannerAgent 更新目标。');
   });
 
   it('accepts conversation mode from Supervisor output', () => {

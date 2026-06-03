@@ -101,7 +101,9 @@ npm run db:migrate:remote
 
 ## Agent 架构总览
 
-当前主链路是 Runtime V3。新的目标架构采用方案 A：一个 `SupervisorPlannerAgent` 同时维护用户目标并输出下一步 action，Runtime 只负责编排、执行、权限和审计。
+当前主链路是 Runtime V3，并已按方案 A 收敛到单一主控概念：`SupervisorPlannerAgent`。它通过 `lib/agent/supervisorPlanner.ts` 提供 canonical 入口，统一维护 `UserGoal`、处理追问、生成 `GoalPatch`，并选择下一步 `AgentAction`。Runtime 只负责编排、执行工具、权限、预算、guard 和审计。
+
+当前实现仍可能在一轮推荐里分两次调用 planner：先维护 goal，再经过 `KeywordExpansionHelper` 补搜索词，随后让同一个 planner 选择 action。这样先消除第二 Supervisor 概念，再评估是否把 goal/action 合并为一次模型调用。
 
 ```mermaid
 graph TB
@@ -166,7 +168,8 @@ graph TB
 
 - `lib/agent/types.ts`
 - `lib/agent/schemas/goal.ts`
-- `lib/agent/supervisor.ts`
+- `lib/agent/supervisorPlanner.ts`
+- `lib/agent/supervisor.ts`（兼容旧 goal helper 的过渡入口）
 
 ### SearchPlan
 
@@ -185,8 +188,8 @@ graph TB
 相关文件：
 
 - `lib/agent/schemas/plan.ts`
-- `lib/agent/supervisor.ts`
-- `lib/agent/supervisorAction.ts`（迁移期 action planner 实现；目标架构会收敛到 `SupervisorPlannerAgent`）
+- `lib/agent/supervisorPlanner.ts`
+- `lib/agent/supervisor.ts`（兼容旧 goal helper 的过渡入口）
 - `lib/agent/runtimeV3.ts`
 - `lib/agent/poiTaxonomy.ts`
 
@@ -265,7 +268,7 @@ graph TB
 职责：
 
 - Agent loop 编排。
-- 调用 Supervisor、KeywordExpansion、Action、Evaluation。
+- 调用 SupervisorPlanner、KeywordExpansionHelper、Evaluation。
 - 控制搜索次数、action 次数和评价 batch。
 - 执行搜索 action。
 - 触发 guard 和 FinalGuard。
@@ -306,7 +309,7 @@ graph TB
 3. 返回 `request_rewrite` 让模型重写。
 4. 如果必须由 Runtime 强制结束或追问，记录 `runtime_decision` trace。
 
-### `lib/agent/supervisor.ts`
+### `lib/agent/supervisorPlanner.ts`
 
 职责：
 
@@ -315,25 +318,6 @@ graph TB
 - 处理追问回答。
 - 判断是否需要继续澄清。
 - 输出 `GoalPatch` 或 `PendingQuestion`。
-- 目标架构下，它会与 action planning 收敛为 `SupervisorPlannerAgent`，同时输出 goal update 和下一步 `AgentAction`。
-
-不要做：
-
-- 不要调用高德或 OSM。
-- 不要生成或修改餐厅事实。
-- 不要自由生成高德 POI typecode。
-- 不要把“不辣”“都可以”“环境好”这类非餐饮目标塞进搜索关键词。
-
-### `lib/agent/supervisorAction.ts`
-
-迁移期定位：
-
-- 当前代码中，它负责根据 goal、attempts、observations、candidates 选择下一步 `AgentAction`。
-- 目标架构中，不建议长期保留一个独立的第二 Supervisor。
-- 这部分能力应并入 `SupervisorPlannerAgent`，避免继续保留两个 Supervisor 概念。
-
-职责：
-
 - 在已有 `UserGoal`、attempts、observations、candidates 基础上选择下一步 `AgentAction`。
 - action 类型只有三种：`search`、`ask_user`、`finish`。
 - 给出搜索、追问或结束的策略理由。
@@ -342,6 +326,10 @@ graph TB
 
 - 不要执行搜索。
 - 不要编造候选。
+- 不要调用高德或 OSM。
+- 不要生成或修改餐厅事实。
+- 不要自由生成高德 POI typecode。
+- 不要把“不辣”“都可以”“环境好”这类非餐饮目标塞进搜索关键词。
 - 不要选择没有观察到的餐厅 id。
 - 不要绕过 `allowedForPrimary`。
 
@@ -564,7 +552,7 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 - `lib/agent/types.ts`
 - `lib/agent/schemas/goal.ts`
-- `lib/agent/supervisor.ts`
+- `lib/agent/supervisorPlanner.ts`
 - `lib/agent/constraintEvaluator.ts`
 - `lib/agent/guards.ts`
 - `lib/agent/finalGuard.ts`
@@ -586,12 +574,12 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 需要检查：
 
-- `lib/agent/supervisorAction.ts`
+- `lib/agent/supervisorPlanner.ts`
 - `lib/agent/runtimeV3.ts`
 - `lib/agent/poiTaxonomy.ts`
 - `lib/agent/subagents/keywordExpansionAgent.ts`
 - `__tests__/lib/agent/runtimeV3.test.ts`
-- `__tests__/lib/agent/supervisorAction.test.ts`
+- `__tests__/lib/agent/supervisorPlanner.test.ts`
 
 不要在 `lib/amap.ts` 里写用户策略。
 
@@ -613,7 +601,7 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 - `app/api/agent/chat/route.ts`
 - `lib/agent/session.ts`
-- `lib/agent/supervisor.ts`
+- `lib/agent/supervisorPlanner.ts`
 - `lib/agent/runtimeV3.ts`
 - `hooks/useRestaurantSearch.ts`
 - `context/AppReducer.ts`
@@ -652,8 +640,8 @@ chisha/
 ├── lib/
 │   ├── agent/
 │   │   ├── runtimeV3.ts
+│   │   ├── supervisorPlanner.ts
 │   │   ├── supervisor.ts
-│   │   ├── supervisorAction.ts
 │   │   ├── session.ts
 │   │   ├── d1SessionStore.ts
 │   │   ├── guards.ts
@@ -765,7 +753,7 @@ Agent 相关测试集中在：
 
 - `__tests__/lib/agent/runtimeV3.test.ts`
 - `__tests__/lib/agent/supervisor.test.ts`
-- `__tests__/lib/agent/supervisorAction.test.ts`
+- `__tests__/lib/agent/supervisorPlanner.test.ts`
 - `__tests__/lib/agent/finalGuard.test.ts`
 - `__tests__/lib/agent/guards.test.ts`
 - `__tests__/lib/agent/subagents/evaluationAgent.test.ts`
@@ -790,8 +778,8 @@ Agent 相关测试集中在：
 3. [docs/agent-architecture-review.md](./docs/agent-architecture-review.md)。
 4. `lib/agent/types.ts`。
 5. `lib/agent/runtimeV3.ts`。
-6. `lib/agent/supervisor.ts`。
-7. `lib/agent/supervisorAction.ts`。
+6. `lib/agent/supervisorPlanner.ts`。
+7. `lib/agent/supervisor.ts`。
 8. `lib/agent/finalGuard.ts`。
 9. `__tests__/lib/agent/runtimeV3.test.ts`。
 

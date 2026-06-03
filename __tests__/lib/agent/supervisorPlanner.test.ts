@@ -2,7 +2,7 @@ import type {
   AgentContext,
   UserGoal,
 } from '@/lib/agent/types';
-import type { SearchSupervisorActionInput } from '@/lib/agent/supervisorAction';
+import type { SupervisorPlannerActionInput } from '@/lib/agent/supervisorPlanner';
 import type { Location } from '@/types';
 
 const location: Location = {
@@ -31,7 +31,7 @@ function goal(overrides: Partial<UserGoal> = {}): UserGoal {
   };
 }
 
-describe('SearchSupervisorAgent action controller', () => {
+describe('SupervisorPlannerAgent action controller', () => {
   it('forces fallback search for open exploration goals before asking the model', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     const originalApiKey = process.env.OPENAI_API_KEY;
@@ -42,7 +42,7 @@ describe('SearchSupervisorAgent action controller', () => {
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
     try {
-      const { decideSearchSupervisorAction } = await import('@/lib/agent/supervisorAction');
+      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
       const searchGoal = goal();
       const context: AgentContext = {
         query: '你看着办',
@@ -55,7 +55,7 @@ describe('SearchSupervisorAgent action controller', () => {
         maxSearchCalls: 4,
         targetCount: 8,
       };
-      const input: SearchSupervisorActionInput = {
+      const input: SupervisorPlannerActionInput = {
         message: '你看着办',
         goal: searchGoal,
         messages: [],
@@ -69,10 +69,11 @@ describe('SearchSupervisorAgent action controller', () => {
         },
       };
 
-      const action = await decideSearchSupervisorAction(input, context);
+      const output = await runSupervisorPlanner(input, context);
+      const action = output.action;
 
-      expect(action.type).toBe('search');
-      if (action.type === 'search') {
+      expect(action?.type).toBe('search');
+      if (action?.type === 'search') {
         expect(action.plan).toEqual(expect.objectContaining({
           keywords: ['餐厅', '美食'],
           searchIntent: 'fallback',
@@ -102,7 +103,7 @@ describe('SearchSupervisorAgent action controller', () => {
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
     try {
-      const { decideSearchSupervisorAction } = await import('@/lib/agent/supervisorAction');
+      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
       const searchGoal = goal({
         broadenedKeywords: ['日料'],
         broadenedTargets: [{ keyword: '日料', poiTypes: ['050202'], confidence: 0.9 }],
@@ -118,7 +119,7 @@ describe('SearchSupervisorAgent action controller', () => {
         maxSearchCalls: 4,
         targetCount: 8,
       };
-      const input: SearchSupervisorActionInput = {
+      const input: SupervisorPlannerActionInput = {
         message: '你看着办',
         goal: searchGoal,
         messages: [],
@@ -132,10 +133,11 @@ describe('SearchSupervisorAgent action controller', () => {
         },
       };
 
-      const action = await decideSearchSupervisorAction(input, context);
+      const output = await runSupervisorPlanner(input, context);
+      const action = output.action;
 
-      expect(action.type).toBe('search');
-      if (action.type === 'search') {
+      expect(action?.type).toBe('search');
+      if (action?.type === 'search') {
         expect(action.plan).toEqual(expect.objectContaining({
           keywords: ['餐厅', '美食'],
           searchIntent: 'fallback',

@@ -2,8 +2,10 @@ import type { Restaurant } from '@/types';
 import {
   applyGoalPatch,
   clarificationNeedToPendingQuestion,
-  runSearchSupervisor,
-} from './supervisor';
+  createActionRecord,
+  runSupervisorPlanner,
+  summarizeAction,
+} from './supervisorPlanner';
 import { evaluateSearchResult, mergeCandidates } from './evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
@@ -34,11 +36,6 @@ import {
   withUpdatedGoalVersion,
 } from './goalVersion';
 import type { ContextInvalidationPlan } from './goalVersion';
-import {
-  createActionRecord,
-  decideSearchSupervisorAction,
-  summarizeAction,
-} from './supervisorAction';
 import type {
   AgentAction,
   AgentContext,
@@ -91,11 +88,11 @@ export async function runSearchAgentV3(
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>
 ): Promise<AgentFinalResult> {
   emit({ type: 'thinking', message: '正在理解你的需求...' });
-  emit({ type: 'status', message: 'SearchSupervisorAgent 正在维护目标并选择下一步动作...' });
+  emit({ type: 'status', message: 'SupervisorPlannerAgent 正在维护目标并选择下一步动作...' });
 
   const supervisorOutput = normalizeExplicitOpenRecommendation(
     input,
-    await getSearchSupervisorOutput(input)
+    await getSupervisorPlannerOutput(input)
   );
   const conversationMode = inferRuntimeConversationMode(input, supervisorOutput);
   const baseGoal = withUpdatedGoalVersion(
@@ -111,7 +108,7 @@ export async function runSearchAgentV3(
   const resetPlan = deriveSearchStateResetPlan(invalidationPlan, conversationMode);
   let goal = baseGoal;
   if (!supervisorOutput.question && baseGoal.clarificationNeeded.length === 0) {
-    emit({ type: 'status', message: 'KeywordExpansionAgent 正在生成搜索联想词...' });
+    emit({ type: 'status', message: 'KeywordExpansionHelper 正在生成搜索联想词...' });
     goal = applyKeywordExpansion(
       baseGoal,
       await runKeywordExpansionAgent({
@@ -255,7 +252,7 @@ export async function runSearchAgentV3(
 
 function resolveSupervisorGoal(
   input: AgentInput,
-  output: Awaited<ReturnType<typeof runSearchSupervisor>>
+  output: Awaited<ReturnType<typeof runSupervisorPlanner>>
 ): UserGoal {
   if (output.goal) {
     return output.goal;
@@ -269,14 +266,14 @@ function resolveSupervisorGoal(
     );
   }
 
-  throw new Error('SearchSupervisorAgent returned no goal or patch');
+  throw new Error('SupervisorPlannerAgent returned no goal or patch');
 }
 
-async function getSearchSupervisorOutput(
+async function getSupervisorPlannerOutput(
   input: AgentInput
-): Promise<Awaited<ReturnType<typeof runSearchSupervisor>>> {
+): Promise<Awaited<ReturnType<typeof runSupervisorPlanner>>> {
   try {
-    return await runSearchSupervisor({
+    return await runSupervisorPlanner({
       message: input.query,
       previousGoal: input.runtimeState?.goal,
       pendingQuestion: input.runtimeState?.pendingQuestion,
@@ -299,8 +296,8 @@ async function getSearchSupervisorOutput(
 
 function normalizeExplicitOpenRecommendation(
   input: AgentInput,
-  output: Awaited<ReturnType<typeof runSearchSupervisor>>
-): Awaited<ReturnType<typeof runSearchSupervisor>> {
+  output: Awaited<ReturnType<typeof runSupervisorPlanner>>
+): Awaited<ReturnType<typeof runSupervisorPlanner>> {
   if (
     input.runtimeState?.pendingQuestion
     || input.runtimeState?.goal
@@ -388,7 +385,7 @@ function buildOpenRecommendationGoal(query: string, modelGoal?: UserGoal): UserG
 
 function inferRuntimeConversationMode(
   input: AgentInput,
-  output: Awaited<ReturnType<typeof runSearchSupervisor>>
+  output: Awaited<ReturnType<typeof runSupervisorPlanner>>
 ): ConversationMode {
   if (!input.runtimeState?.goal) {
     return 'start_new_goal';
@@ -485,7 +482,7 @@ function createInitialContext(input: AgentInput, goal: UserGoal, resetPlan: Sear
   };
 }
 
-function buildSupervisorActionInput(
+function buildSupervisorPlannerActionInput(
   input: AgentInput,
   context: AgentV3Context,
   rewriteInstruction?: string
@@ -505,6 +502,18 @@ function buildSupervisorActionInput(
       targetCount: context.targetCount,
     },
   };
+}
+
+async function getSupervisorPlannerAction(
+  plannerInput: ReturnType<typeof buildSupervisorPlannerActionInput>,
+  context: AgentV3Context
+): Promise<AgentAction> {
+  const output = await runSupervisorPlanner(plannerInput, context);
+  if (!output.action) {
+    throw new Error('SupervisorPlannerAgent returned no action');
+  }
+
+  return output.action;
 }
 
 function hydrateGoalSearchTargets(goal: UserGoal): UserGoal {
@@ -598,8 +607,8 @@ async function resolveGuardedAction(
   input: AgentInput,
   context: AgentV3Context
 ): Promise<GuardedActionResolution> {
-  const rawAction = await decideSearchSupervisorAction(
-    buildSupervisorActionInput(input, context),
+  const rawAction = await getSupervisorPlannerAction(
+    buildSupervisorPlannerActionInput(input, context),
     context
   );
   appendTrace(context, 'model_action', { rawAction });
@@ -635,8 +644,8 @@ async function resolveGuardedAction(
     };
   }
 
-  const rewrittenRawAction = await decideSearchSupervisorAction(
-    buildSupervisorActionInput(input, context, decision.instruction),
+  const rewrittenRawAction = await getSupervisorPlannerAction(
+    buildSupervisorPlannerActionInput(input, context, decision.instruction),
     context
   );
   appendTrace(context, 'model_action', {

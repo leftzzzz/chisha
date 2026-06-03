@@ -18,7 +18,7 @@ import type {
 } from '../types';
 
 /**
- * @deprecated Runtime V3 uses SearchSupervisorAction plus runtime guards for
+ * @deprecated Runtime V3 uses SupervisorPlannerAgent plus runtime guards for
  * planning. This module is retained only for legacy tests and design
  * comparison; it must not be imported by the Runtime V3 main path.
  */
@@ -232,7 +232,7 @@ async function callPlanningModel(input: PlanningAgentInput): Promise<PlanningAge
       },
       policy: {
         deprecatedReferenceOnly: true,
-        runtimeV3MainPathMustUseSearchSupervisorAction: true,
+        runtimeV3MainPathMustUseSupervisorPlanner: true,
       },
     },
     functionDefinition: PLANNING_FUNCTION,

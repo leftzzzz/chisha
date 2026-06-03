@@ -1,12 +1,18 @@
-jest.mock('@/lib/agent/supervisor', () => {
-  const actual = jest.requireActual('@/lib/agent/supervisor');
+jest.mock('@/lib/agent/supervisorPlanner', () => {
+  const actual = jest.requireActual('@/lib/agent/supervisorPlanner');
   return {
     ...actual,
-    runSearchSupervisor: jest.fn(async (input: {
+    runSupervisorPlanner: jest.fn(async (input: {
       message: string;
       previousGoal?: import('@/lib/agent/types').UserGoal;
       pendingQuestion?: import('@/lib/agent/types').PendingQuestion;
-    }) => {
+      goal?: import('@/lib/agent/types').UserGoal;
+      limits?: unknown;
+    }, context?: import('@/lib/agent/types').AgentContext) => {
+      if (input.goal && input.limits) {
+        return actual.runSupervisorPlanner(input, context);
+      }
+
       if (input.previousGoal && input.pendingQuestion) {
         if (input.message === '扩大范围') {
           return {
@@ -125,7 +131,7 @@ jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
 }));
 
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
-import { runSearchSupervisor } from '@/lib/agent/supervisor';
+import { runSupervisorPlanner } from '@/lib/agent/supervisorPlanner';
 import { runEvaluationAgent } from '@/lib/agent/subagents/evaluationAgent';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
@@ -251,7 +257,7 @@ describe('runSearchAgentV3', () => {
     );
     expect(first.paused).not.toBe(true);
 
-    const supervisorMock = runSearchSupervisor as jest.Mock;
+    const supervisorMock = runSupervisorPlanner as jest.Mock;
     supervisorMock.mockResolvedValueOnce({
       patch: {
         addConstraints: [{
@@ -547,7 +553,7 @@ describe('runSearchAgentV3', () => {
   });
 
   it('uses fallback search when the user explicitly asks for a random recommendation', async () => {
-    const supervisorMock = runSearchSupervisor as jest.Mock;
+    const supervisorMock = runSupervisorPlanner as jest.Mock;
     supervisorMock.mockClear();
     const searchedPlans: SearchPlan[] = [];
     const result = await runSearchAgentV3(
@@ -573,7 +579,10 @@ describe('runSearchAgentV3', () => {
     );
 
     expect(result.paused).not.toBe(true);
-    expect(supervisorMock).toHaveBeenCalledTimes(1);
+    const goalPlannerCalls = supervisorMock.mock.calls.filter(([plannerInput]) =>
+      !(plannerInput.goal && plannerInput.limits)
+    );
+    expect(goalPlannerCalls).toHaveLength(1);
     expect(searchedPlans.some((plan) => plan.searchIntent === 'fallback')).toBe(true);
     expect(searchedPlans[0].keywords).toEqual(['餐厅']);
     expect(result.restaurants.length).toBeGreaterThan(0);
@@ -598,7 +607,7 @@ describe('runSearchAgentV3', () => {
   });
 
   it('clears model-invented primary targets for explicit random recommendations', async () => {
-    const supervisorMock = runSearchSupervisor as jest.Mock;
+    const supervisorMock = runSupervisorPlanner as jest.Mock;
     supervisorMock.mockResolvedValueOnce({
       goal: goal({
         rawQuery: '没有具体想吃的，你来选',
@@ -638,9 +647,9 @@ describe('runSearchAgentV3', () => {
   });
 
   it('falls back to an open recommendation goal if Supervisor truncates an explicit random request', async () => {
-    const supervisorMock = runSearchSupervisor as jest.Mock;
+    const supervisorMock = runSupervisorPlanner as jest.Mock;
     supervisorMock.mockRejectedValueOnce(
-      new Error('SearchSupervisorAgent returned truncated function arguments')
+      new Error('SupervisorPlannerAgent returned truncated function arguments')
     );
     const searchedPlans: SearchPlan[] = [];
 
