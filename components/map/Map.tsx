@@ -73,7 +73,7 @@ export const Map: React.FC<MapProps> = ({
       // 配置安全代理（安全密钥通过服务端代理，不暴露在前端）
       // 参考: https://lbs.amap.com/api/javascript-api-v2/guide/abc/jscode
       (window as unknown as { _AMapSecurityConfig: { serviceHost: string } })._AMapSecurityConfig = {
-        serviceHost: `${window.location.origin}/api/amap-service`,
+        serviceHost: `${window.location.origin}/_AMapService`,
       };
 
       let apiKey = '';
