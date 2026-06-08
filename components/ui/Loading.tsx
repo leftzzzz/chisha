@@ -29,7 +29,7 @@ export const Loading: React.FC<LoadingProps> = ({
   // Spinner 变体
   const renderSpinner = () => (
     <svg
-      className={`animate-spin ${sizeMap[size].spinner}`}
+      className={`loading-spinner ${sizeMap[size].spinner}`}
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"

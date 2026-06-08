@@ -502,7 +502,7 @@ export const Map: React.FC<MapProps> = ({
           <div className="text-center">
             <div className="relative w-16 h-16 mx-auto mb-4">
               <div className="absolute inset-0 rounded-full border-4 border-primary/20" />
-              <div className="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+              <div className="loading-spinner absolute inset-0 rounded-full border-4 border-primary border-t-transparent" />
             </div>
             <p className="font-semibold text-[#66594f]">加载地图中…</p>
           </div>

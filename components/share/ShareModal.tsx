@@ -151,7 +151,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <div className="relative w-16 h-16 mb-4">
               {/* 旋转的转盘图标 */}
-              <svg className="w-16 h-16 animate-spin" viewBox="0 0 64 64">
+              <svg className="loading-spinner w-16 h-16" viewBox="0 0 64 64">
                 <circle cx="32" cy="32" r="28" fill="none" stroke="#FFE4E1" strokeWidth="4" />
                 <path
                   d="M32 4 A28 28 0 0 1 60 32"

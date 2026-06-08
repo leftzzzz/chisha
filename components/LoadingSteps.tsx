@@ -70,7 +70,7 @@ function StatusIcon({ status }: { status: SearchProgress['status'] }) {
     default:
       return (
         <svg
-          className="w-5 h-5 text-white animate-spin"
+          className="loading-spinner w-5 h-5 text-white"
           fill="none"
           viewBox="0 0 24 24"
         >

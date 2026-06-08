@@ -16,6 +16,12 @@
   animation: spin 0.5s linear infinite;
 }
 
+.loading-spinner {
+  animation: spin 0.8s linear infinite !important;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
 /* 加载动画 - Pulse */
 @keyframes pulse {
   0%, 100% {
