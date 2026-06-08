@@ -23,6 +23,16 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
   onClose,
   onShare,
 }) => {
+  const rating = typeof restaurant.rating === 'number' && Number.isFinite(restaurant.rating)
+    ? restaurant.rating
+    : undefined;
+  const averagePrice = typeof restaurant.averagePrice === 'number' && Number.isFinite(restaurant.averagePrice)
+    ? restaurant.averagePrice
+    : undefined;
+  const distance = typeof restaurant.distance === 'number' && Number.isFinite(restaurant.distance)
+    ? restaurant.distance
+    : undefined;
+
   // 生成导航链接（高德地图或百度地图）
   const handleNavigate = () => {
     if (onNavigate) {
@@ -56,14 +66,14 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
         </h2>
         <div className="flex items-center gap-3 text-sm text-[#66594f]">
           <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 font-bold text-primary">
-            {restaurant.cuisineType}
+            {restaurant.cuisineType || '美食'}
           </span>
-          {restaurant.rating && (
+          {rating && (
             <span className="flex items-center gap-1">
               <svg className="w-4 h-4 text-yellow-400 fill-current" viewBox="0 0 20 20">
                 <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
               </svg>
-              {restaurant.rating.toFixed(1)}
+              {rating.toFixed(1)}
             </span>
           )}
         </div>
@@ -78,8 +88,8 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
           <div className="flex-1">
-            <p className="break-words text-sm font-medium text-[#5f544b]">{restaurant.address}</p>
-            <p className="mt-1 text-xs font-semibold text-[#8a7a6d]">{formatDistance(restaurant.distance)}</p>
+            <p className="break-words text-sm font-medium text-[#5f544b]">{restaurant.address || '地址未知'}</p>
+            <p className="mt-1 text-xs font-semibold text-[#8a7a6d]">{formatDistance(distance)}</p>
           </div>
         </div>
 
@@ -118,12 +128,12 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
         )}
 
         {/* 人均价格 */}
-        {restaurant.averagePrice && (
+        {averagePrice && (
           <div className="flex items-center gap-2">
             <svg className="w-5 h-5 text-[#9a8d81]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p className="text-sm font-medium text-[#5f544b]">{formatPrice(restaurant.averagePrice)}</p>
+            <p className="text-sm font-medium text-[#5f544b]">{formatPrice(averagePrice)}</p>
           </div>
         )}
 

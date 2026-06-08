@@ -48,21 +48,21 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
   };
 
   return (
-    <section className="mx-auto grid min-h-[calc(100dvh-7rem)] w-full max-w-7xl items-center gap-8 py-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)] lg:gap-12 lg:py-10">
-      <div className="space-y-7">
+    <section className="mx-auto grid w-full max-w-7xl gap-5 py-2 sm:gap-8 sm:py-6 lg:min-h-[calc(100dvh-7rem)] lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)] lg:items-center lg:gap-12 lg:py-10">
+      <div className="space-y-4 sm:space-y-7">
         <div className="max-w-3xl">
-          <p className="mb-4 inline-flex rounded-full border border-black/10 bg-white/60 px-3 py-1 text-sm font-semibold text-[#6f6257] shadow-sm">
+          <p className="mb-3 inline-flex rounded-full border border-black/10 bg-white/60 px-3 py-1 text-xs font-semibold text-[#6f6257] shadow-sm sm:mb-4 sm:text-sm">
             先说口味，再让转盘替你拍板
           </p>
-          <h2 className="text-[clamp(2.75rem,8vw,5.8rem)] font-black leading-[0.95] tracking-tight text-dark text-balance">
+          <h2 className="text-[2.45rem] font-black leading-[0.98] text-dark text-balance sm:text-[clamp(2.75rem,8vw,5.8rem)] sm:leading-[0.95]">
             今天吃啥，别再卡住。
           </h2>
-          <p className="mt-5 max-w-xl text-base font-medium leading-7 text-[#66594f] sm:text-lg">
+          <p className="mt-4 max-w-xl text-base font-medium leading-7 text-[#66594f] sm:mt-5 sm:text-lg">
             输入想吃的方向，定位附近餐厅，最后交给转盘做决定。
           </p>
         </div>
 
-        <div className="decision-rail">
+        <div className="decision-rail hidden sm:grid">
           <div className="rounded-2xl border border-black/10 bg-white/58 p-4 shadow-sm">
             <div className="text-2xl font-black text-primary">1</div>
             <div className="mt-2 text-sm font-bold text-dark">说需求</div>
@@ -89,10 +89,10 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
           <div className="food-orbit__item">快</div>
         </div>
 
-        <div className="surface-panel relative space-y-5 rounded-[2rem] p-5 sm:p-6">
+        <div className="surface-panel relative space-y-4 rounded-[1.5rem] p-4 sm:space-y-5 sm:rounded-[2rem] sm:p-6">
           <div>
-            <h3 className="text-2xl font-black tracking-tight text-dark">把选择交给转盘</h3>
-            <p className="mt-2 text-sm font-medium leading-6 text-[#76695e]">
+            <h3 className="text-xl font-black text-dark sm:text-2xl">把选择交给转盘</h3>
+            <p className="mt-1.5 text-sm font-medium leading-6 text-[#76695e] sm:mt-2">
               写得越像真实想法，推荐越贴近当下。
             </p>
           </div>

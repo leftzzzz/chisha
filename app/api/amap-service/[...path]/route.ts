@@ -17,6 +17,15 @@ export async function GET(
   const pathStr = path.join('/');
   const searchParams = request.nextUrl.searchParams;
 
+  if (pathStr.startsWith('v3/log/')) {
+    return new NextResponse(null, {
+      status: 204,
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+
   // 构建目标 URL
   let targetUrl: string;
 

@@ -51,7 +51,7 @@ export const Turntable: React.FC<TurntableProps> = ({
   }
 
   return (
-    <div className="relative flex items-center justify-center overflow-hidden rounded-[1.75rem] bg-[radial-gradient(circle_at_50%_44%,rgba(255,255,255,0.86),rgba(255,250,241,0.3)_58%,transparent_72%)] px-2 py-4">
+    <div className="relative flex items-center justify-center overflow-hidden rounded-[1.35rem] bg-[radial-gradient(circle_at_50%_44%,rgba(255,255,255,0.86),rgba(255,250,241,0.3)_58%,transparent_72%)] px-1 py-3 sm:rounded-[1.75rem] sm:px-2 sm:py-4">
       {/* 指针 */}
       <TurntablePointer />
 
@@ -59,7 +59,7 @@ export const Turntable: React.FC<TurntableProps> = ({
       <div
         className={`
           relative
-          w-full max-w-[min(86vw,430px)]
+          w-full max-w-[min(78vw,430px)]
           aspect-square
           ${isSpinning ? '' : 'transition-transform duration-300'}
         `}

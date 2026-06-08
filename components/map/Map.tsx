@@ -7,7 +7,7 @@
 
 'use client';
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Restaurant, Location } from '@/types';
 
 export interface MapProps {
@@ -19,6 +19,14 @@ export interface MapProps {
   zoom?: number;
   onMarkerClick?: (restaurant: Restaurant) => void;
   className?: string;
+}
+
+function hasValidLocation(location?: Location): location is Location {
+  return Boolean(
+    location
+    && Number.isFinite(location.lat)
+    && Number.isFinite(location.lng)
+  );
 }
 
 export const Map: React.FC<MapProps> = ({
@@ -39,6 +47,11 @@ export const Map: React.FC<MapProps> = ({
   const initialMapOptionsRef = useRef({ center, userLocation, restaurants, zoom });
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const validRestaurants = useMemo(
+    () => restaurants.filter((restaurant) => hasValidLocation(restaurant.location)),
+    [restaurants]
+  );
 
   // 加载高德地图 API
   useEffect(() => {
@@ -65,7 +78,7 @@ export const Map: React.FC<MapProps> = ({
       // 配置安全代理（安全密钥通过服务端代理，不暴露在前端）
       // 参考: https://lbs.amap.com/api/javascript-api-v2/guide/abc/jscode
       (window as unknown as { _AMapSecurityConfig: { serviceHost: string } })._AMapSecurityConfig = {
-        serviceHost: `${window.location.origin}/_AMapService`,
+        serviceHost: `${window.location.origin}/api/amap-service`,
       };
 
       let apiKey = '';
@@ -102,9 +115,9 @@ export const Map: React.FC<MapProps> = ({
         if (!mapContainerRef.current) return;
 
         const initialOptions = initialMapOptionsRef.current;
-        const mapCenter = initialOptions.center
-          || initialOptions.userLocation
-          || initialOptions.restaurants[0]?.location
+        const mapCenter = (hasValidLocation(initialOptions.center) && initialOptions.center)
+          || (hasValidLocation(initialOptions.userLocation) && initialOptions.userLocation)
+          || initialOptions.restaurants.find((restaurant) => hasValidLocation(restaurant.location))?.location
           || { lng: 114.05, lat: 22.55 };
 
         mapRef.current = new window.AMap.Map(mapContainerRef.current, {
@@ -142,6 +155,16 @@ export const Map: React.FC<MapProps> = ({
 
   // 创建信息窗口内容 - 与移动端卡片风格对齐
   const createInfoWindowContent = useCallback((restaurant: Restaurant) => {
+    const rating = typeof restaurant.rating === 'number' && Number.isFinite(restaurant.rating)
+      ? restaurant.rating
+      : undefined;
+    const averagePrice = typeof restaurant.averagePrice === 'number' && Number.isFinite(restaurant.averagePrice)
+      ? restaurant.averagePrice
+      : undefined;
+    const distance = typeof restaurant.distance === 'number' && Number.isFinite(restaurant.distance)
+      ? restaurant.distance
+      : undefined;
+
     // 格式化距离
     const formatDistance = (distance?: number) => {
       if (!distance) return '';
@@ -155,8 +178,8 @@ export const Map: React.FC<MapProps> = ({
       return `¥${price}/人`;
     };
 
-    const distanceText = formatDistance(restaurant.distance);
-    const priceText = formatPrice(restaurant.averagePrice);
+    const distanceText = formatDistance(distance);
+    const priceText = formatPrice(averagePrice);
 
     return `
       <div style="
@@ -184,12 +207,12 @@ export const Map: React.FC<MapProps> = ({
             font-size: 12px;
             font-weight: 500;
           ">${restaurant.cuisineType || '美食'}</span>
-          ${restaurant.rating ? `
+          ${rating ? `
             <span style="display: flex; align-items: center; gap: 2px; font-size: 13px; color: #6b7280;">
               <svg width="14" height="14" viewBox="0 0 20 20" fill="#FBBF24">
                 <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
               </svg>
-              ${restaurant.rating.toFixed(1)}
+              ${rating.toFixed(1)}
             </span>
           ` : ''}
         </div>
@@ -203,7 +226,7 @@ export const Map: React.FC<MapProps> = ({
               <path stroke-linecap="round" stroke-linejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
             </svg>
             <div>
-              <p style="margin: 0; font-size: 13px; color: #4b5563; line-height: 1.4;">${restaurant.address || ''}</p>
+              <p style="margin: 0; font-size: 13px; color: #4b5563; line-height: 1.4;">${restaurant.address || '地址未知'}</p>
               ${distanceText ? `<p style="margin: 4px 0 0 0; font-size: 12px; color: #9ca3af;">${distanceText}</p>` : ''}
             </div>
           </div>
@@ -351,7 +374,7 @@ export const Map: React.FC<MapProps> = ({
     markersRef.current = [];
 
     // 添加餐厅标记
-    restaurants.forEach((restaurant) => {
+    validRestaurants.forEach((restaurant) => {
       const isSelected = selectedRestaurant?.id === restaurant.id;
       const isFocused = focusedRestaurant?.id === restaurant.id;
       const isHighlighted = isSelected || isFocused;
@@ -386,7 +409,7 @@ export const Map: React.FC<MapProps> = ({
         userMarkerRef.current = userMarker;
       }
     }
-  }, [restaurants, selectedRestaurant, focusedRestaurant, isReady, createRestaurantMarker, createUserMarker, userLocation, center, onMarkerClick, showInfoWindow]);
+  }, [validRestaurants, selectedRestaurant, focusedRestaurant, isReady, createRestaurantMarker, createUserMarker, userLocation, center, onMarkerClick, showInfoWindow]);
 
   // 初始加载时调整地图视野（仅在餐厅列表变化时）
   const prevRestaurantsLengthRef = useRef(0);
@@ -394,12 +417,16 @@ export const Map: React.FC<MapProps> = ({
     if (!mapRef.current || !isReady || !window.AMap) return;
 
     // 只有当餐厅数量变化时才调整视野
-    if (restaurants.length === prevRestaurantsLengthRef.current) return;
-    prevRestaurantsLengthRef.current = restaurants.length;
+    if (validRestaurants.length === prevRestaurantsLengthRef.current) return;
+    prevRestaurantsLengthRef.current = validRestaurants.length;
 
-    if (restaurants.length > 0) {
-      const userLoc = userLocation || center;
-      const allPoints = restaurants.map(r => [r.location.lng, r.location.lat]);
+    if (validRestaurants.length > 0) {
+      const userLoc = hasValidLocation(userLocation)
+        ? userLocation
+        : hasValidLocation(center)
+          ? center
+          : undefined;
+      const allPoints = validRestaurants.map(r => [r.location.lng, r.location.lat]);
       if (userLoc) {
         allPoints.push([userLoc.lng, userLoc.lat]);
       }
@@ -417,11 +444,11 @@ export const Map: React.FC<MapProps> = ({
         mapRef.current.setBounds(bounds, true, [80, 80, 80, 520]);
       }
     }
-  }, [restaurants, isReady, userLocation, center]);
+  }, [validRestaurants, isReady, userLocation, center]);
 
   // 当选中餐厅变化时，飞到该位置并显示信息窗口
   useEffect(() => {
-    if (!mapRef.current || !isReady || !selectedRestaurant) return;
+    if (!mapRef.current || !isReady || !selectedRestaurant || !hasValidLocation(selectedRestaurant.location)) return;
 
     // 飞到选中的餐厅位置（缩放级别 17，近距离查看）
     mapRef.current.setZoomAndCenter(17, [selectedRestaurant.location.lng, selectedRestaurant.location.lat], true);
@@ -434,7 +461,7 @@ export const Map: React.FC<MapProps> = ({
 
   // 当聚焦餐厅变化时（点击扇区），飞到该位置并显示信息窗口
   useEffect(() => {
-    if (!mapRef.current || !isReady || !focusedRestaurant) return;
+    if (!mapRef.current || !isReady || !focusedRestaurant || !hasValidLocation(focusedRestaurant.location)) return;
 
     // 飞到聚焦的餐厅位置（缩放级别 17，近距离查看）
     mapRef.current.setZoomAndCenter(17, [focusedRestaurant.location.lng, focusedRestaurant.location.lat], true);

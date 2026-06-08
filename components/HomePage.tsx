@@ -8,7 +8,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Location, TurntableOption } from '@/types';
+import { Location, TurntableOption, isCustomOption } from '@/types';
 import { useAppState, useLocation, useRestaurantSearch, useTurntable, useMediaQuery, useErrorAlert } from '@/hooks';
 import { Layout } from './layout';
 import { SearchPanel } from './input';
@@ -162,9 +162,9 @@ export const HomePage: React.FC = () => {
 
   // 处理转盘
   const handleSpin = useCallback(() => {
-    if (state.restaurants.length === 0) return;
+    if (state.restaurants.length + state.customOptions.length < 3) return;
     startSpin();
-  }, [state.restaurants.length, startSpin]);
+  }, [state.restaurants.length, state.customOptions.length, startSpin]);
 
   // 监听旋转完成 - 当进入 RESULT 状态时自动保存并弹出卡片
   const prevStepRef = React.useRef(state.step);
@@ -200,7 +200,11 @@ export const HomePage: React.FC = () => {
       }
 
       // 自动弹出结果卡片（仅移动端，且选中的是餐厅）
-      if (!isDesktop && selectedIndex < state.restaurants.length) {
+      if (
+        !isDesktop
+        && selectedIndex < state.restaurants.length
+        && !isCustomOption(selectedOption)
+      ) {
         setPreviewRestaurantIndex(selectedIndex);
         setBottomSheetOpen(true);
       }
@@ -214,13 +218,18 @@ export const HomePage: React.FC = () => {
 
     if (isDesktop) {
       // 桌面端：聚焦地图到对应餐厅
-      setFocusedRestaurantIndex(index);
+      setFocusedRestaurantIndex(index < state.restaurants.length ? index : null);
     } else {
       // 移动端：打开底部弹窗
-      setPreviewRestaurantIndex(index);
-      setBottomSheetOpen(true);
+      if (index < state.restaurants.length) {
+        setPreviewRestaurantIndex(index);
+        setBottomSheetOpen(true);
+      } else {
+        setPreviewRestaurantIndex(null);
+        setBottomSheetOpen(false);
+      }
     }
-  }, [isSpinning, isDesktop]);
+  }, [isSpinning, isDesktop, state.restaurants.length]);
 
   // 关闭底部弹出卡片
   const handleCloseBottomSheet = useCallback(() => {
@@ -231,9 +240,16 @@ export const HomePage: React.FC = () => {
   // 处理删除餐厅
   const handleRemove = useCallback(() => {
     if (selectedIndex >= 0) {
-      deleteRestaurant(selectedIndex);
+      if (selectedIndex < state.restaurants.length) {
+        deleteRestaurant(selectedIndex);
+      } else {
+        const customOption = state.customOptions[selectedIndex - state.restaurants.length];
+        if (customOption) {
+          removeCustomOption(customOption.id);
+        }
+      }
 
-      if (state.restaurants.length <= 1) {
+      if (state.restaurants.length + state.customOptions.length <= 3) {
         // 没有餐厅了，返回输入
         reset();
       } else {
@@ -241,7 +257,7 @@ export const HomePage: React.FC = () => {
         setStep('READY');
       }
     }
-  }, [selectedIndex, deleteRestaurant, state.restaurants.length, reset, setStep]);
+  }, [selectedIndex, state.restaurants.length, state.customOptions, deleteRestaurant, removeCustomOption, reset, setStep]);
 
   // 处理重试（再来一次）
   const handleRetry = useCallback(() => {
@@ -277,7 +293,11 @@ export const HomePage: React.FC = () => {
   }, [setStep]);
 
   // 选中的餐厅
-  const selectedRestaurant = selectedIndex >= 0 ? state.restaurants[selectedIndex] : null;
+  const allOptions: TurntableOption[] = [...state.restaurants, ...state.customOptions];
+  const selectedOption = selectedIndex >= 0 ? allOptions[selectedIndex] : null;
+  const selectedRestaurant = selectedOption && !isCustomOption(selectedOption)
+    ? selectedOption
+    : null;
 
   // 预览的餐厅（点击扇区时）
   const previewRestaurant = previewRestaurantIndex !== null
@@ -420,7 +440,7 @@ export const HomePage: React.FC = () => {
         <div className="mt-5">
           <TurntableControls
             isSpinning={isSpinning}
-            selectedRestaurant={selectedRestaurant}
+            selectedOption={selectedOption}
             onSpin={handleSpin}
             onRemove={handleRemove}
             onRetry={handleRetry}

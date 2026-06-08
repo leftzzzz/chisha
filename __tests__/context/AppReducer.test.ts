@@ -201,6 +201,20 @@ describe('AppReducer', () => {
       expect(newState.error).toBeNull();
     });
 
+    it('should allow selecting a custom option by global option index', () => {
+      const state = {
+        ...initialState,
+        restaurants: [mockRestaurant],
+        customOptions: [mockCustomOption],
+      };
+      const action = { type: 'SET_SELECTED_INDEX' as const, payload: 1 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.selectedIndex).toBe(1);
+      expect(newState.error).toBeNull();
+    });
+
     it('should reject invalid index less than -1', () => {
       const state = { ...initialState, restaurants: [mockRestaurant] };
       const action = { type: 'SET_SELECTED_INDEX' as const, payload: -2 };
@@ -210,9 +224,13 @@ describe('AppReducer', () => {
       expect(newState.selectedIndex).toBe(-1); // unchanged
     });
 
-    it('should reject index >= restaurants.length', () => {
-      const state = { ...initialState, restaurants: [mockRestaurant] };
-      const action = { type: 'SET_SELECTED_INDEX' as const, payload: 1 };
+    it('should reject index >= total option count', () => {
+      const state = {
+        ...initialState,
+        restaurants: [mockRestaurant],
+        customOptions: [mockCustomOption],
+      };
+      const action = { type: 'SET_SELECTED_INDEX' as const, payload: 2 };
 
       const newState = appReducer(state, action);
 
@@ -520,6 +538,22 @@ describe('AppReducer', () => {
       const newState = appReducer(state, action);
 
       expect(newState.customOptions).toHaveLength(0);
+    });
+
+    it('should reset selected index when removing the selected custom option', () => {
+      const restaurants = [mockRestaurant, { ...mockRestaurant, id: 'r2' }, { ...mockRestaurant, id: 'r3' }];
+      const state = {
+        ...initialState,
+        restaurants,
+        customOptions: [mockCustomOption],
+        selectedIndex: 3,
+        step: 'RESULT' as const,
+      };
+      const action = { type: 'REMOVE_CUSTOM_OPTION' as const, payload: 'c1' };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.selectedIndex).toBe(-1);
     });
 
     it('should set error when total options < 3', () => {

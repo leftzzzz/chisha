@@ -5,12 +5,12 @@
  */
 
 import React from 'react';
-import { Restaurant } from '@/types';
+import { TurntableOption } from '@/types';
 import { Button } from '@/components/ui';
 
 export interface TurntableControlsProps {
   isSpinning: boolean;
-  selectedRestaurant: Restaurant | null;
+  selectedOption: TurntableOption | null;
   onSpin: () => void;
   onRemove?: () => void;
   onRetry?: () => void;
@@ -20,7 +20,7 @@ export interface TurntableControlsProps {
 
 export const TurntableControls: React.FC<TurntableControlsProps> = ({
   isSpinning,
-  selectedRestaurant,
+  selectedOption,
   onSpin,
   onRemove,
   onRetry,
@@ -28,7 +28,7 @@ export const TurntableControls: React.FC<TurntableControlsProps> = ({
   disabled = false,
 }) => {
   // 是否显示结果按钮（已选中且不在旋转）
-  const showResultButtons = selectedRestaurant && !isSpinning;
+  const showResultButtons = selectedOption && !isSpinning;
 
   return (
     <div className="w-full space-y-3">
@@ -126,10 +126,10 @@ export const TurntableControls: React.FC<TurntableControlsProps> = ({
       )}
 
       {/* 提示信息 */}
-      {selectedRestaurant && !isSpinning && (
+      {selectedOption && !isSpinning && (
         <div className="text-center">
           <p className="text-sm font-semibold text-[#66594f]">
-            就决定是你了！
+            就决定是「{selectedOption.name}」！
           </p>
         </div>
       )}

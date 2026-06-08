@@ -120,10 +120,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     /**
      * 设置选中的餐厅索引
      */
-    case 'SET_SELECTED_INDEX':
+    case 'SET_SELECTED_INDEX': {
+      const totalOptions = state.restaurants.length + state.customOptions.length;
       // 验证索引有效性
-      if (action.payload < -1 || action.payload >= state.restaurants.length) {
-        console.warn(`Invalid restaurant index: ${action.payload}`);
+      if (action.payload < -1 || action.payload >= totalOptions) {
+        console.warn(`Invalid turntable option index: ${action.payload}`);
         return state;
       }
       return {
@@ -131,6 +132,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedIndex: action.payload,
         error: null,
       };
+    }
 
     /**
      * 设置错误信息
@@ -405,7 +407,18 @@ export function appReducer(state: AppState, action: AppAction): AppState {
      * 删除自定义选项
      */
     case 'REMOVE_CUSTOM_OPTION': {
+      const removedCustomIndex = state.customOptions.findIndex(option => option.id === action.payload);
       const newCustomOptions = state.customOptions.filter(option => option.id !== action.payload);
+
+      let newSelectedIndex = state.selectedIndex;
+      if (removedCustomIndex >= 0) {
+        const removedGlobalIndex = state.restaurants.length + removedCustomIndex;
+        if (state.selectedIndex === removedGlobalIndex) {
+          newSelectedIndex = -1;
+        } else if (state.selectedIndex > removedGlobalIndex) {
+          newSelectedIndex = state.selectedIndex - 1;
+        }
+      }
 
       // 计算总选项数
       const totalOptions = state.restaurants.length + newCustomOptions.length;
@@ -414,6 +427,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         customOptions: newCustomOptions,
+        selectedIndex: newSelectedIndex,
         step: newStep,
         error: totalOptions < 3
           ? '选项数量不足,请添加更多选项或重新搜索'
