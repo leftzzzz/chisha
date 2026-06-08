@@ -6,6 +6,17 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"keep_vars": true,
+	"secrets": {
+		"required": [
+			"AMAP_API_KEY",
+			"AMAP_JS_API_KEY",
+			"AMAP_SECURITY_CODE",
+			"OPENAI_API_KEY",
+			"OPENAI_BASE_URL",
+			"OPENAI_MODEL"
+		]
+	},
 	"assets": {
 		"directory": ".open-next/assets",
 		"binding": "ASSETS"
