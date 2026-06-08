@@ -15,6 +15,7 @@ export interface TurntableProps {
   selectedIndex: number;
   isSpinning: boolean;
   rotation: number;
+  spinDuration: number;
   onSegmentClick?: (index: number) => void;
 }
 
@@ -36,6 +37,7 @@ export const Turntable: React.FC<TurntableProps> = ({
   selectedIndex,
   isSpinning,
   rotation,
+  spinDuration,
   onSegmentClick,
 }) => {
   // 合并餐厅和自定义选项，限制最多 8 个扇形
@@ -65,7 +67,9 @@ export const Turntable: React.FC<TurntableProps> = ({
         `}
         style={{
           transform: `rotate(${rotation}deg)`,
-          transition: isSpinning ? 'transform 4s cubic-bezier(0.25, 0.1, 0.25, 1)' : undefined,
+          transition: isSpinning
+            ? `transform ${spinDuration}ms cubic-bezier(0.25, 0.1, 0.25, 1)`
+            : undefined,
         }}
       >
         <svg

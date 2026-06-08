@@ -93,18 +93,28 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
   const [rotation, setRotation] = useState(0);
   const [spinDuration, setSpinDuration] = useState(TURNTABLE_CONFIG.minDuration);
 
-  const spinTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const spinTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const spinFrameRef = useRef<number | null>(null);
+  const rotationRef = useRef(0);
+
+  const clearPendingSpin = useCallback(() => {
+    if (spinTimeoutRef.current) {
+      clearTimeout(spinTimeoutRef.current);
+      spinTimeoutRef.current = null;
+    }
+
+    if (spinFrameRef.current !== null) {
+      window.cancelAnimationFrame(spinFrameRef.current);
+      spinFrameRef.current = null;
+    }
+  }, []);
 
   /**
    * 清理定时器
    */
   useEffect(() => {
-    return () => {
-      if (spinTimeoutRef.current) {
-        clearTimeout(spinTimeoutRef.current);
-      }
-    };
-  }, []);
+    return clearPendingSpin;
+  }, [clearPendingSpin]);
 
   /**
    * 开始旋转
@@ -126,8 +136,11 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
       return;
     }
 
+    clearPendingSpin();
+
     // 开始旋转
     setIsSpinning(true);
+    setSelectedIndex(-1);
     setStep('SPINNING');
 
     // 随机选择目标索引
@@ -140,15 +153,18 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
     // 要让指针指向该中心，转盘需要旋转使得该中心移到指针位置（-90°）
     // 所以转盘旋转角度应该是 -(targetIndex + 0.5) * anglePerItem
     const anglePerItem = 360 / itemCount;
-    const targetAngle = -(targetIndex + 0.5) * anglePerItem;
+    const targetAngle = normalizeDegrees(-(targetIndex + 0.5) * anglePerItem);
 
     // 随机旋转圈数
     const rotations =
       Math.floor(Math.random() * (TURNTABLE_CONFIG.maxRotations - TURNTABLE_CONFIG.minRotations + 1)) +
       TURNTABLE_CONFIG.minRotations;
 
-    // 最终旋转角度 = 完整圈数 + 目标角度
-    const finalRotation = rotations * 360 + targetAngle;
+    // 最终旋转角度 = 从当前角度继续向前旋转，避免重复抽取时反向回转或跳到终点
+    const currentRotation = rotationRef.current;
+    const currentAngle = normalizeDegrees(currentRotation);
+    const deltaToTarget = (targetAngle - currentAngle + 360) % 360;
+    const finalRotation = currentRotation + rotations * 360 + deltaToTarget;
 
     // 随机动画时长
     const duration =
@@ -156,32 +172,40 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
         Math.random() * (TURNTABLE_CONFIG.maxDuration - TURNTABLE_CONFIG.minDuration + 1)
       ) + TURNTABLE_CONFIG.minDuration;
 
-    // 应用旋转
-    setRotation(finalRotation);
     setSpinDuration(duration);
 
-    // 旋转结束后的回调
-    spinTimeoutRef.current = setTimeout(() => {
-      setIsSpinning(false);
-      setSelectedIndex(targetIndex);
-      setStep('RESULT');
-    }, duration);
-  }, [state.step, itemCount, isSpinning, setStep, setSelectedIndex]);
+    const startAnimation = () => {
+      spinFrameRef.current = null;
+      rotationRef.current = finalRotation;
+      setRotation(finalRotation);
+
+      // 旋转结束后的回调
+      spinTimeoutRef.current = setTimeout(() => {
+        spinTimeoutRef.current = null;
+        setIsSpinning(false);
+        setSelectedIndex(targetIndex);
+        setStep('RESULT');
+      }, duration);
+    };
+
+    // 先提交 SPINNING 状态和 transition，再在下一帧改变 transform，避免浏览器直接绘制终点。
+    spinFrameRef.current = window.requestAnimationFrame(() => {
+      spinFrameRef.current = window.requestAnimationFrame(startAnimation);
+    });
+  }, [state.step, itemCount, isSpinning, setStep, setSelectedIndex, clearPendingSpin]);
 
   /**
    * 重置转盘
    */
   const reset = useCallback(() => {
-    if (spinTimeoutRef.current) {
-      clearTimeout(spinTimeoutRef.current);
-      spinTimeoutRef.current = null;
-    }
+    clearPendingSpin();
 
     setIsSpinning(false);
+    rotationRef.current = 0;
     setRotation(0);
     setSpinDuration(TURNTABLE_CONFIG.minDuration);
     setSelectedIndex(-1);
-  }, [setSelectedIndex]);
+  }, [setSelectedIndex, clearPendingSpin]);
 
   return {
     isSpinning,
@@ -191,6 +215,10 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
     startSpin,
     reset,
   };
+}
+
+function normalizeDegrees(degrees: number): number {
+  return ((degrees % 360) + 360) % 360;
 }
 
 /**

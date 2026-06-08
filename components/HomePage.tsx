@@ -44,7 +44,7 @@ export const HomePage: React.FC = () => {
   } = useAppState();
   const { location: detectedLocation, getAutoLocation, isLocating, error: locationError, geocodeAddress, clearLocation } = useLocation();
   const { search, answerQuestion, isSearching, progress } = useRestaurantSearch();
-  const { rotation, selectedIndex, isSpinning, startSpin, reset: resetTurntable } = useTurntable(state.restaurants.length + state.customOptions.length);
+  const { rotation, selectedIndex, isSpinning, spinDuration, startSpin, reset: resetTurntable } = useTurntable(state.restaurants.length + state.customOptions.length);
   const errorAlert = useErrorAlert();
 
   // 底部弹出卡片状态
@@ -435,6 +435,7 @@ export const HomePage: React.FC = () => {
           selectedIndex={selectedIndex}
           isSpinning={isSpinning}
           rotation={rotation}
+          spinDuration={spinDuration}
           onSegmentClick={handleSegmentClick}
         />
         <div className="mt-5">
