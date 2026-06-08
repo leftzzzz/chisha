@@ -24,6 +24,8 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { flushSync } from 'react-dom';
+import { MIN_TURNTABLE_OPTIONS } from '@/lib/turntableOptions';
 import { useAppState } from './useAppState';
 
 /**
@@ -126,7 +128,7 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
       return;
     }
 
-    if (itemCount < 3) {
+    if (itemCount < MIN_TURNTABLE_OPTIONS) {
       console.warn('Cannot spin: not enough items');
       return;
     }
@@ -137,11 +139,6 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
     }
 
     clearPendingSpin();
-
-    // 开始旋转
-    setIsSpinning(true);
-    setSelectedIndex(-1);
-    setStep('SPINNING');
 
     // 随机选择目标索引
     const targetIndex = Math.floor(Math.random() * itemCount);
@@ -172,7 +169,14 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
         Math.random() * (TURNTABLE_CONFIG.maxDuration - TURNTABLE_CONFIG.minDuration + 1)
       ) + TURNTABLE_CONFIG.minDuration;
 
-    setSpinDuration(duration);
+    // 先同步提交“起点 + transition 配置”，否则 React/浏览器可能把起点和终点合并成一帧。
+    flushSync(() => {
+      setIsSpinning(true);
+      setSelectedIndex(-1);
+      setStep('SPINNING');
+      setSpinDuration(duration);
+      setRotation(currentRotation);
+    });
 
     const startAnimation = () => {
       spinFrameRef.current = null;
@@ -188,7 +192,7 @@ export function useTurntable(itemCount: number): UseTurntableReturn {
       }, duration);
     };
 
-    // 先提交 SPINNING 状态和 transition，再在下一帧改变 transform，避免浏览器直接绘制终点。
+    // 先让浏览器绘制起点，再改变 transform，避免直接绘制终点。
     spinFrameRef.current = window.requestAnimationFrame(() => {
       spinFrameRef.current = window.requestAnimationFrame(startAnimation);
     });

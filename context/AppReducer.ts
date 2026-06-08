@@ -12,6 +12,7 @@
 
 import { AppState, AppAction, Restaurant } from '@/types';
 import { getRestaurantIdentityKeys } from '@/lib/restaurantIdentity';
+import { MAX_TURNTABLE_OPTIONS, hasTurntableCapacity } from '@/lib/turntableOptions';
 
 /**
  * 初始状态
@@ -90,7 +91,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_RESTAURANTS':
       return {
         ...state,
-        restaurants: dedupeRestaurants(action.payload),
+        restaurants: dedupeRestaurants(action.payload).slice(0, MAX_TURNTABLE_OPTIONS),
         selectedIndex: -1, // 重置选中索引
         error: null,
       };
@@ -99,9 +100,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
      * 保存搜索结果（带候补池）
      */
     case 'SET_RESTAURANTS_WITH_CANDIDATES': {
-      const seenRestaurantKeys = new Set<string>();
-      const turntable = dedupeRestaurants(action.payload.turntable, seenRestaurantKeys);
-      const candidates = dedupeRestaurants(action.payload.candidates, seenRestaurantKeys);
+      const dedupedTurntable = dedupeRestaurants(action.payload.turntable);
+      const turntable = dedupedTurntable.slice(0, MAX_TURNTABLE_OPTIONS);
+      const seenTurntableKeys = new Set<string>();
+      addRestaurantIdentityKeys(turntable, seenTurntableKeys);
+      const candidates = dedupeRestaurants(
+        [...dedupedTurntable.slice(MAX_TURNTABLE_OPTIONS), ...action.payload.candidates],
+        seenTurntableKeys
+      );
 
       return {
         ...state,
@@ -258,8 +264,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         return state;
       }
 
-      // 检查转盘是否已满（最多8个餐厅）
-      if (state.restaurants.length >= 8) {
+      // 检查转盘是否已满（餐厅 + 自定义选项最多 8 个）
+      if (!hasTurntableCapacity(state.restaurants, state.customOptions)) {
         return {
           ...state,
           error: '转盘已满，请先移除一些选项',
@@ -290,7 +296,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       }
 
       // 检查转盘是否已满
-      if (state.restaurants.length >= 8) {
+      if (!hasTurntableCapacity(state.restaurants, state.customOptions)) {
         return {
           ...state,
           error: '转盘已满，请先移除一些选项',
@@ -362,7 +368,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'ADD_CUSTOM_OPTION': {
       // 检查总选项是否超过8个
       const totalOptions = state.restaurants.length + state.customOptions.length;
-      if (totalOptions >= 8) {
+      if (totalOptions >= MAX_TURNTABLE_OPTIONS) {
         return {
           ...state,
           error: '转盘已满，请先移除一些选项',
@@ -381,7 +387,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
      */
     case 'ADD_RESTAURANT': {
       // 检查转盘是否已满
-      if (state.restaurants.length >= 8) {
+      if (!hasTurntableCapacity(state.restaurants, state.customOptions)) {
         return {
           ...state,
           error: '转盘已满，请先移除一些选项',
@@ -442,10 +448,12 @@ export function appReducer(state: AppState, action: AppAction): AppState {
      */
     case 'RESTORE_FROM_HISTORY': {
       const { query, location, restaurants, customOptions } = action.payload;
-      const restoredRestaurants = dedupeRestaurants(restaurants);
+      const restoredRestaurants = dedupeRestaurants(restaurants).slice(0, MAX_TURNTABLE_OPTIONS);
+      const restoredCustomOptions = (customOptions || [])
+        .slice(0, Math.max(0, MAX_TURNTABLE_OPTIONS - restoredRestaurants.length));
 
       // 验证餐厅数量
-      const totalOptions = restoredRestaurants.length + (customOptions?.length || 0);
+      const totalOptions = restoredRestaurants.length + restoredCustomOptions.length;
       if (totalOptions < 3) {
         return {
           ...state,
@@ -466,7 +474,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         agentQuestion: null,
         agentTrace: [],
         removedRestaurants: [],
-        customOptions: customOptions || [],
+        customOptions: restoredCustomOptions,
         selectedIndex: -1,
         parsedRequirement: null,
         error: null,
@@ -499,6 +507,12 @@ function dedupeRestaurants(restaurants: Restaurant[], seenKeys = new Set<string>
   }
 
   return deduped;
+}
+
+function addRestaurantIdentityKeys(restaurants: Restaurant[], seenKeys: Set<string>): void {
+  for (const restaurant of restaurants) {
+    getRestaurantIdentityKeys(restaurant).forEach((key) => seenKeys.add(key));
+  }
 }
 
 function hasRestaurant(restaurants: Restaurant[], target: Restaurant): boolean {

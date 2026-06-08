@@ -4,8 +4,11 @@
  * 转盘主组件，渲染圆形分度盘
  */
 
-import React from 'react';
+'use client';
+
+import React, { useLayoutEffect, useRef } from 'react';
 import { Restaurant, CustomOption, isCustomOption } from '@/types';
+import { getTurntableOptions } from '@/lib/turntableOptions';
 import { TurntableSegment } from './TurntableSegment';
 import { TurntablePointer } from './TurntablePointer';
 
@@ -31,6 +34,8 @@ export const COLORS = [
   '#F7D7B3',
 ];
 
+const SPIN_EASING = 'cubic-bezier(0.25, 0.1, 0.25, 1)';
+
 export const Turntable: React.FC<TurntableProps> = ({
   restaurants,
   customOptions = [],
@@ -41,8 +46,43 @@ export const Turntable: React.FC<TurntableProps> = ({
   onSegmentClick,
 }) => {
   // 合并餐厅和自定义选项，限制最多 8 个扇形
-  const allOptions: (Restaurant | CustomOption)[] = [...restaurants, ...customOptions].slice(0, 8);
+  const allOptions = getTurntableOptions(restaurants, customOptions);
   const totalSegments = allOptions.length;
+  const wheelRef = useRef<HTMLDivElement>(null);
+  const previousRotationRef = useRef(rotation);
+  const canUseWebAnimations =
+    typeof HTMLElement !== 'undefined'
+    && typeof HTMLElement.prototype.animate === 'function';
+
+  useLayoutEffect(() => {
+    const fromRotation = previousRotationRef.current;
+    previousRotationRef.current = rotation;
+
+    if (!isSpinning || fromRotation === rotation) {
+      return;
+    }
+
+    const wheelElement = wheelRef.current;
+    if (!wheelElement || !canUseWebAnimations) {
+      return;
+    }
+
+    const animation = wheelElement.animate(
+      [
+        { transform: `rotate(${fromRotation}deg)` },
+        { transform: `rotate(${rotation}deg)` },
+      ],
+      {
+        duration: spinDuration,
+        easing: SPIN_EASING,
+        fill: 'both',
+      }
+    );
+
+    return () => {
+      animation.cancel();
+    };
+  }, [canUseWebAnimations, isSpinning, rotation, spinDuration]);
 
   if (totalSegments === 0) {
     return (
@@ -59,6 +99,7 @@ export const Turntable: React.FC<TurntableProps> = ({
 
       {/* 转盘容器 */}
       <div
+        ref={wheelRef}
         className={`
           relative
           w-full max-w-[min(78vw,430px)]
@@ -67,9 +108,11 @@ export const Turntable: React.FC<TurntableProps> = ({
         `}
         style={{
           transform: `rotate(${rotation}deg)`,
-          transition: isSpinning
-            ? `transform ${spinDuration}ms cubic-bezier(0.25, 0.1, 0.25, 1)`
-            : undefined,
+          transition: isSpinning && canUseWebAnimations
+            ? 'none'
+            : isSpinning
+              ? `transform ${spinDuration}ms ${SPIN_EASING}`
+              : undefined,
         }}
       >
         <svg

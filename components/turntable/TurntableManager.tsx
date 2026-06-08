@@ -14,6 +14,7 @@ import React, { useState, useCallback } from 'react';
 import { Restaurant, CustomOption, Location } from '@/types';
 import { BottomSheet } from '@/components/ui';
 import { searchRestaurants } from '@/lib/api';
+import { MAX_TURNTABLE_OPTIONS } from '@/lib/turntableOptions';
 
 export interface TurntableManagerProps {
   isOpen: boolean;
@@ -59,7 +60,7 @@ export const TurntableManager: React.FC<TurntableManagerProps> = ({
 
   // 计算总选项数
   const totalOptions = restaurants.length + customOptions.length;
-  const isFull = totalOptions >= 8;
+  const isFull = totalOptions >= MAX_TURNTABLE_OPTIONS;
 
   // 搜索餐厅
   const handleSearch = useCallback(async () => {
@@ -132,7 +133,7 @@ export const TurntableManager: React.FC<TurntableManagerProps> = ({
         <Section
           title="转盘上"
           count={totalOptions}
-          maxCount={8}
+          maxCount={MAX_TURNTABLE_OPTIONS}
           icon={
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <circle cx="12" cy="12" r="10" strokeWidth={2} />
@@ -324,7 +325,7 @@ export const TurntableManager: React.FC<TurntableManagerProps> = ({
             {/* 已满提示 */}
             {isFull && (
               <p className="text-xs text-amber-600 text-center">
-                转盘已满（最多8个选项），请先移除一些选项
+                转盘已满（最多{MAX_TURNTABLE_OPTIONS}个选项），请先移除一些选项
               </p>
             )}
           </div>

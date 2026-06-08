@@ -6,7 +6,7 @@
 
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Location, TurntableOption, isCustomOption } from '@/types';
 import { useAppState, useLocation, useRestaurantSearch, useTurntable, useMediaQuery, useErrorAlert } from '@/hooks';
@@ -20,6 +20,7 @@ import { ErrorMessage, ErrorAlert, BottomSheet, useToast } from './ui';
 import { ShareModal } from './share';
 import { saveRecordAndReplaceSameSession, getReuseRecord } from '@/lib/storage';
 import { parseShareData, getShareParamFromUrl, clearShareParamFromUrl } from '@/lib/share';
+import { getTurntableOptions, MIN_TURNTABLE_OPTIONS } from '@/lib/turntableOptions';
 
 export const HomePage: React.FC = () => {
   const router = useRouter();
@@ -44,7 +45,12 @@ export const HomePage: React.FC = () => {
   } = useAppState();
   const { location: detectedLocation, getAutoLocation, isLocating, error: locationError, geocodeAddress, clearLocation } = useLocation();
   const { search, answerQuestion, isSearching, progress } = useRestaurantSearch();
-  const { rotation, selectedIndex, isSpinning, spinDuration, startSpin, reset: resetTurntable } = useTurntable(state.restaurants.length + state.customOptions.length);
+  const turntableOptions = useMemo(
+    () => getTurntableOptions(state.restaurants, state.customOptions),
+    [state.restaurants, state.customOptions]
+  );
+  const turntableOptionCount = turntableOptions.length;
+  const { rotation, selectedIndex, isSpinning, spinDuration, startSpin, reset: resetTurntable } = useTurntable(turntableOptionCount);
   const errorAlert = useErrorAlert();
 
   // 底部弹出卡片状态
@@ -162,9 +168,9 @@ export const HomePage: React.FC = () => {
 
   // 处理转盘
   const handleSpin = useCallback(() => {
-    if (state.restaurants.length + state.customOptions.length < 3) return;
+    if (turntableOptionCount < MIN_TURNTABLE_OPTIONS) return;
     startSpin();
-  }, [state.restaurants.length, state.customOptions.length, startSpin]);
+  }, [turntableOptionCount, startSpin]);
 
   // 监听旋转完成 - 当进入 RESULT 状态时自动保存并弹出卡片
   const prevStepRef = React.useRef(state.step);
@@ -184,8 +190,7 @@ export const HomePage: React.FC = () => {
       hasSavedRef.current = true;
 
       // 获取选中的选项（可能是餐厅或自定义选项）
-      const allOptions = [...state.restaurants, ...state.customOptions];
-      const selectedOption = allOptions[selectedIndex];
+      const selectedOption = turntableOptions[selectedIndex];
 
       // 自动保存到历史记录（使用会话替换逻辑，同一搜索会话只保留最后一条）
       if (selectedOption && state.userLocation) {
@@ -210,7 +215,7 @@ export const HomePage: React.FC = () => {
       }
     }
     prevStepRef.current = state.step;
-  }, [state.step, selectedIndex, isDesktop, state.restaurants, state.removedRestaurants, state.customOptions, state.userQuery, state.userLocation]);
+  }, [state.step, selectedIndex, isDesktop, state.restaurants, state.removedRestaurants, state.customOptions, state.userQuery, state.userLocation, turntableOptions]);
 
   // 处理扇区点击
   const handleSegmentClick = useCallback((index: number) => {
@@ -249,7 +254,7 @@ export const HomePage: React.FC = () => {
         }
       }
 
-      if (state.restaurants.length + state.customOptions.length <= 3) {
+      if (turntableOptionCount <= MIN_TURNTABLE_OPTIONS) {
         // 没有餐厅了，返回输入
         reset();
       } else {
@@ -257,7 +262,7 @@ export const HomePage: React.FC = () => {
         setStep('READY');
       }
     }
-  }, [selectedIndex, state.restaurants.length, state.customOptions, deleteRestaurant, removeCustomOption, reset, setStep]);
+  }, [selectedIndex, state.restaurants.length, state.customOptions, turntableOptionCount, deleteRestaurant, removeCustomOption, reset, setStep]);
 
   // 处理重试（再来一次）
   const handleRetry = useCallback(() => {
@@ -268,14 +273,13 @@ export const HomePage: React.FC = () => {
   // 处理分享（打开分享弹窗）
   const handleShare = useCallback((option?: TurntableOption) => {
     // 确定要分享的选项
-    const allOptions: TurntableOption[] = [...state.restaurants, ...state.customOptions];
-    const optionToShare = option || (selectedIndex >= 0 ? allOptions[selectedIndex] : null);
+    const optionToShare = option || (selectedIndex >= 0 ? turntableOptions[selectedIndex] : null);
 
     if (optionToShare) {
       setShareSelectedOption(optionToShare);
       setShareModalOpen(true);
     }
-  }, [state.restaurants, state.customOptions, selectedIndex]);
+  }, [turntableOptions, selectedIndex]);
 
   // 关闭分享弹窗
   const handleCloseShareModal = useCallback(() => {
@@ -293,8 +297,7 @@ export const HomePage: React.FC = () => {
   }, [setStep]);
 
   // 选中的餐厅
-  const allOptions: TurntableOption[] = [...state.restaurants, ...state.customOptions];
-  const selectedOption = selectedIndex >= 0 ? allOptions[selectedIndex] : null;
+  const selectedOption = selectedIndex >= 0 ? turntableOptions[selectedIndex] : null;
   const selectedRestaurant = selectedOption && !isCustomOption(selectedOption)
     ? selectedOption
     : null;

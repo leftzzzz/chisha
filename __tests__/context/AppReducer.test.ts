@@ -31,6 +31,18 @@ describe('AppReducer', () => {
     isCustom: true,
   };
 
+  const createRestaurants = (count: number, prefix = 'r'): Restaurant[] =>
+    Array.from({ length: count }, (_, index) => ({
+      ...mockRestaurant,
+      id: `${prefix}${index}`,
+      name: `${prefix}测试餐厅${index}`,
+      location: {
+        ...mockLocation,
+        lat: mockLocation.lat + index * 0.001,
+        lng: mockLocation.lng + index * 0.001,
+      },
+    }));
+
   describe('SET_QUERY', () => {
     it('should set user query and clear error', () => {
       const state = { ...initialState, error: '错误信息' };
@@ -114,6 +126,18 @@ describe('AppReducer', () => {
       expect(newState.selectedIndex).toBe(-1);
       expect(newState.error).toBeNull();
     });
+
+    it('should limit turntable restaurants to 8 items', () => {
+      const restaurants = createRestaurants(10);
+      const action = { type: 'SET_RESTAURANTS' as const, payload: restaurants };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.restaurants).toHaveLength(8);
+      expect(newState.restaurants.map((restaurant) => restaurant.id)).toEqual(
+        restaurants.slice(0, 8).map((restaurant) => restaurant.id)
+      );
+    });
   });
 
   describe('SET_RESTAURANTS_WITH_CANDIDATES', () => {
@@ -179,6 +203,28 @@ describe('AppReducer', () => {
 
       expect(newState.restaurants.map((restaurant) => restaurant.id)).toEqual(['r1']);
       expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual(['r2']);
+    });
+
+    it('should move overflow turntable restaurants into the candidate pool', () => {
+      const turntable = createRestaurants(10, 'primary');
+      const candidates = createRestaurants(2, 'candidate');
+      const action = {
+        type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
+        payload: {
+          turntable,
+          candidates,
+        },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.restaurants.map((restaurant) => restaurant.id)).toEqual(
+        turntable.slice(0, 8).map((restaurant) => restaurant.id)
+      );
+      expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual([
+        ...turntable.slice(8).map((restaurant) => restaurant.id),
+        ...candidates.map((restaurant) => restaurant.id),
+      ]);
     });
 
     it('should support Agent question step', () => {
@@ -383,6 +429,23 @@ describe('AppReducer', () => {
       expect(newState.error).toContain('转盘已满');
     });
 
+    it('should set error when turntable is full including custom options', () => {
+      const restaurants = createRestaurants(7);
+      const removed = [mockRestaurant];
+      const state = {
+        ...initialState,
+        restaurants,
+        customOptions: [mockCustomOption],
+        removedRestaurants: removed,
+      };
+      const action = { type: 'RESTORE_RESTAURANT' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(7);
+      expect(newState.error).toContain('转盘已满');
+    });
+
     it('should reject invalid index', () => {
       const state = { ...initialState, removedRestaurants: [mockRestaurant] };
       const action = { type: 'RESTORE_RESTAURANT' as const, payload: 5 };
@@ -416,6 +479,24 @@ describe('AppReducer', () => {
       const newState = appReducer(state, action);
 
       expect(newState.restaurants).toHaveLength(8); // unchanged
+      expect(newState.error).toContain('转盘已满');
+    });
+
+    it('should set error when turntable is full including custom options', () => {
+      const restaurants = createRestaurants(7);
+      const candidates = [mockRestaurant];
+      const state = {
+        ...initialState,
+        restaurants,
+        customOptions: [mockCustomOption],
+        candidateRestaurants: candidates,
+      };
+      const action = { type: 'ADD_FROM_CANDIDATES' as const, payload: 0 };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(7);
+      expect(newState.candidateRestaurants).toHaveLength(1);
       expect(newState.error).toContain('转盘已满');
     });
 
@@ -527,6 +608,21 @@ describe('AppReducer', () => {
       expect(newState.restaurants).toHaveLength(1); // unchanged
       expect(newState.error).toContain('已在转盘上');
     });
+
+    it('should set error when turntable is full including custom options', () => {
+      const restaurants = createRestaurants(7);
+      const state = {
+        ...initialState,
+        restaurants,
+        customOptions: [mockCustomOption],
+      };
+      const action = { type: 'ADD_RESTAURANT' as const, payload: { ...mockRestaurant, id: 'new' } };
+
+      const newState = appReducer(state, action);
+
+      expect(newState.restaurants).toHaveLength(7);
+      expect(newState.error).toContain('转盘已满');
+    });
   });
 
   describe('REMOVE_CUSTOM_OPTION', () => {
@@ -594,6 +690,29 @@ describe('AppReducer', () => {
       expect(newState.customOptions).toEqual([mockCustomOption]);
       expect(newState.selectedIndex).toBe(-1);
       expect(newState.error).toBeNull();
+    });
+
+    it('should limit restored history to 8 turntable options', () => {
+      const restaurants = createRestaurants(7);
+      const customOptions = [
+        mockCustomOption,
+        { ...mockCustomOption, id: 'c2', name: '第二个自定义选项' },
+      ];
+      const action = {
+        type: 'RESTORE_FROM_HISTORY' as const,
+        payload: {
+          query: '火锅',
+          location: mockLocation,
+          restaurants,
+          customOptions,
+        },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.restaurants).toHaveLength(7);
+      expect(newState.customOptions).toEqual([mockCustomOption]);
+      expect(newState.restaurants.length + newState.customOptions.length).toBe(8);
     });
 
     it('should set error when total options < 3', () => {
