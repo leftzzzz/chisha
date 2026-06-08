@@ -17,7 +17,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   rightPanel,
 }) => {
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[#ebe5d9]">
+    <div className="absolute inset-0 overflow-hidden bg-[#ebe5d9]">
       {/* 地图全屏背景 */}
       <div className="absolute inset-0 saturate-[0.88] contrast-[1.02]">
         {rightPanel}
