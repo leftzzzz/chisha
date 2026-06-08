@@ -56,11 +56,6 @@ export const Map: React.FC<MapProps> = ({
   // 加载高德地图 API
   useEffect(() => {
     const getAMapApiKey = async (): Promise<string> => {
-      const publicKey = process.env.NEXT_PUBLIC_AMAP_KEY?.trim();
-      if (publicKey) {
-        return publicKey;
-      }
-
       const response = await fetch('/api/map/config', { cache: 'no-store' });
       if (!response.ok) {
         return '';
