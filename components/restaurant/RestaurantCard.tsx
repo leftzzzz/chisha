@@ -48,14 +48,14 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
   };
 
   return (
-    <Card className="w-full max-w-md mx-auto">
+    <Card className="mx-auto w-full max-w-md">
       {/* 餐厅名称 */}
       <div className="mb-4">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">
+        <h2 className="mb-2 text-2xl font-black tracking-tight text-dark">
           {restaurant.name}
         </h2>
-        <div className="flex items-center gap-3 text-sm text-gray-600">
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+        <div className="flex items-center gap-3 text-sm text-[#66594f]">
+          <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 font-bold text-primary">
             {restaurant.cuisineType}
           </span>
           {restaurant.rating && (
@@ -73,20 +73,20 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
       <div className="space-y-3 mb-6">
         {/* 地址 */}
         <div className="flex items-start gap-2">
-          <svg className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5 text-[#9a8d81] flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
           <div className="flex-1">
-            <p className="text-sm text-gray-600">{restaurant.address}</p>
-            <p className="text-xs text-gray-500 mt-1">{formatDistance(restaurant.distance)}</p>
+            <p className="break-words text-sm font-medium text-[#5f544b]">{restaurant.address}</p>
+            <p className="mt-1 text-xs font-semibold text-[#8a7a6d]">{formatDistance(restaurant.distance)}</p>
           </div>
         </div>
 
         {/* 电话 */}
         {restaurant.phone && (
           <div className="flex items-center gap-2">
-            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 text-[#9a8d81]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
             </svg>
             <a href={`tel:${restaurant.phone}`} className="text-sm text-primary hover:underline">
@@ -98,20 +98,20 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
         {/* 营业时间 */}
         {restaurant.openingHours && (
           <div className="flex items-center gap-2">
-            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 text-[#9a8d81]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p className="text-sm text-gray-600">{restaurant.openingHours}</p>
+            <p className="text-sm font-medium text-[#5f544b]">{restaurant.openingHours}</p>
           </div>
         )}
 
         {/* 人均价格 */}
         {restaurant.averagePrice && (
           <div className="flex items-center gap-2">
-            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 text-[#9a8d81]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p className="text-sm text-gray-600">{formatPrice(restaurant.averagePrice)}</p>
+            <p className="text-sm font-medium text-[#5f544b]">{formatPrice(restaurant.averagePrice)}</p>
           </div>
         )}
       </div>

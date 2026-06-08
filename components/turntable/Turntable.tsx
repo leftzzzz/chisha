@@ -20,14 +20,14 @@ export interface TurntableProps {
 
 // Apple 风格柔和配色
 export const COLORS = [
-  '#FF9F9F', // 柔和红
-  '#A8D8EA', // 天空蓝
-  '#FFD3B6', // 杏色
-  '#C9E4DE', // 薄荷
-  '#DCEDC1', // 淡绿
-  '#D4A5A5', // 玫瑰灰
-  '#E8D5B7', // 米色
-  '#B5C7D3', // 灰蓝
+  '#E84A32',
+  '#F5B84B',
+  '#235A4A',
+  '#F0A36E',
+  '#8F3E2F',
+  '#D8C0A5',
+  '#5B7464',
+  '#F7D7B3',
 ];
 
 export const Turntable: React.FC<TurntableProps> = ({
@@ -45,13 +45,13 @@ export const Turntable: React.FC<TurntableProps> = ({
   if (totalSegments === 0) {
     return (
       <div className="flex items-center justify-center p-8">
-        <p className="text-gray-500">暂无选项</p>
+        <p className="font-medium text-[#76695e]">暂无选项</p>
       </div>
     );
   }
 
   return (
-    <div className="relative flex items-center justify-center">
+    <div className="relative flex items-center justify-center overflow-hidden rounded-[1.75rem] bg-[radial-gradient(circle_at_50%_44%,rgba(255,255,255,0.86),rgba(255,250,241,0.3)_58%,transparent_72%)] px-2 py-4">
       {/* 指针 */}
       <TurntablePointer />
 
@@ -59,7 +59,7 @@ export const Turntable: React.FC<TurntableProps> = ({
       <div
         className={`
           relative
-          w-[98vw] sm:max-w-[500px] md:max-w-[600px] lg:max-w-[750px]
+          w-full max-w-[min(86vw,430px)]
           aspect-square
           ${isSpinning ? '' : 'transition-transform duration-300'}
         `}
@@ -70,7 +70,7 @@ export const Turntable: React.FC<TurntableProps> = ({
       >
         <svg
           viewBox="0 0 400 400"
-          className="w-full h-full drop-shadow-2xl"
+          className="w-full h-full drop-shadow-[0_22px_42px_rgba(71,40,29,0.22)]"
           role="img"
           aria-label="餐厅转盘"
         >
@@ -79,8 +79,9 @@ export const Turntable: React.FC<TurntableProps> = ({
             cx="200"
             cy="200"
             r="190"
-            fill="#f5f5f7"
-            stroke="none"
+            fill="#fffaf1"
+            stroke="rgba(24,21,19,0.1)"
+            strokeWidth="2"
           />
 
           {/* 扇形 */}
@@ -102,7 +103,7 @@ export const Turntable: React.FC<TurntableProps> = ({
             cx="200"
             cy="200"
             r="35"
-            fill="white"
+            fill="#181513"
             className="drop-shadow-md"
           />
 
@@ -112,8 +113,8 @@ export const Turntable: React.FC<TurntableProps> = ({
             y="205"
             textAnchor="middle"
             dominantBaseline="middle"
-            className="font-semibold"
-            style={{ fontSize: '18px', fill: '#1d1d1f' }}
+            className="font-black"
+            style={{ fontSize: '18px', fill: '#fffaf1' }}
           >
             GO
           </text>

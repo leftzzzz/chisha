@@ -5,8 +5,6 @@
  * 苹果风格设计 - 作为全屏背景显示
  */
 
-/// <reference path="../../types/amap.d.ts" />
-
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
@@ -157,8 +155,8 @@ export const Map: React.FC<MapProps> = ({
             display: inline-flex;
             padding: 2px 10px;
             border-radius: 9999px;
-            background: rgba(255, 107, 107, 0.1);
-            color: #FF6B6B;
+            background: rgba(232, 74, 50, 0.1);
+            color: #E84A32;
             font-size: 12px;
             font-weight: 500;
           ">${restaurant.cuisineType || '美食'}</span>
@@ -192,7 +190,7 @@ export const Map: React.FC<MapProps> = ({
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
               </svg>
-              <a href="tel:${restaurant.phone}" style="font-size: 13px; color: #FF6B6B; text-decoration: none;">${restaurant.phone}</a>
+              <a href="tel:${restaurant.phone}" style="font-size: 13px; color: #E84A32; text-decoration: none;">${restaurant.phone}</a>
             </div>
           ` : ''}
 
@@ -218,13 +216,13 @@ export const Map: React.FC<MapProps> = ({
             gap: 6px;
             width: 100%;
             padding: 10px 16px;
-            background: linear-gradient(135deg, #FF6B6B 0%, #f38181 100%);
+            background: linear-gradient(135deg, #E84A32 0%, #B83222 100%);
             color: white;
             font-size: 14px;
             font-weight: 500;
             border-radius: 8px;
             text-decoration: none;
-            box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
+            box-shadow: 0 2px 8px rgba(232, 74, 50, 0.3);
           "
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -260,7 +258,7 @@ export const Map: React.FC<MapProps> = ({
     if (!window.AMap) return null;
 
     const size = isSelected ? 44 : 32;
-    const color = isSelected ? '#FF6B6B' : '#4ECDC4';
+    const color = isSelected ? '#E84A32' : '#235A4A';
 
     const content = document.createElement('div');
     content.innerHTML = `
@@ -275,7 +273,7 @@ export const Map: React.FC<MapProps> = ({
         align-items: center;
         justify-content: center;
         cursor: pointer;
-        transition: all 0.3s ease;
+        transition: transform 0.3s ease, box-shadow 0.3s ease, background-color 0.3s ease;
         ${isSelected ? 'animation: bounce 0.5s ease;' : ''}
       ">
         <svg width="${size * 0.45}" height="${size * 0.45}" viewBox="0 0 24 24" fill="white">
@@ -303,10 +301,10 @@ export const Map: React.FC<MapProps> = ({
       <div style="
         width: 16px;
         height: 16px;
-        background: #007AFF;
+        background: #235A4A;
         border-radius: 50%;
         border: 3px solid white;
-        box-shadow: 0 2px 8px rgba(0,122,255,0.5);
+        box-shadow: 0 2px 8px rgba(35,90,74,0.42);
       "></div>
     `;
 
@@ -449,13 +447,13 @@ export const Map: React.FC<MapProps> = ({
 
       {/* 加载遮罩 */}
       {!isReady && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+        <div className="absolute inset-0 flex items-center justify-center bg-[linear-gradient(135deg,#fffaf1,#ece9df)]">
           <div className="text-center">
             <div className="relative w-16 h-16 mx-auto mb-4">
-              <div className="absolute inset-0 border-4 border-blue-200 rounded-full" />
-              <div className="absolute inset-0 border-4 border-blue-500 rounded-full border-t-transparent animate-spin" />
+              <div className="absolute inset-0 rounded-full border-4 border-primary/20" />
+              <div className="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin" />
             </div>
-            <p className="text-gray-600 font-medium">加载地图中...</p>
+            <p className="font-semibold text-[#66594f]">加载地图中…</p>
           </div>
         </div>
       )}

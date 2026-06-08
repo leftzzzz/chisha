@@ -341,15 +341,15 @@ export const HomePage: React.FC = () => {
 
   // 转盘和结果状态
   const leftPanel = (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* 转盘 */}
-      <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg px-2 py-6 sm:px-4 md:px-6">
+      <div className="surface-panel rounded-[2rem] px-3 py-5 sm:px-4 md:px-5">
         {/* 顶部导航栏 */}
-        <div className="flex items-center justify-between mb-4">
+        <div className="mb-4 flex items-center justify-between">
           {/* iOS 风格返回导航 */}
           <button
             onClick={handleClose}
-            className="flex items-center gap-1 text-primary hover:opacity-70 transition-opacity"
+            className="flex items-center gap-1 rounded-full px-2 py-1 font-semibold text-primary transition-[background-color,opacity] hover:bg-primary/10 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             aria-label="返回搜索页"
           >
             <svg
@@ -365,13 +365,13 @@ export const HomePage: React.FC = () => {
                 d="M15 19l-7-7 7-7"
               />
             </svg>
-            <span className="text-[17px]">重新搜索</span>
+            <span className="text-[15px]">重新搜索</span>
           </button>
 
           {/* 管理按钮 */}
           <button
             onClick={() => setManagerOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+            className="flex items-center gap-1.5 rounded-full border border-black/10 bg-white/60 px-3 py-1.5 text-[#5f544b] transition-[background-color,color,border-color] hover:border-black/20 hover:bg-white hover:text-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             aria-label="管理选项"
             disabled={isSpinning}
           >
@@ -391,7 +391,7 @@ export const HomePage: React.FC = () => {
               <line x1="14" y1="18" x2="20" y2="18"/>
               <line x1="4" y1="18" x2="6" y2="18"/>
             </svg>
-            <span className="text-sm hidden sm:inline">管理</span>
+            <span className="hidden text-sm font-semibold sm:inline">管理</span>
           </button>
         </div>
         <Turntable
@@ -402,7 +402,7 @@ export const HomePage: React.FC = () => {
           rotation={rotation}
           onSegmentClick={handleSegmentClick}
         />
-        <div className="mt-6">
+        <div className="mt-5">
           <TurntableControls
             isSpinning={isSpinning}
             selectedRestaurant={selectedRestaurant}

@@ -35,7 +35,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({
         <Loading
           variant="spinner"
           size="lg"
-          message="正在加载餐厅信息..."
+          message="正在加载餐厅信息…"
         />
       </div>
     );
@@ -60,7 +60,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({
     return (
       <div className="w-full p-8 text-center">
         <svg
-          className="w-20 h-20 mx-auto text-gray-300 mb-4"
+          className="mx-auto mb-4 h-20 w-20 text-[#c9bcad]"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -72,8 +72,8 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({
             d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
           />
         </svg>
-        <h3 className="text-lg font-medium text-gray-900 mb-2">暂无结果</h3>
-        <p className="text-sm text-gray-500 mb-4">
+        <h3 className="mb-2 text-lg font-black text-dark">暂无结果</h3>
+        <p className="mb-4 text-sm font-medium text-[#76695e]">
           请先进行搜索或转动转盘
         </p>
       </div>

@@ -41,10 +41,10 @@ export const TurntableControls: React.FC<TurntableControlsProps> = ({
             onClick={onSpin}
             disabled={disabled || isSpinning}
             loading={isSpinning}
-            className="min-w-[200px]"
+            className="min-w-[210px]"
             ariaLabel={isSpinning ? '转动中' : '开始转动'}
           >
-            {isSpinning ? '转动中...' : '开始转动'}
+            {isSpinning ? '转动中…' : '开始转动'}
           </Button>
         </div>
       ) : (
@@ -128,7 +128,7 @@ export const TurntableControls: React.FC<TurntableControlsProps> = ({
       {/* 提示信息 */}
       {selectedRestaurant && !isSpinning && (
         <div className="text-center">
-          <p className="text-sm text-gray-600">
+          <p className="text-sm font-semibold text-[#66594f]">
             就决定是你了！
           </p>
         </div>

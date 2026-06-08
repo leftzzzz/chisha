@@ -28,7 +28,7 @@ export const Layout: React.FC<LayoutProps> = ({
   const isDesktop = useMediaQuery('(min-width: 1024px)');
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
+    <div className="app-shell min-h-[100dvh] flex flex-col overflow-hidden">
       {/* 头部 */}
       <Header onHistoryClick={onHistoryClick} />
 

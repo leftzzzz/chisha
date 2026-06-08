@@ -12,9 +12,9 @@ export interface MobileLayoutProps {
 
 export const MobileLayout: React.FC<MobileLayoutProps> = ({ children }) => {
   return (
-    <div className="h-full flex flex-col bg-gradient-to-br from-blue-50 to-indigo-100">
+    <div className="h-full flex flex-col bg-transparent">
       <div className="flex-1 overflow-y-auto">
-        <div className="container mx-auto p-4 pb-8 space-y-6">
+        <div className="mx-auto w-full max-w-6xl px-4 py-5 pb-[calc(2rem+env(safe-area-inset-bottom))] sm:px-6">
           {children}
         </div>
       </div>

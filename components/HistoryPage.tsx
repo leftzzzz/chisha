@@ -181,8 +181,8 @@ export const HistoryPage: React.FC = () => {
         {/* 头部 */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">历史记录</h1>
-            <p className="text-sm text-gray-500 mt-1">
+            <h1 className="text-2xl font-black tracking-tight text-dark md:text-4xl">历史记录</h1>
+            <p className="mt-1 text-sm font-medium text-[#76695e]">
               共 {allRecords.length} 条记录
               {searchKeyword && ` (搜索: "${searchKeyword}")`}
             </p>
@@ -234,7 +234,7 @@ export const HistoryPage: React.FC = () => {
           <div className="mb-6">
             <Input
               type="text"
-              placeholder="搜索餐厅名称、菜系或查询内容..."
+              placeholder="搜索餐厅名称、菜系或查询内容…"
               value={searchKeyword}
               onChange={(value) => {
                 setSearchKeyword(value);
@@ -368,8 +368,8 @@ export const HistoryPage: React.FC = () => {
                           onClick={() => setCurrentPage(page)}
                           className={`w-8 h-8 rounded flex items-center justify-center text-sm transition-colors ${
                             page === currentPage
-                              ? 'bg-blue-500 text-white'
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                              ? 'bg-primary text-white'
+                              : 'bg-white/70 text-[#3d342e] hover:bg-white'
                           }`}
                         >
                           {page}
@@ -381,7 +381,7 @@ export const HistoryPage: React.FC = () => {
                     ) {
                       return (
                         <span key={page} className="text-gray-400 px-1">
-                          ...
+                          …
                         </span>
                       );
                     }

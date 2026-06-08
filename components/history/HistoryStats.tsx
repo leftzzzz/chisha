@@ -20,28 +20,28 @@ export const HistoryStats: React.FC<HistoryStatsProps> = ({ stats }) => {
       {/* 概览卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card className="text-center p-4">
-          <div className="text-3xl font-bold text-blue-600">
+          <div className="text-3xl font-black text-primary">
             {stats.totalRecords}
           </div>
           <div className="text-sm text-gray-600 mt-1">总记录数</div>
         </Card>
 
         <Card className="text-center p-4">
-          <div className="text-3xl font-bold text-green-600">
+          <div className="text-3xl font-black text-secondary">
             {stats.totalRestaurants}
           </div>
           <div className="text-sm text-gray-600 mt-1">不同餐厅</div>
         </Card>
 
         <Card className="text-center p-4">
-          <div className="text-3xl font-bold text-purple-600">
+          <div className="text-3xl font-black text-[#7b4b35]">
             {stats.recentDays}
           </div>
           <div className="text-sm text-gray-600 mt-1">天数跨度</div>
         </Card>
 
         <Card className="text-center p-4">
-          <div className="text-3xl font-bold text-orange-600">
+          <div className="text-3xl font-black text-accent">
             {stats.averageRestaurantsPerRecord}
           </div>
           <div className="text-sm text-gray-600 mt-1">平均选项数</div>
@@ -85,7 +85,7 @@ export const HistoryStats: React.FC<HistoryStatsProps> = ({ stats }) => {
                   <div className="flex items-center gap-2">
                     <div className="w-20 h-2 bg-gray-100 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-blue-500 rounded-full"
+                        className="h-full rounded-full bg-primary"
                         style={{
                           width: `${(item.count / stats.totalRecords) * 100}%`,
                         }}

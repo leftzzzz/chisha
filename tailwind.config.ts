@@ -8,14 +8,22 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        primary: '#FF6B6B',
-        secondary: '#4ECDC4',
-        accent: '#FFE66D',
-        dark: '#2C3E50',
-        light: '#ECF0F1',
+        primary: '#E84A32',
+        secondary: '#235A4A',
+        accent: '#F5B84B',
+        dark: '#181513',
+        light: '#F4F0E8',
       },
       fontFamily: {
-        sans: ['ui-sans-serif', 'system-ui', 'sans-serif'],
+        sans: [
+          'MiSans',
+          'HarmonyOS Sans SC',
+          'PingFang SC',
+          'Microsoft YaHei',
+          'ui-sans-serif',
+          'system-ui',
+          'sans-serif',
+        ],
       },
       animation: {
         spin: 'spin 0.5s linear infinite',

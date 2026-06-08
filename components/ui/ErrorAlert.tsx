@@ -56,12 +56,12 @@ export const ErrorAlert: React.FC<ErrorAlertProps> = ({
       overlay: 'bg-black/50',
     },
     info: {
-      container: 'border-l-4 border-blue-500 bg-blue-50',
-      icon: 'text-blue-500',
-      title: 'text-blue-800',
-      message: 'text-blue-700',
-      description: 'text-blue-600',
-      button: 'bg-blue-600 hover:bg-blue-700 text-white',
+      container: 'border-l-4 border-secondary bg-secondary/10',
+      icon: 'text-secondary',
+      title: 'text-[#173d33]',
+      message: 'text-[#1b483c]',
+      description: 'text-secondary',
+      button: 'bg-secondary hover:bg-[#1b483c] text-white',
       overlay: 'bg-black/50',
     },
   };
@@ -119,7 +119,7 @@ export const ErrorAlert: React.FC<ErrorAlertProps> = ({
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
         <div className="pointer-events-auto w-full max-w-md">
           <div
-            className={`rounded-lg shadow-xl p-6 ${styles.container} animate-slideUp`}
+            className={`rounded-2xl shadow-[0_24px_70px_rgba(24,21,19,0.22)] p-6 ${styles.container} animate-slideUp`}
             role="alert"
             aria-live="assertive"
           >
@@ -134,7 +134,7 @@ export const ErrorAlert: React.FC<ErrorAlertProps> = ({
               {/* 关闭按钮 */}
               <button
                 onClick={onClose}
-                className={`flex-shrink-0 ${styles.icon} hover:opacity-70 transition-opacity focus:outline-none focus:ring-2 focus:ring-offset-2`}
+                className={`flex-shrink-0 rounded-lg p-1 ${styles.icon} hover:bg-white/50 hover:opacity-80 transition-[background-color,opacity] focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2`}
                 aria-label="关闭"
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
@@ -154,14 +154,14 @@ export const ErrorAlert: React.FC<ErrorAlertProps> = ({
             <div className="flex gap-3 justify-end">
               <button
                 onClick={onClose}
-                className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2"
+                className="rounded-xl border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-[#3d342e] transition-colors hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
               >
                 关闭
               </button>
               {onAction && actionLabel && (
                 <button
                   onClick={handleAction}
-                  className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 ${styles.button}`}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${styles.button}`}
                 >
                   {actionLabel}
                 </button>

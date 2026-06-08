@@ -155,7 +155,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
         ref={sheetRef}
         className={`
           absolute bottom-0 left-0 right-0
-          bg-white rounded-t-3xl shadow-2xl
+          bg-[#fffaf1] rounded-t-[2rem] shadow-[0_-28px_90px_rgba(24,21,19,0.22)]
           transform transition-transform
           ${isDragging ? 'transition-none' : 'duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]'}
           ${isClosing ? 'translate-y-full' : 'translate-y-0'}
@@ -177,7 +177,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
             className="flex justify-center pt-3 pb-2 cursor-grab active:cursor-grabbing"
             onMouseDown={handleMouseDown}
           >
-            <div className="w-10 h-1 bg-gray-300 rounded-full" />
+            <div className="h-1 w-10 rounded-full bg-black/20" />
           </div>
         )}
 

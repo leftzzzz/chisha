@@ -234,7 +234,7 @@ export const TurntableManager: React.FC<TurntableManagerProps> = ({
                 type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
-                placeholder="输入餐厅名称..."
+                placeholder="输入餐厅名称…"
                 className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -249,7 +249,7 @@ export const TurntableManager: React.FC<TurntableManagerProps> = ({
                 disabled={!inputValue.trim() || !userLocation || isSearching || isFull}
                 className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {isSearching ? '搜索中...' : '搜索'}
+                {isSearching ? '搜索中…' : '搜索'}
               </button>
             </div>
 
@@ -280,7 +280,7 @@ export const TurntableManager: React.FC<TurntableManagerProps> = ({
                 </div>
                 {isSearching ? (
                   <div className="px-3 py-4 text-center text-sm text-gray-500">
-                    搜索中...
+                    搜索中…
                   </div>
                 ) : searchResults.length === 0 ? (
                   <div className="px-3 py-4">
@@ -419,7 +419,7 @@ const OptionItem: React.FC<OptionItemProps> = ({
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
         </svg>
       ),
-      className: 'text-blue-600 hover:bg-blue-50',
+      className: 'text-secondary hover:bg-secondary/10',
       label: '恢复',
     },
   };

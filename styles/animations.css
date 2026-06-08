@@ -117,7 +117,7 @@
 
 /* 按钮悬停效果 */
 .button-hover {
-  transition: all 0.2s ease-in-out;
+  transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out, background-color 0.2s ease-in-out, color 0.2s ease-in-out;
 }
 
 .button-hover:hover {
@@ -130,7 +130,7 @@
 
 /* 卡片悬停效果 */
 .card-hover {
-  transition: all 0.3s ease-in-out;
+  transition: transform 0.3s ease-in-out, box-shadow 0.3s ease-in-out, background-color 0.3s ease-in-out;
 }
 
 .card-hover:hover {

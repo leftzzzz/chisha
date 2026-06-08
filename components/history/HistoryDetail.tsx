@@ -60,9 +60,9 @@ export const HistoryDetail: React.FC<HistoryDetailProps> = ({
       </div>
 
       {/* 需求 */}
-      <Card className="bg-blue-50 border-blue-200">
-        <h3 className="text-sm font-medium text-gray-700 mb-2">您的需求</h3>
-        <p className="text-base text-gray-900">{record.query}</p>
+      <Card className="bg-primary/5 border-primary/20">
+        <h3 className="mb-2 text-sm font-bold text-dark">您的需求</h3>
+        <p className="text-base font-medium text-[#3d342e]">{record.query}</p>
       </Card>
 
       {/* 位置信息 */}

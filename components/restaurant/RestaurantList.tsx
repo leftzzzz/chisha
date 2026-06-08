@@ -33,14 +33,14 @@ export const RestaurantList: React.FC<RestaurantListProps> = ({
         <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
         </svg>
-        <p className="text-gray-500">暂无餐厅数据</p>
+        <p className="font-medium text-[#76695e]">暂无餐厅数据</p>
       </div>
     );
   }
 
   return (
     <div className="w-full">
-      <h3 className="text-lg font-semibold text-gray-900 mb-3 px-2">
+      <h3 className="mb-3 px-2 text-lg font-black tracking-tight text-dark">
         候选餐厅 ({restaurants.length})
       </h3>
       <div className="space-y-2 max-h-[500px] overflow-y-auto">
@@ -49,11 +49,11 @@ export const RestaurantList: React.FC<RestaurantListProps> = ({
             key={restaurant.id}
             onClick={() => onSelect(index)}
             className={`
-              p-4 rounded-lg border-2 cursor-pointer transition-all duration-200
+              cursor-pointer rounded-2xl border-2 p-4 transition-[background-color,border-color,box-shadow,transform] duration-200
               ${
                 selectedIndex === index
                   ? 'border-primary bg-primary/5 shadow-md'
-                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                  : 'border-black/10 bg-white/58 hover:-translate-y-0.5 hover:border-primary/30 hover:bg-white'
               }
             `}
             role="button"
@@ -72,17 +72,17 @@ export const RestaurantList: React.FC<RestaurantListProps> = ({
                 <div
                   className={`
                     flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold
-                    ${selectedIndex === index ? 'bg-primary text-white' : 'bg-gray-200 text-gray-600'}
+                    ${selectedIndex === index ? 'bg-primary text-white' : 'bg-black/10 text-[#66594f]'}
                   `}
                 >
                   {index + 1}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h4 className="font-semibold text-gray-900 truncate">
+                  <h4 className="truncate font-bold text-dark">
                     {restaurant.name}
                   </h4>
-                  <div className="flex items-center gap-2 mt-1 text-sm text-gray-600">
-                    <span className="px-2 py-0.5 bg-gray-100 rounded text-xs">
+                  <div className="mt-1 flex items-center gap-2 text-sm font-medium text-[#66594f]">
+                    <span className="rounded bg-black/5 px-2 py-0.5 text-xs">
                       {restaurant.cuisineType}
                     </span>
                     {restaurant.distance && (

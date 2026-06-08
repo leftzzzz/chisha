@@ -23,16 +23,24 @@ export const Card: React.FC<CardProps> = ({
 }) => {
   return (
     <div
-      className={`bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 ${className} ${onClick ? 'cursor-pointer' : ''}`}
+      className={`surface-panel rounded-2xl transition-[box-shadow,transform,background-color] duration-300 ${className} ${onClick ? 'cursor-pointer hover:-translate-y-0.5 hover:shadow-[0_28px_80px_rgba(77,42,28,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-[#fffaf1]' : ''}`}
       onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (onClick && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onClick();
+        }
+      }}
     >
       {(title || subtitle) && (
-        <div className="px-6 py-4 border-b border-gray-200">
+        <div className="px-6 py-4 border-b border-black/10">
           {title && (
-            <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+            <h3 className="text-lg font-bold tracking-tight text-dark">{title}</h3>
           )}
           {subtitle && (
-            <p className="mt-1 text-sm text-gray-500">{subtitle}</p>
+            <p className="mt-1 text-sm text-[#76695e]">{subtitle}</p>
           )}
         </div>
       )}

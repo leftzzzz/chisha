@@ -52,7 +52,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
 
   return (
     <div className="w-full space-y-3">
-      <label className="block text-sm font-medium text-gray-700">
+      <label className="block text-sm font-bold text-dark">
         位置信息
       </label>
 
@@ -86,7 +86,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
               d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
             />
           </svg>
-          {isLoading ? '定位中...' : '自动定位'}
+          {isLoading ? '定位中…' : '自动定位'}
         </Button>
 
         <Button
@@ -128,9 +128,11 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
               type="text"
               value={manualAddress}
               onChange={(e) => setManualAddress(e.target.value)}
-              placeholder="输入详细地址..."
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+              placeholder="输入详细地址…"
+              className="min-w-0 flex-1 rounded-xl border border-black/10 bg-[#fffaf1]/88 px-4 py-2 font-medium text-dark placeholder:text-[#9a8d81] transition-[border-color,box-shadow,background-color] duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus:border-primary"
               aria-label="手动输入地址"
+              name="manual-address"
+              autoComplete="street-address"
             />
             <Button
               variant="primary"
@@ -147,12 +149,13 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
 
       {/* 当前位置显示 */}
       {location && !isManual && (
-        <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 animate-fadeIn">
+        <div className="rounded-2xl border border-secondary/15 bg-secondary/10 p-3 animate-fadeIn">
           <div className="flex items-start gap-2">
             <svg
-              className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5"
+              className="w-5 h-5 text-secondary flex-shrink-0 mt-0.5"
               fill="currentColor"
               viewBox="0 0 20 20"
+              aria-hidden="true"
             >
               <path
                 fillRule="evenodd"
@@ -161,14 +164,14 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
               />
             </svg>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900">当前位置</p>
-              <p className="text-sm text-gray-600 truncate">
+              <p className="text-sm font-bold text-dark">当前位置</p>
+              <p className="truncate text-sm font-medium text-[#5f544b]">
                 {location.address || `${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`}
               </p>
             </div>
             <button
               onClick={() => onLocationChange(null)}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
+              className="rounded-lg p-1 text-[#8a7a6d] transition-colors hover:bg-white/60 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               aria-label="清除位置"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -186,8 +189,8 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
 
       {/* 错误提示 */}
       {error && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-lg animate-slideUp">
-          <p className="text-sm text-red-600">{error}</p>
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-3 animate-slideUp">
+          <p className="text-sm font-semibold text-red-700">{error}</p>
         </div>
       )}
     </div>

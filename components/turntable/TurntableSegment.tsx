@@ -73,11 +73,10 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
   return (
     <g
       className={`
-        transition-opacity duration-300
+        transition-opacity duration-300 focus-visible:outline-none
         ${isSelected ? 'opacity-100' : 'opacity-95'}
         ${onClick ? 'cursor-pointer' : ''}
       `}
-      style={{ outline: 'none' }}
       onClick={handleClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -92,10 +91,10 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
       <path
         d={pathData}
         fill={color}
-        stroke="white"
-        strokeWidth="2"
-        className={`transition-all duration-300 ${
-          isSelected ? 'brightness-105' : ''
+        stroke="#fffaf1"
+        strokeWidth="3"
+        className={`transition-[filter,opacity] duration-300 ${
+          isSelected ? 'brightness-110 drop-shadow-md' : ''
         }`}
       />
 
@@ -113,18 +112,19 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
           dy="-0.5em"
           style={{
             fontSize: '13px',
-            fontWeight: 600,
-            fill: 'rgba(0,0,0,0.75)',
+            fontWeight: 800,
+            fill: '#181513',
           }}
         >
-          {name.length > 6 ? `${name.slice(0, 5)}...` : name}
+          {name.length > 6 ? `${name.slice(0, 5)}…` : name}
         </tspan>
         <tspan
           x={textX}
           dy="1.3em"
           style={{
             fontSize: '10px',
-            fill: 'rgba(0,0,0,0.5)',
+            fontWeight: 600,
+            fill: 'rgba(24,21,19,0.62)',
           }}
         >
           {cuisineType}

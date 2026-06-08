@@ -49,7 +49,7 @@ export const Toast: React.FC<ToastProps> = ({
       </svg>
     ),
     info: (
-      <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg className="w-5 h-5 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
     ),
@@ -60,14 +60,14 @@ export const Toast: React.FC<ToastProps> = ({
       className={`
         fixed bottom-20 left-1/2 -translate-x-1/2 z-[100]
         flex items-center gap-2 px-4 py-3
-        bg-white rounded-xl shadow-lg border border-gray-100
-        transition-all duration-200 ease-out
+        border border-black/10 bg-[#fffaf1]/94 rounded-2xl shadow-[0_18px_50px_rgba(24,21,19,0.18)] backdrop-blur-xl
+        transition-[opacity,transform] duration-200 ease-out
         ${isVisible && !isLeaving ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}
       `}
       role="alert"
     >
       {icons[type]}
-      <span className="text-sm font-medium text-gray-700">{message}</span>
+      <span className="text-sm font-semibold text-dark">{message}</span>
     </div>
   );
 };

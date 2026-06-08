@@ -40,6 +40,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
 }) => {
   // 验证是否可以搜索
   const canSearch = query.trim().length > 0 && query.trim().length <= 500 && location !== null && !isLoading;
+  const searchLabel = isLoading ? '正在寻找' : location ? '开始选择' : '先设置位置';
 
   // 处理灵感选择
   const handleSuggestionSelect = (suggestion: string) => {
@@ -47,82 +48,112 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
   };
 
   return (
-    <div className="w-full space-y-6 p-6 bg-white rounded-lg shadow-lg">
-      {/* 标题 */}
-      <div className="text-center">
-        <h2 className="text-2xl font-bold text-gray-900">今天吃啥？</h2>
-        <p className="mt-2 text-sm text-gray-600">
-          告诉我你的想法，让我帮你选择
-        </p>
-      </div>
+    <section className="mx-auto grid min-h-[calc(100dvh-7rem)] w-full max-w-7xl items-center gap-8 py-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)] lg:gap-12 lg:py-10">
+      <div className="space-y-7">
+        <div className="max-w-3xl">
+          <p className="mb-4 inline-flex rounded-full border border-black/10 bg-white/60 px-3 py-1 text-sm font-semibold text-[#6f6257] shadow-sm">
+            先说口味，再让转盘替你拍板
+          </p>
+          <h2 className="text-[clamp(2.75rem,8vw,5.8rem)] font-black leading-[0.95] tracking-tight text-dark text-balance">
+            今天吃啥，别再卡住。
+          </h2>
+          <p className="mt-5 max-w-xl text-base font-medium leading-7 text-[#66594f] sm:text-lg">
+            输入想吃的方向，定位附近餐厅，最后交给转盘做决定。
+          </p>
+        </div>
 
-      {/* 搜索输入 */}
-      <div>
-        <SearchInput
-          value={query}
-          onChange={onQueryChange}
-          onSubmit={onSearch}
-          disabled={isLoading}
-          error={error}
-        />
-      </div>
-
-      {/* 搜索按钮 */}
-      <div>
-        <Button
-          variant="primary"
-          size="lg"
-          onClick={onSearch}
-          disabled={!canSearch}
-          loading={isLoading}
-          className="w-full"
-          ariaLabel="开始搜索"
-        >
-          {isLoading ? '搜索中...' : '开始搜索'}
-        </Button>
-      </div>
-
-      {/* 提示信息 */}
-      {!location && (
-        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex items-start gap-2">
-            <svg
-              className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5"
-              fill="currentColor"
-              viewBox="0 0 20 20"
-            >
-              <path
-                fillRule="evenodd"
-                d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                clipRule="evenodd"
-              />
-            </svg>
-            <p className="text-sm text-blue-700">
-              请先设置您的位置，以便为您推荐附近的餐厅
-            </p>
+        <div className="decision-rail">
+          <div className="rounded-2xl border border-black/10 bg-white/58 p-4 shadow-sm">
+            <div className="text-2xl font-black text-primary">1</div>
+            <div className="mt-2 text-sm font-bold text-dark">说需求</div>
+            <p className="mt-1 text-xs leading-5 text-[#76695e]">清淡、重口、快餐或聚餐都可以</p>
+          </div>
+          <div className="rounded-2xl border border-black/10 bg-white/58 p-4 shadow-sm">
+            <div className="text-2xl font-black text-primary">2</div>
+            <div className="mt-2 text-sm font-bold text-dark">定范围</div>
+            <p className="mt-1 text-xs leading-5 text-[#76695e]">用当前位置或手动输入地址</p>
+          </div>
+          <div className="rounded-2xl border border-black/10 bg-white/58 p-4 shadow-sm">
+            <div className="text-2xl font-black text-primary">3</div>
+            <div className="mt-2 text-sm font-bold text-dark">转起来</div>
+            <p className="mt-1 text-xs leading-5 text-[#76695e]">少纠结，直接得到一个去处</p>
           </div>
         </div>
-      )}
-
-      {/* 位置选择 */}
-      <div>
-        <LocationPicker
-          location={location}
-          onLocationChange={onLocationChange}
-          isLoading={isLocating}
-          error={locationError}
-          onAutoLocate={onAutoLocate}
-          onManualAddressSubmit={onManualAddressSubmit}
-        />
       </div>
 
-      {/* 灵感建议 */}
-      <div>
-        <InspirationChips
-          onSelect={handleSuggestionSelect}
-          disabled={isLoading}
-        />
+      <div className="relative">
+        <div className="food-orbit mb-5 hidden sm:block" aria-hidden="true">
+          <div className="food-orbit__item">辣</div>
+          <div className="food-orbit__item">鲜</div>
+          <div className="food-orbit__item">热</div>
+          <div className="food-orbit__item">快</div>
+        </div>
+
+        <div className="surface-panel relative space-y-5 rounded-[2rem] p-5 sm:p-6">
+          <div>
+            <h3 className="text-2xl font-black tracking-tight text-dark">把选择交给转盘</h3>
+            <p className="mt-2 text-sm font-medium leading-6 text-[#76695e]">
+              写得越像真实想法，推荐越贴近当下。
+            </p>
+          </div>
+
+          <SearchInput
+            value={query}
+            onChange={onQueryChange}
+            onSubmit={onSearch}
+            disabled={isLoading}
+            error={error}
+          />
+
+          <LocationPicker
+            location={location}
+            onLocationChange={onLocationChange}
+            isLoading={isLocating}
+            error={locationError}
+            onAutoLocate={onAutoLocate}
+            onManualAddressSubmit={onManualAddressSubmit}
+          />
+
+          {!location && (
+            <div className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3">
+              <div className="flex items-start gap-3">
+                <svg
+                  className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary"
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                  aria-hidden="true"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                <p className="text-sm font-medium leading-6 text-[#7b3b2f]">
+                  先设置位置，才能推荐附近可以直接去的餐厅。
+                </p>
+              </div>
+            </div>
+          )}
+
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={onSearch}
+            disabled={!canSearch}
+            loading={isLoading}
+            className="w-full"
+            ariaLabel={searchLabel}
+          >
+            {searchLabel}
+          </Button>
+
+          <InspirationChips
+            onSelect={handleSuggestionSelect}
+            disabled={isLoading}
+          />
+        </div>
       </div>
-    </div>
+    </section>
   );
 };

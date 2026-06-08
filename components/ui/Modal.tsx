@@ -87,17 +87,17 @@ export const Modal: React.FC<ModalProps> = ({
       {/* 模态框内容 */}
       <div
         ref={modalRef}
-        className={`relative bg-white rounded-lg shadow-xl w-full ${sizeStyles[size]} animate-slideUp`}
+        className={`surface-panel relative w-full rounded-[1.75rem] ${sizeStyles[size]} animate-slideUp`}
       >
         {/* 头部 */}
         {title && (
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-            <h2 id="modal-title" className="text-xl font-semibold text-gray-900">
+          <div className="flex items-center justify-between border-b border-black/10 px-6 py-4">
+            <h2 id="modal-title" className="text-xl font-black tracking-tight text-dark">
               {title}
             </h2>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors focus:outline-none focus:ring-2 focus:ring-primary rounded"
+              className="rounded-lg p-1 text-[#8a7a6d] transition-colors hover:bg-white/60 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               aria-label="关闭模态框"
             >
               <svg
@@ -124,7 +124,7 @@ export const Modal: React.FC<ModalProps> = ({
 
         {/* 底部 */}
         {footer && (
-          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200">
+          <div className="flex items-center justify-end gap-3 border-t border-black/10 px-6 py-4">
             {footer}
           </div>
         )}

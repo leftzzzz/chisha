@@ -128,10 +128,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     <>
       {/* 标题 */}
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-900">分享海报</h2>
+        <h2 className="text-lg font-black tracking-tight text-dark">分享海报</h2>
         <button
           onClick={onClose}
-          className="p-2 -mr-2 text-gray-400 hover:text-gray-600 transition-colors"
+          className="-mr-2 rounded-lg p-2 text-[#8a7a6d] transition-colors hover:bg-white/60 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           aria-label="关闭"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -142,7 +142,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
       {/* 海报预览 */}
       <div
-        className="relative bg-gradient-to-b from-[#FFF5F0] to-[#FFF0F5] rounded-2xl overflow-hidden mb-4 cursor-pointer"
+        className="relative mb-4 cursor-pointer overflow-hidden rounded-3xl bg-[linear-gradient(180deg,#fffaf1,#f2e6d5)]"
         style={{ aspectRatio: '3/4' }}
         onClick={() => posterDataUrl && setShowFullscreen(true)}
       >
@@ -156,13 +156,13 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                 <path
                   d="M32 4 A28 28 0 0 1 60 32"
                   fill="none"
-                  stroke="#FF6B6B"
+                  stroke="#E84A32"
                   strokeWidth="4"
                   strokeLinecap="round"
                 />
               </svg>
             </div>
-            <p className="text-sm text-gray-500">正在生成海报...</p>
+            <p className="text-sm font-semibold text-[#76695e]">正在生成海报…</p>
           </div>
         ) : posterDataUrl ? (
           <>
@@ -182,7 +182,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           </>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center">
-            <p className="text-sm text-gray-400">海报生成失败</p>
+            <p className="text-sm font-semibold text-[#9a8d81]">海报生成失败</p>
           </div>
         )}
       </div>
@@ -216,7 +216,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
       {/* 链接预览 */}
       {shortUrl && (
-        <p className="text-xs text-gray-400 text-center mt-3 truncate">
+        <p className="mt-3 truncate text-center text-xs font-medium text-[#9a8d81]">
           {shortUrl}
         </p>
       )}
@@ -263,7 +263,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
         {/* 悬浮卡片 */}
         <div className="fixed inset-0 z-[101] flex items-center justify-center p-4">
           <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6"
+            className="surface-panel max-h-[90vh] w-full max-w-md overflow-y-auto rounded-[2rem] p-6"
             onClick={(e) => e.stopPropagation()}
           >
             {content}

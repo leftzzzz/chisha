@@ -14,12 +14,12 @@ export interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ onHistoryClick }) => {
   return (
-    <header className="flex-shrink-0 z-40 w-full h-16 bg-white border-b border-gray-200 shadow-sm">
-      <div className="container mx-auto px-4 h-full">
+    <header className="flex-shrink-0 z-40 w-full border-b border-black/10 bg-[#fffaf1]/78 backdrop-blur-xl">
+      <div className="mx-auto h-16 w-full max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-full">
           {/* Logo 和标题 */}
-          <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-            <div className="w-10 h-10 rounded-lg overflow-hidden shadow-md">
+          <Link href="/" className="group flex items-center gap-3 transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-[#fffaf1] rounded-2xl">
+            <div className="w-10 h-10 rounded-2xl overflow-hidden shadow-[0_12px_30px_rgba(232,74,50,0.24)] ring-1 ring-white/70 transition-transform duration-300 group-hover:-rotate-3 group-hover:scale-105">
               <Image
                 src="/logo.png"
                 alt="今天吃啥"
@@ -29,8 +29,8 @@ export const Header: React.FC<HeaderProps> = ({ onHistoryClick }) => {
               />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-gray-900">今天吃啥</h1>
-              <p className="text-xs text-gray-500">让选择变得简单</p>
+              <h1 className="text-xl font-black tracking-tight text-dark">今天吃啥</h1>
+              <p className="text-xs font-medium text-[#6f6257]">让选择变得简单</p>
             </div>
           </Link>
 
@@ -39,7 +39,7 @@ export const Header: React.FC<HeaderProps> = ({ onHistoryClick }) => {
             {onHistoryClick ? (
               <button
                 onClick={onHistoryClick}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 hover:text-primary hover:bg-gray-50 rounded-lg transition-colors"
+                className="flex items-center gap-2 rounded-full border border-black/10 bg-white/58 px-4 py-2 text-sm font-semibold text-[#342c27] shadow-sm transition-[background-color,color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:bg-white hover:text-primary hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-[#fffaf1]"
                 aria-label="查看历史记录"
               >
                 <svg
@@ -60,7 +60,7 @@ export const Header: React.FC<HeaderProps> = ({ onHistoryClick }) => {
             ) : (
               <Link
                 href="/history"
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 hover:text-primary hover:bg-gray-50 rounded-lg transition-colors"
+                className="flex items-center gap-2 rounded-full border border-black/10 bg-white/58 px-4 py-2 text-sm font-semibold text-[#342c27] shadow-sm transition-[background-color,color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:bg-white hover:text-primary hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-[#fffaf1]"
                 aria-label="查看历史记录"
               >
                 <svg

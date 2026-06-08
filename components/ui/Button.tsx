@@ -30,14 +30,14 @@ export const Button: React.FC<ButtonProps> = ({
   ariaLabel,
 }) => {
   // 基础样式
-  const baseStyles = 'inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
+  const baseStyles = 'inline-flex items-center justify-center whitespace-nowrap font-semibold rounded-xl transition-[background-color,color,border-color,box-shadow,transform] duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:active:scale-100';
 
   // 变体样式
   const variantStyles = {
-    primary: 'bg-primary hover:bg-primary/90 text-white focus:ring-primary',
-    secondary: 'bg-secondary hover:bg-secondary/90 text-white focus:ring-secondary',
-    danger: 'bg-red-500 hover:bg-red-600 text-white focus:ring-red-500',
-    success: 'bg-green-500 hover:bg-green-600 text-white focus:ring-green-500',
+    primary: 'bg-primary text-white shadow-[0_14px_34px_rgba(232,74,50,0.28)] hover:bg-[#d33e28] focus-visible:ring-primary focus-visible:ring-offset-[#fffaf1]',
+    secondary: 'border border-black/10 bg-white/72 text-[#251f1b] shadow-sm hover:bg-white hover:border-black/20 focus-visible:ring-secondary focus-visible:ring-offset-[#fffaf1]',
+    danger: 'bg-[#b83222] hover:bg-[#9f2b1e] text-white shadow-[0_14px_34px_rgba(184,50,34,0.22)] focus-visible:ring-[#b83222] focus-visible:ring-offset-[#fffaf1]',
+    success: 'bg-secondary hover:bg-[#1b483c] text-white shadow-[0_14px_34px_rgba(35,90,74,0.22)] focus-visible:ring-secondary focus-visible:ring-offset-[#fffaf1]',
   };
 
   // 尺寸样式
@@ -48,7 +48,7 @@ export const Button: React.FC<ButtonProps> = ({
   };
 
   // 悬停效果 - 放大
-  const hoverEffect = !disabled && !loading ? 'hover:scale-105' : '';
+  const hoverEffect = !disabled && !loading ? 'hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98]' : '';
 
   // 组合样式
   const combinedClassName = `${baseStyles} ${variantStyles[variant]} ${sizeStyles[size]} ${hoverEffect} ${className}`;

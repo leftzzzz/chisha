@@ -91,7 +91,7 @@ export const Loading: React.FC<LoadingProps> = ({
           {message}
         </p>
       )}
-      <span className="sr-only">加载中...</span>
+      <span className="sr-only">加载中…</span>
     </div>
   );
 };

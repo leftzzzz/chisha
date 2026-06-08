@@ -8,6 +8,8 @@ declare global {
   }
 
   namespace AMap {
+    type EventCallback = (...args: unknown[]) => void;
+
     // 地图类
     class Map {
       constructor(container: string | HTMLElement, opts?: MapOptions);
@@ -20,8 +22,8 @@ declare global {
       getZoom(): number;
       setBounds(bounds: Bounds, immediately?: boolean, padding?: number[]): void;
       destroy(): void;
-      on(event: string, callback: Function): void;
-      off(event: string, callback?: Function): void;
+      on(event: string, callback: EventCallback): void;
+      off(event: string, callback?: EventCallback): void;
     }
 
     // 地图配置
@@ -29,7 +31,7 @@ declare global {
       zoom?: number;
       center?: [number, number] | LngLat;
       mapStyle?: string;
-      [key: string]: any;
+      [key: string]: unknown;
     }
 
     // 标记
@@ -38,8 +40,8 @@ declare global {
       setPosition(position: [number, number] | LngLat): void;
       getPosition(): LngLat;
       setMap(map: Map | null): void;
-      on(event: string, callback: Function): void;
-      off(event: string, callback?: Function): void;
+      on(event: string, callback: EventCallback): void;
+      off(event: string, callback?: EventCallback): void;
     }
 
     interface MarkerOptions {
@@ -48,7 +50,9 @@ declare global {
       title?: string;
       icon?: string | Icon;
       offset?: Pixel;
-      [key: string]: any;
+      content?: string | HTMLElement;
+      zIndex?: number;
+      [key: string]: unknown;
     }
 
     // 位置坐标
@@ -82,7 +86,7 @@ declare global {
       size?: Size;
       imageSize?: Size;
       image?: string;
-      [key: string]: any;
+      [key: string]: unknown;
     }
 
     // 基类
@@ -93,11 +97,11 @@ declare global {
     // POI 搜索
     class PlaceSearch {
       constructor(opts?: PlaceSearchOptions);
-      search(keyword: string, callback?: (status: string, result: any) => void): void;
-      searchNearBy(keyword: string, center: [number, number] | LngLat, radius?: number, callback?: (status: string, result: any) => void): void;
-      searchInBounds(keyword: string, bounds: Bounds, callback?: (status: string, result: any) => void): void;
-      on(event: string, callback: Function): void;
-      off(event: string, callback?: Function): void;
+      search(keyword: string, callback?: (status: string, result: unknown) => void): void;
+      searchNearBy(keyword: string, center: [number, number] | LngLat, radius?: number, callback?: (status: string, result: unknown) => void): void;
+      searchInBounds(keyword: string, bounds: Bounds, callback?: (status: string, result: unknown) => void): void;
+      on(event: string, callback: EventCallback): void;
+      off(event: string, callback?: EventCallback): void;
     }
 
     interface PlaceSearchOptions {
@@ -106,19 +110,19 @@ declare global {
       pageIndex?: number;
       city?: string;
       citylimit?: boolean;
-      [key: string]: any;
+      [key: string]: unknown;
     }
 
     // 地理编码
     class Geocoder {
       constructor(opts?: GeocoderOptions);
-      getLocation(address: string, callback?: (status: string, result: any) => void): void;
-      getAddress(lnglat: [number, number] | LngLat, callback?: (status: string, result: any) => void): void;
+      getLocation(address: string, callback?: (status: string, result: unknown) => void): void;
+      getAddress(lnglat: [number, number] | LngLat, callback?: (status: string, result: unknown) => void): void;
     }
 
     interface GeocoderOptions {
       city?: string;
-      [key: string]: any;
+      [key: string]: unknown;
     }
 
     // 边界
@@ -143,7 +147,7 @@ declare global {
       closeWhenClickMap?: boolean;
       content?: string | HTMLElement;
       offset?: Pixel;
-      [key: string]: any;
+      [key: string]: unknown;
     }
   }
 }

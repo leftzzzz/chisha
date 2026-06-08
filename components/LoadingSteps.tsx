@@ -111,7 +111,7 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
   const { status, message, currentKeywords, round, total, foundRestaurants } = progress;
 
   return (
-    <div className="w-full max-w-md mx-auto p-8 bg-white rounded-lg shadow-lg">
+    <div className="surface-panel mx-auto w-full max-w-lg rounded-[2rem] p-8">
       {/* 主状态显示 */}
       <div className="flex items-center gap-4 mb-6">
         <div
@@ -124,10 +124,10 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
           <StatusIcon status={status} />
         </div>
         <div className="flex-1">
-          <h3 className="text-lg font-semibold text-gray-800">
+          <h3 className="text-lg font-black tracking-tight text-dark">
             {getStatusLabel(status)}
           </h3>
-          <p className="text-sm text-gray-600 mt-1">
+          <p className="mt-1 text-sm font-medium text-[#66594f]">
             {message}
           </p>
         </div>
@@ -142,7 +142,7 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
               {currentKeywords.map((keyword, index) => (
                 <span
                   key={index}
-                  className="px-3 py-1 bg-primary/10 text-primary text-sm rounded-full"
+                  className="rounded-full bg-primary/10 px-3 py-1 text-sm font-semibold text-primary"
                 >
                   {keyword}
                 </span>
@@ -151,12 +151,12 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
           )}
 
           {/* 搜索轮数和找到数量 */}
-          <div className="flex items-center justify-between text-sm text-gray-500">
+          <div className="flex items-center justify-between text-sm font-medium text-[#76695e]">
             {round && (
               <span>第 {round} 轮搜索</span>
             )}
             {total !== undefined && total > 0 && (
-              <span className="text-primary font-medium">
+              <span className="font-bold text-primary">
                 已找到 {total} 家
               </span>
             )}
@@ -167,19 +167,19 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
       {/* 实时餐厅列表展示 */}
       {foundRestaurants && foundRestaurants.length > 0 && status !== 'done' && (
         <div className="mb-6">
-          <div className="text-xs text-gray-400 mb-2">待匹配餐厅</div>
+          <div className="mb-2 text-xs font-bold text-[#9a8d81]">待匹配餐厅</div>
           <div className="max-h-40 overflow-y-auto space-y-2">
             {foundRestaurants.slice(0, 8).map((restaurant, index) => (
               <div
                 key={restaurant.id}
-                className="flex items-center justify-between p-2 bg-gray-50 rounded-lg animate-fade-in"
+                className="flex items-center justify-between rounded-2xl border border-black/10 bg-white/58 p-2 animate-fade-in"
                 style={{ animationDelay: `${index * 50}ms` }}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-gray-800 truncate">
+                  <div className="truncate text-sm font-bold text-dark">
                     {restaurant.name}
                   </div>
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs font-medium text-[#76695e]">
                     {restaurant.cuisineType}
                     {restaurant.distance && (
                       <span className="ml-2">
@@ -194,8 +194,8 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
               </div>
             ))}
             {foundRestaurants.length > 8 && (
-              <div className="text-xs text-gray-400 text-center py-1">
-                还有 {foundRestaurants.length - 8} 家...
+              <div className="py-1 text-center text-xs font-medium text-[#9a8d81]">
+                还有 {foundRestaurants.length - 8} 家…
               </div>
             )}
           </div>
@@ -204,9 +204,9 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
 
       {/* 进度条 */}
       {status !== 'error' && status !== 'done' && (
-        <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/10">
           <div
-            className="bg-primary h-full rounded-full transition-all duration-500 ease-out"
+            className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
             style={{
               width: status === 'thinking' ? '15%' :
                      status === 'searching' ? `${Math.min(20 + (total || 0) * 5, 75)}%` :
@@ -219,10 +219,10 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
       {/* 完成状态 */}
       {status === 'done' && total !== undefined && (
         <div className="text-center py-4">
-          <div className="text-3xl font-bold text-primary mb-2">
+          <div className="mb-2 text-3xl font-black text-primary">
             {total}
           </div>
-          <div className="text-sm text-gray-500">
+          <div className="text-sm font-semibold text-[#76695e]">
             家餐厅已为您准备好
           </div>
         </div>
@@ -231,8 +231,8 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({ progress }) => {
       {/* 提示文本 */}
       {status !== 'done' && status !== 'error' && (
         <div className="mt-6 text-center">
-          <p className="text-xs text-gray-400">
-            AI 正在智能搜索，请稍候...
+          <p className="text-xs font-medium text-[#9a8d81]">
+            AI 正在智能搜索，请稍候…
           </p>
         </div>
       )}
@@ -252,7 +252,7 @@ export interface LegacyLoadingStepsProps {
 export const LegacyLoadingSteps: React.FC<LegacyLoadingStepsProps> = ({ step, message }) => {
   const progress: SearchProgress = {
     status: step === 1 ? 'thinking' : 'searching',
-    message: message || (step === 1 ? '分析您的口味偏好...' : '查找符合条件的餐厅...'),
+    message: message || (step === 1 ? '分析您的口味偏好…' : '查找符合条件的餐厅…'),
   };
   return <LoadingSteps progress={progress} />;
 };
