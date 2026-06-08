@@ -36,32 +36,52 @@ export const Map: React.FC<MapProps> = ({
   const markersRef = useRef<AMap.Marker[]>([]);
   const userMarkerRef = useRef<AMap.Marker | null>(null);
   const infoWindowRef = useRef<AMap.InfoWindow | null>(null);
+  const initialMapOptionsRef = useRef({ center, userLocation, restaurants, zoom });
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // 加载高德地图 API
   useEffect(() => {
-    const loadAMapScript = (): Promise<typeof AMap> => {
+    const getAMapApiKey = async (): Promise<string> => {
+      const publicKey = process.env.NEXT_PUBLIC_AMAP_KEY?.trim();
+      if (publicKey) {
+        return publicKey;
+      }
+
+      const response = await fetch('/api/map/config', { cache: 'no-store' });
+      if (!response.ok) {
+        return '';
+      }
+
+      const config = await response.json() as { amapKey?: string };
+      return config.amapKey?.trim() ?? '';
+    };
+
+    const loadAMapScript = async (): Promise<typeof AMap> => {
+      if (window.AMap) {
+        return window.AMap;
+      }
+
+      // 配置安全代理（安全密钥通过服务端代理，不暴露在前端）
+      // 参考: https://lbs.amap.com/api/javascript-api-v2/guide/abc/jscode
+      (window as unknown as { _AMapSecurityConfig: { serviceHost: string } })._AMapSecurityConfig = {
+        serviceHost: `${window.location.origin}/_AMapService`,
+      };
+
+      let apiKey = '';
+      try {
+        apiKey = await getAMapApiKey();
+      } catch {
+        apiKey = '';
+      }
+
+      if (!apiKey) {
+        throw new Error('AMAP map API key is not configured');
+      }
+
       return new Promise((resolve, reject) => {
-        if (window.AMap) {
-          resolve(window.AMap);
-          return;
-        }
-
-        // 配置安全代理（安全密钥通过服务端代理，不暴露在前端）
-        // 参考: https://lbs.amap.com/api/javascript-api-v2/guide/abc/jscode
-        (window as unknown as { _AMapSecurityConfig: { serviceHost: string } })._AMapSecurityConfig = {
-          serviceHost: `${window.location.origin}/_AMapService`,
-        };
-
-        const apiKey = process.env.NEXT_PUBLIC_AMAP_KEY || '';
-        if (!apiKey) {
-          reject(new Error('NEXT_PUBLIC_AMAP_KEY is not configured'));
-          return;
-        }
-
         const script = document.createElement('script');
-        script.src = `https://webapi.amap.com/maps?v=2.0&key=${apiKey}`;
+        script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(apiKey)}`;
         script.async = true;
         script.onload = () => {
           if (window.AMap) {
@@ -81,10 +101,14 @@ export const Map: React.FC<MapProps> = ({
 
         if (!mapContainerRef.current) return;
 
-        const mapCenter = center || userLocation || restaurants[0]?.location || { lng: 114.05, lat: 22.55 };
+        const initialOptions = initialMapOptionsRef.current;
+        const mapCenter = initialOptions.center
+          || initialOptions.userLocation
+          || initialOptions.restaurants[0]?.location
+          || { lng: 114.05, lat: 22.55 };
 
         mapRef.current = new window.AMap.Map(mapContainerRef.current, {
-          zoom,
+          zoom: initialOptions.zoom,
           center: [mapCenter.lng, mapCenter.lat],
           viewMode: '2D',
           resizeEnable: true,
@@ -98,7 +122,7 @@ export const Map: React.FC<MapProps> = ({
       } catch (err) {
         console.error('地图加载失败:', err);
         const errorMessage = err instanceof Error ? err.message : '地图加载失败';
-        if (errorMessage.includes('NEXT_PUBLIC_AMAP_KEY')) {
+        if (errorMessage.includes('API key')) {
           setError('地图 API Key 未配置');
         } else {
           setError('地图加载失败');

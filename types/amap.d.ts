@@ -151,5 +151,6 @@ declare global {
     }
   }
 }
+}
 
 export {};

@@ -86,13 +86,6 @@ export function useLocation(): UseLocationReturn {
   const [error, setError] = useState<string | null>(null);
 
   /**
-   * 从缓存加载位置
-   */
-  useEffect(() => {
-    loadCachedLocation();
-  }, []);
-
-  /**
    * 加载缓存的位置
    */
   const loadCachedLocation = useCallback(() => {
@@ -121,6 +114,13 @@ export function useLocation(): UseLocationReturn {
       sessionStorage.removeItem(CACHE_CONFIG.key);
     }
   }, []);
+
+  /**
+   * 从缓存加载位置
+   */
+  useEffect(() => {
+    loadCachedLocation();
+  }, [loadCachedLocation]);
 
   /**
    * 缓存位置
