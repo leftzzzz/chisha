@@ -49,7 +49,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
 
   return (
     <section className="mx-auto grid w-full max-w-7xl gap-5 py-2 sm:gap-8 sm:py-6 lg:min-h-[calc(100dvh-7rem)] lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)] lg:items-center lg:gap-12 lg:py-10">
-      <div className="space-y-4 sm:space-y-7">
+      <div className="hidden space-y-4 md:block sm:space-y-7">
         <div className="max-w-3xl">
           <p className="mb-3 inline-flex rounded-full border border-black/10 bg-white/60 px-3 py-1 text-xs font-semibold text-[#6f6257] shadow-sm sm:mb-4 sm:text-sm">
             先说口味，再让转盘替你拍板
@@ -82,7 +82,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
       </div>
 
       <div className="relative">
-        <div className="food-orbit mb-5 hidden sm:block" aria-hidden="true">
+        <div className="food-orbit mb-5 hidden md:block" aria-hidden="true">
           <div className="food-orbit__item">辣</div>
           <div className="food-orbit__item">鲜</div>
           <div className="food-orbit__item">热</div>
@@ -90,7 +90,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
         </div>
 
         <div className="surface-panel relative space-y-4 rounded-[1.5rem] p-4 sm:space-y-5 sm:rounded-[2rem] sm:p-6">
-          <div>
+          <div className="hidden md:block">
             <h3 className="text-xl font-black text-dark sm:text-2xl">把选择交给转盘</h3>
             <p className="mt-1.5 text-sm font-medium leading-6 text-[#76695e] sm:mt-2">
               写得越像真实想法，推荐越贴近当下。
