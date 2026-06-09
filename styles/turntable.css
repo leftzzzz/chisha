@@ -18,16 +18,23 @@
   animation-fill-mode: forwards;
 }
 
-/* 转盘悬停效果 */
-.turntable-segment:hover {
-  filter: brightness(1.1);
-  transition: filter 0.2s ease-in-out;
+/* 转盘扇区交互态 */
+.turntable-segment-button {
+  outline: none;
 }
 
-/* 选中扇形高亮 */
-.turntable-segment-selected {
-  filter: brightness(1.15) drop-shadow(0 4px 6px rgba(0, 0, 0, 0.2));
-  transform-origin: center;
+.turntable-segment-button:focus {
+  outline: none;
+}
+
+.turntable-segment-button:hover .turntable-segment-path,
+.turntable-segment-button:focus-visible .turntable-segment-path {
+  filter: brightness(1.08) saturate(1.05);
+}
+
+.turntable-segment-button:focus-visible .turntable-segment-focus-ring,
+.turntable-segment-button:focus-visible .turntable-segment-focus-arc {
+  opacity: 1;
 }
 
 /* GPU 加速 */

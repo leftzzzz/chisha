@@ -12,6 +12,7 @@ export interface TurntableSegmentProps {
   cuisineType: string;
   color: string;
   isSelected: boolean;
+  hasSelection: boolean;
   totalSegments: number;
   onClick?: (index: number) => void;
 }
@@ -22,6 +23,7 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
   cuisineType,
   color,
   isSelected,
+  hasSelection,
   totalSegments,
   onClick,
 }) => {
@@ -55,6 +57,10 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
     A ${radius} ${radius} 0 ${largeArcFlag} 1 ${endX} ${endY}
     Z
   `;
+  const outerArcData = `
+    M ${startX} ${startY}
+    A ${radius} ${radius} 0 ${largeArcFlag} 1 ${endX} ${endY}
+  `;
 
   // 文本位置 (在扇形的中间)
   const textAngle = startAngle + segmentAngle / 2;
@@ -62,6 +68,9 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
   const textRadius = radius * 0.65;
   const textX = centerX + textRadius * Math.cos(textRad - Math.PI / 2);
   const textY = centerY + textRadius * Math.sin(textRad - Math.PI / 2);
+  const badgeRadius = radius * 0.86;
+  const badgeX = centerX + badgeRadius * Math.cos(textRad - Math.PI / 2);
+  const badgeY = centerY + badgeRadius * Math.sin(textRad - Math.PI / 2);
 
   // 处理点击
   const handleClick = () => {
@@ -73,13 +82,15 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
   return (
     <g
       className={`
-        transition-opacity duration-300 focus-visible:outline-none
-        ${isSelected ? 'opacity-100' : 'opacity-95'}
+        turntable-segment-button transition-opacity duration-300
+        ${hasSelection ? (isSelected ? 'opacity-100' : 'opacity-60') : 'opacity-95'}
         ${onClick ? 'cursor-pointer' : ''}
       `}
       onClick={handleClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
+      aria-label={`${isSelected ? '已选中，' : ''}${name}，${cuisineType}`}
+      aria-pressed={onClick ? isSelected : undefined}
       onKeyDown={(e) => {
         if (onClick && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault();
@@ -93,8 +104,39 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
         fill={color}
         stroke="#fffaf1"
         strokeWidth="3"
-        className={`transition-[filter,opacity] duration-300 ${
-          isSelected ? 'brightness-110 drop-shadow-md' : ''
+        className="turntable-segment-path transition-[filter,opacity] duration-300"
+        style={isSelected ? { filter: 'brightness(1.08) saturate(1.05)' } : undefined}
+      />
+
+      {/* 选中/键盘焦点高亮 - 跟随扇形形状，避免出现方框感 */}
+      <path
+        d={pathData}
+        fill="rgba(255, 250, 241, 0.16)"
+        stroke="#fffaf1"
+        strokeLinejoin="round"
+        strokeWidth="5"
+        className={`turntable-segment-focus-ring pointer-events-none transition-opacity duration-300 ${
+          isSelected ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
+      <path
+        d={outerArcData}
+        fill="none"
+        stroke="#fff3c4"
+        strokeLinecap="round"
+        strokeWidth="14"
+        className={`turntable-segment-focus-arc pointer-events-none transition-opacity duration-300 ${
+          isSelected ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
+      <path
+        d={outerArcData}
+        fill="none"
+        stroke="#f5b84b"
+        strokeLinecap="round"
+        strokeWidth="6"
+        className={`turntable-segment-focus-arc pointer-events-none transition-opacity duration-300 ${
+          isSelected ? 'opacity-100' : 'opacity-0'
         }`}
       />
 
@@ -114,6 +156,9 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
             fontSize: '13px',
             fontWeight: 800,
             fill: '#181513',
+            paintOrder: 'stroke',
+            stroke: isSelected ? 'rgba(255,250,241,0.9)' : 'transparent',
+            strokeWidth: isSelected ? 3 : 0,
           }}
         >
           {name.length > 6 ? `${name.slice(0, 5)}…` : name}
@@ -124,12 +169,39 @@ export const TurntableSegment: React.FC<TurntableSegmentProps> = ({
           style={{
             fontSize: '10px',
             fontWeight: 600,
-            fill: 'rgba(24,21,19,0.62)',
+            fill: isSelected ? '#181513' : 'rgba(24,21,19,0.62)',
+            paintOrder: 'stroke',
+            stroke: isSelected ? 'rgba(255,250,241,0.82)' : 'transparent',
+            strokeWidth: isSelected ? 2.5 : 0,
           }}
         >
           {cuisineType}
         </tspan>
       </text>
+
+      {isSelected && (
+        <g
+          className="pointer-events-none"
+          transform={`rotate(${textAngle} ${badgeX} ${badgeY})`}
+        >
+          <circle
+            cx={badgeX}
+            cy={badgeY}
+            r="15"
+            fill="#181513"
+            stroke="#fffaf1"
+            strokeWidth="3"
+          />
+          <path
+            d={`M ${badgeX - 6.5} ${badgeY + 0.5} L ${badgeX - 1.5} ${badgeY + 5.5} L ${badgeX + 7} ${badgeY - 5.5}`}
+            fill="none"
+            stroke="#f5b84b"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="3.2"
+          />
+        </g>
+      )}
     </g>
   );
 };

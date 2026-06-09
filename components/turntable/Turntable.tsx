@@ -48,11 +48,26 @@ export const Turntable: React.FC<TurntableProps> = ({
   // 合并餐厅和自定义选项，限制最多 8 个扇形
   const allOptions = getTurntableOptions(restaurants, customOptions);
   const totalSegments = allOptions.length;
+  const hasSelection = selectedIndex >= 0 && selectedIndex < totalSegments;
   const wheelRef = useRef<HTMLDivElement>(null);
   const previousRotationRef = useRef(rotation);
   const canUseWebAnimations =
     typeof HTMLElement !== 'undefined'
     && typeof HTMLElement.prototype.animate === 'function';
+
+  const renderSegment = (option: Restaurant | CustomOption, index: number) => (
+    <TurntableSegment
+      key={option.id}
+      index={index}
+      name={option.name}
+      cuisineType={isCustomOption(option) ? '自定义' : option.cuisineType}
+      color={COLORS[index % COLORS.length]}
+      isSelected={selectedIndex === index}
+      hasSelection={hasSelection}
+      totalSegments={totalSegments}
+      onClick={!isSpinning ? onSegmentClick : undefined}
+    />
+  );
 
   useLayoutEffect(() => {
     const fromRotation = previousRotationRef.current;
@@ -132,18 +147,10 @@ export const Turntable: React.FC<TurntableProps> = ({
           />
 
           {/* 扇形 */}
-          {allOptions.map((option, index) => (
-            <TurntableSegment
-              key={isCustomOption(option) ? option.id : option.id}
-              index={index}
-              name={option.name}
-              cuisineType={isCustomOption(option) ? '自定义' : option.cuisineType}
-              color={COLORS[index % COLORS.length]}
-              isSelected={selectedIndex === index}
-              totalSegments={totalSegments}
-              onClick={!isSpinning ? onSegmentClick : undefined}
-            />
-          ))}
+          {allOptions.map((option, index) =>
+            index === selectedIndex ? null : renderSegment(option, index)
+          )}
+          {hasSelection && renderSegment(allOptions[selectedIndex], selectedIndex)}
 
           {/* 中心圆 - 简洁白色 */}
           <circle
