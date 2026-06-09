@@ -90,6 +90,13 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
         </div>
 
         <div className="surface-panel relative space-y-4 rounded-[1.5rem] p-4 sm:space-y-5 sm:rounded-[2rem] sm:p-6">
+          <div className="md:hidden">
+            <h2 className="text-2xl font-black leading-tight text-dark">今天想吃什么？</h2>
+            <p className="mt-1.5 text-sm font-medium leading-6 text-[#76695e]">
+              说口味、距离、预算或场景，我来帮你选。
+            </p>
+          </div>
+
           <div className="hidden md:block">
             <h3 className="text-xl font-black text-dark sm:text-2xl">把选择交给转盘</h3>
             <p className="mt-1.5 text-sm font-medium leading-6 text-[#76695e] sm:mt-2">
