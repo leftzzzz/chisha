@@ -4,6 +4,7 @@
 
 import type { Restaurant } from '@/types';
 import { logger } from './logger';
+import { getRestaurantBrand } from './restaurantIdentity';
 
 /**
  * 合并并过滤餐厅列表
@@ -43,6 +44,21 @@ export function combineAndFilterRestaurants(
 
   // 转换为数组
   let unique = Array.from(uniqueMap.values());
+
+  // 品牌级去重：同一品牌只保留信息最完整的一家
+  const brandSeen = new Map<string, Restaurant>();
+  for (const r of unique) {
+    const brand = getRestaurantBrand(r);
+    if (!brand) {
+      brandSeen.set(`__noidx_${r.name}`, r);
+      continue;
+    }
+    const existing = brandSeen.get(brand);
+    if (!existing || shouldReplace(existing, r)) {
+      brandSeen.set(brand, r);
+    }
+  }
+  unique = Array.from(brandSeen.values());
 
   // 按距离排序
   unique.sort((a, b) => {

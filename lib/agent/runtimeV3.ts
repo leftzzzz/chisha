@@ -9,6 +9,7 @@ import {
 import { evaluateSearchResult, mergeCandidates } from './evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
+import { countDistinctBrands } from '@/lib/restaurantIdentity';
 import {
   isOpenExplorationAuthorized,
   isSearchIntentAuthorizedForPrimary,
@@ -893,7 +894,8 @@ function buildExpansionSearchBeforeFinish(context: AgentV3Context): AgentAction 
   const primaryCandidates = context.candidates.filter((candidate) =>
     isPrimaryRecommendationAllowed(candidate, context)
   );
-  if (primaryCandidates.length >= context.targetCount) {
+  const distinctBrands = countDistinctBrands(primaryCandidates.map((c) => c.restaurant));
+  if (distinctBrands >= context.targetCount) {
     return null;
   }
 
@@ -905,7 +907,7 @@ function buildExpansionSearchBeforeFinish(context: AgentV3Context): AgentAction 
     };
   }
 
-  const broadenedTarget = primaryCandidates.length === 0
+  const broadenedTarget = distinctBrands === 0
     ? nextUntriedGoalTarget(context, context.goal.broadenedTargets, context.goal.broadenedKeywords)
     : null;
   if (broadenedTarget) {

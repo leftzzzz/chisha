@@ -57,7 +57,7 @@ describe('DataTransform', () => {
       expect(result).toHaveLength(1);
     });
 
-    it('should keep restaurants with different locations', () => {
+    it('should dedup same-brand restaurants at different locations', () => {
       const r1 = createMockRestaurant({
         id: 'r1',
         name: '海底捞',
@@ -71,7 +71,7 @@ describe('DataTransform', () => {
 
       const result = combineAndFilterRestaurants([r1, r2]);
 
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(1);
     });
 
     it('should prefer restaurant with more complete information', () => {

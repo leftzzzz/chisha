@@ -384,7 +384,7 @@ describe('runSearchAgentV3', () => {
 
     expect(result.paused).toBe(true);
     expect(result.restaurants).toEqual([]);
-    expect(result.unmetConstraints?.join('')).toContain('通过主推荐准入');
+    expect(result.unmetConstraints?.join('')).toContain('不同品牌');
   });
 
   it('promotes existing broadened candidates after the user authorizes broadening', async () => {

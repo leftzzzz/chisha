@@ -1,5 +1,23 @@
 import type { Restaurant } from '@/types';
 
+/**
+ * Extract brand name from a restaurant name.
+ * Strips branch info in parentheses: "麦当劳(国贸店)" → "麦当劳"
+ * Normalizes by removing common suffixes and spaces.
+ */
+export function getRestaurantBrand(restaurant: Restaurant): string | null {
+  const name = restaurant.name?.trim();
+  if (!name) return null;
+
+  const brand = name
+    .replace(/[（(].*$/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+
+  return brand.length > 0 ? brand : null;
+}
+
 export function getRestaurantIdentityKeys(restaurant: Restaurant): string[] {
   const keys = new Set<string>();
   const id = normalizeIdentityPart(restaurant.id);
@@ -33,6 +51,21 @@ export function getRestaurantPlaceIdentityKey(restaurant: Restaurant): string | 
   }
 
   return `${name}:${lat}:${lng}`;
+}
+
+/**
+ * Count distinct brands among a list of restaurants.
+ * Used for result-count validation: e.g. 8 results from 2 brands should be treated as 2.
+ */
+export function countDistinctBrands(restaurants: Restaurant[]): number {
+  const brands = new Set<string>();
+  for (const r of restaurants) {
+    const brand = getRestaurantBrand(r);
+    if (brand) {
+      brands.add(brand);
+    }
+  }
+  return brands.size;
 }
 
 export function getRestaurantInfoScore(restaurant: Restaurant): number {

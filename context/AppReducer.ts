@@ -11,7 +11,7 @@
  */
 
 import { AppState, AppAction, Restaurant } from '@/types';
-import { getRestaurantIdentityKeys } from '@/lib/restaurantIdentity';
+import { getRestaurantIdentityKeys, getRestaurantBrand } from '@/lib/restaurantIdentity';
 import { MAX_TURNTABLE_OPTIONS, hasTurntableCapacity } from '@/lib/turntableOptions';
 
 /**
@@ -495,11 +495,20 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
 function dedupeRestaurants(restaurants: Restaurant[], seenKeys = new Set<string>()): Restaurant[] {
   const deduped: Restaurant[] = [];
+  const brandSeen = new Map<string, string>(); // brand → first restaurant id
 
   for (const restaurant of restaurants) {
     const keys = getRestaurantIdentityKeys(restaurant);
     if (keys.some((key) => seenKeys.has(key))) {
       continue;
+    }
+
+    const brand = getRestaurantBrand(restaurant);
+    if (brand) {
+      if (brandSeen.has(brand)) {
+        continue;
+      }
+      brandSeen.set(brand, restaurant.id);
     }
 
     deduped.push(restaurant);

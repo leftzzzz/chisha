@@ -9,7 +9,7 @@ import {
   isOpenExplorationAuthorized,
   isSearchIntentAuthorizedForPrimary,
 } from './authorization';
-import { getRestaurantIdentityKeys, getRestaurantInfoScore } from '@/lib/restaurantIdentity';
+import { getRestaurantIdentityKeys, getRestaurantInfoScore, getRestaurantBrand, countDistinctBrands } from '@/lib/restaurantIdentity';
 
 export interface FinalGuardResult {
   primaryCandidates: RestaurantCandidate[];
@@ -170,6 +170,7 @@ function dedupeCandidatesForRecommendation(
 ): RestaurantCandidate[] {
   const candidateMap = new Map<string, RestaurantCandidate>();
   const deduped: RestaurantCandidate[] = [];
+  const brandSeen = new Map<string, RestaurantCandidate>();
 
   for (const candidate of candidates) {
     const keys = getRestaurantIdentityKeys(candidate.restaurant);
@@ -178,6 +179,19 @@ function dedupeCandidatesForRecommendation(
       .find((item): item is RestaurantCandidate => Boolean(item));
 
     if (!existing) {
+      const brand = getRestaurantBrand(candidate.restaurant);
+      if (brand) {
+        const existingBrand = brandSeen.get(brand);
+        if (existingBrand) {
+          if (shouldReplaceRecommendationCandidate(existingBrand, candidate)) {
+            const idx = deduped.indexOf(existingBrand);
+            if (idx >= 0) deduped[idx] = candidate;
+            brandSeen.set(brand, candidate);
+          }
+          continue;
+        }
+        brandSeen.set(brand, candidate);
+      }
       deduped.push(candidate);
       keys.forEach((key) => candidateMap.set(key, candidate));
       continue;
@@ -242,7 +256,8 @@ function buildUnmetConstraints(
   ];
 
   if (primaryCandidates.length < context.targetCount) {
-    unmet.push(`只找到 ${primaryCandidates.length} 家通过主推荐准入的餐厅。`);
+    const brandCount = countDistinctBrands(primaryCandidates.map((c) => c.restaurant));
+    unmet.push(`只找到 ${brandCount} 个不同品牌的餐厅（共 ${primaryCandidates.length} 家）。`);
   }
 
   const hasUnverifiedBackups = context.candidates.some((candidate) =>

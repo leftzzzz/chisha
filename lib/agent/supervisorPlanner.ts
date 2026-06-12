@@ -7,6 +7,7 @@ import {
 } from './modelClient';
 import { DEFAULT_POI_TYPE, lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
+import { countDistinctBrands } from '@/lib/restaurantIdentity';
 import {
   isOpenExplorationAuthorized,
   isSearchIntentAuthorizedForPrimary,
@@ -260,14 +261,15 @@ function deterministicSupervisorPlannerAction(
   const primaryCandidates = context.candidates.filter((candidate) =>
     isPrimaryRecommendationAllowed(candidate, context)
   );
+  const distinctBrands = countDistinctBrands(primaryCandidates.map((c) => c.restaurant));
 
   const shouldTryRelatedKeywords = hasUntriedRelatedKeywords(context)
-    && primaryCandidates.length < Math.min(MIN_PRIMARY_BEFORE_OPTIONAL_EXPANSION, context.targetCount);
+    && distinctBrands < Math.min(MIN_PRIMARY_BEFORE_OPTIONAL_EXPANSION, context.targetCount);
   const shouldTryBroadenedKeywords = hasUntriedBroadenedKeywords(context)
-    && primaryCandidates.length === 0;
+    && distinctBrands === 0;
 
   if (
-    primaryCandidates.length >= Math.min(3, context.targetCount)
+    distinctBrands >= Math.min(3, context.targetCount)
     && !shouldTryRelatedKeywords
     && !shouldTryBroadenedKeywords
   ) {
@@ -325,7 +327,7 @@ function deterministicSupervisorPlannerAction(
   const broadenedTargetAuthorized = broadenedTarget
     ? isSearchIntentAuthorizedForPrimary(context.goal, 'broadened', [broadenedTarget.keyword])
     : false;
-  if (broadenedTarget && primaryCandidates.length === 0) {
+  if (broadenedTarget && distinctBrands === 0) {
     return {
       type: 'search',
       plan: buildPlan(
