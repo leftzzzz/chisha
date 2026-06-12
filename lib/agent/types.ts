@@ -417,7 +417,7 @@ export interface AgentRuntimeState {
 
 type AgentEventPayload =
   | { type: 'thinking'; message: string }
-  | { type: 'searching'; keywords: string[]; round: number }
+  | { type: 'searching'; keywords: string[]; round: number; searchIntent?: string }
   | {
       type: 'search_result';
       found: number;

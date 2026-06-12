@@ -130,12 +130,31 @@ function getStatusColor(status: SearchProgress['status']): string {
   }
 }
 
+/**
+ * 策略阶段标签
+ */
+const stageLabel: Record<string, string> = {
+  exact: '精确搜索',
+  synonym: '近似搜索',
+  broadened: '扩展搜索',
+  fallback: '通用搜索',
+};
+
+/**
+ * 获取选项网格列数
+ */
+function getGridCols(optionCount: number): string {
+  if (optionCount <= 2) return 'grid-cols-2';
+  if (optionCount <= 3) return 'grid-cols-3';
+  return 'grid-cols-2';
+}
+
 export const LoadingSteps: React.FC<LoadingStepsProps> = ({
   progress,
   onQuestionReply,
   isReplying = false,
 }) => {
-  const { status, message, currentKeywords, round, total, foundRestaurants, question } = progress;
+  const { status, message, currentKeywords, round, total, foundRestaurants, question, maxRounds, targetCount, currentStage } = progress;
   const [reply, setReply] = useState('');
 
   const submitReply = async (answer: string) => {
@@ -178,7 +197,7 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({
           </p>
 
           {question.options && question.options.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className={`grid gap-2 ${getGridCols(question.options.length)}`}>
               {question.options.map((option) => (
                 <Button
                   key={option}
@@ -196,29 +215,41 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({
           )}
 
           {question.allowFreeText && (
-            <form
-              className="flex gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                submitReply(reply);
-              }}
-            >
-              <input
-                value={reply}
-                onChange={(event) => setReply(event.target.value)}
-                disabled={isReplying}
-                className="min-w-0 flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
-                maxLength={120}
-              />
+            <div className="flex gap-2">
+              <form
+                className="flex gap-2 flex-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitReply(reply);
+                }}
+              >
+                <input
+                  value={reply}
+                  onChange={(event) => setReply(event.target.value)}
+                  disabled={isReplying}
+                  placeholder="输入其他想法..."
+                  className="min-w-0 flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+                  maxLength={120}
+                />
+                <Button
+                  type="submit"
+                  size="md"
+                  disabled={!reply.trim() || isReplying}
+                  loading={isReplying}
+                >
+                  继续
+                </Button>
+              </form>
               <Button
-                type="submit"
+                variant="secondary"
                 size="md"
-                disabled={!reply.trim() || isReplying}
+                onClick={() => submitReply('你推荐')}
+                disabled={isReplying}
                 loading={isReplying}
               >
-                继续
+                你推荐
               </Button>
-            </form>
+            </div>
           )}
         </div>
       )}
@@ -240,17 +271,28 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({
             </div>
           )}
 
-          {/* 搜索轮数和找到数量 */}
+          {/* 全局进度 */}
           <div className="flex items-center justify-between text-sm font-medium text-[#76695e]">
-            {round && (
+            {round && maxRounds && (
+              <span>第 {round}/{maxRounds} 轮搜索</span>
+            )}
+            {round && !maxRounds && (
               <span>第 {round} 轮搜索</span>
             )}
             {total !== undefined && total > 0 && (
               <span className="font-bold text-primary">
                 已找到 {total} 家
+                {targetCount && ` / 目标 ${targetCount} 家`}
               </span>
             )}
           </div>
+
+          {/* 搜索策略阶段 */}
+          {currentStage && (
+            <div className="text-xs text-[#9a8d81]">
+              {stageLabel[currentStage]}
+            </div>
+          )}
         </div>
       )}
 

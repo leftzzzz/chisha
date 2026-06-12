@@ -87,7 +87,7 @@ export async function runSearchAgentV3(
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>
 ): Promise<AgentFinalResult> {
   emit({ type: 'thinking', message: '正在理解你的需求...' });
-  emit({ type: 'status', message: 'SupervisorPlannerAgent 正在维护目标并选择下一步动作...' });
+  emit({ type: 'status', message: '正在分析您的需求...' });
 
   const supervisorOutput = await getSupervisorPlannerOutput(input);
   const conversationMode = inferRuntimeConversationMode(input, supervisorOutput);
@@ -104,7 +104,7 @@ export async function runSearchAgentV3(
   const resetPlan = deriveSearchStateResetPlan(invalidationPlan, conversationMode);
   let goal = baseGoal;
   if (!supervisorOutput.question && baseGoal.clarificationNeeded.length === 0) {
-    emit({ type: 'status', message: 'KeywordExpansionHelper 正在生成搜索联想词...' });
+    emit({ type: 'status', message: '正在联想相关搜索词...' });
     goal = applyKeywordExpansion(
       baseGoal,
       await runKeywordExpansionAgent({
@@ -941,7 +941,7 @@ async function executeSearchAction(
   emit: EmitAgentEvent
 ): Promise<AgentObservation> {
   const round = context.attempts.length + 1;
-  emit({ type: 'searching', keywords: plan.keywords, round });
+  emit({ type: 'searching', keywords: plan.keywords, round, searchIntent: plan.searchIntent });
   const toolStartTrace = appendTrace(context, 'tool_start', {
     actionId,
     input: {
@@ -999,8 +999,8 @@ async function executeSearchAction(
     emit({
       type: 'status',
       message: evaluationRestaurants.length < restaurants.length
-        ? `EvaluationAgent 正在验证前 ${evaluationRestaurants.length} 家候选餐厅...`
-        : 'EvaluationAgent 正在验证候选餐厅...',
+        ? `正在验证前 ${evaluationRestaurants.length} 家候选餐厅...`
+        : '正在验证候选餐厅...',
     });
   }
 
@@ -1353,6 +1353,25 @@ function createTraceId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const EXPLANATION_MAP: Record<string, string> = {
+  '已达到搜索上限，返回当前通过验证的推荐。':
+    '已为您搜索附近多个方向，以下是精选推荐。',
+  '已达到 Agent 动作上限，返回当前通过验证的结果。':
+    '已为您完成全面搜索，以下是最佳推荐。',
+  'Guard 拒绝继续执行该动作，返回当前通过验证的推荐。':
+    '已为您找到合适餐厅，以下是推荐结果。',
+  '没有更多可验证搜索策略，返回当前通过验证的推荐。':
+    '已为您搜索多个方向，以下是精选推荐。',
+  '已达到本轮搜索动作上限，Runtime 强制进入结束或追问。':
+    '搜索已完成，以下是推荐结果。',
+  '用户已授权放宽，已将上一轮候补结果重新纳入主推荐。':
+    '已根据您的要求扩大搜索范围，以下是推荐结果。',
+};
+
+function translateExplanation(rawExplanation: string): string {
+  return EXPLANATION_MAP[rawExplanation] ?? rawExplanation;
+}
+
 function finish(
   context: AgentV3Context,
   action: Extract<AgentAction, { type: 'finish' }>,
@@ -1360,14 +1379,14 @@ function finish(
 ): AgentFinalResult {
   emit({
     type: 'filtering',
-    message: '正在进行 FinalGuard 主推荐准入并组装推荐...',
+    message: '正在为您筛选最佳推荐...',
     total: context.candidates.length,
   });
 
   const finalResult = finalizeRecommendations(context, {
     selectedIds: action.selectedIds,
     candidateIds: action.candidateIds,
-    explanation: action.explanation,
+    explanation: translateExplanation(action.explanation),
     confidence: action.confidence,
   });
 
@@ -1458,10 +1477,10 @@ function buildNoPrimaryQuestion(context: AgentV3Context): PendingQuestion {
     question: target
       ? `没有找到符合「${target}」的餐厅，要调整需求或允许放宽吗？`
       : '没有找到符合条件的餐厅，要调整需求或允许放宽吗？',
-    options: ['允许放宽', '换个类型'],
+    options: ['搜更广的品类', '换个类型'],
     allowFreeText: true,
     optionEffects: {
-      '允许放宽': allowBroadenQuestionEffect(context.goal),
+      '搜更广的品类': allowBroadenQuestionEffect(context.goal),
     },
   };
 }

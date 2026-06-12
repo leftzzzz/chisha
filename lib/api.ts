@@ -41,7 +41,7 @@ export interface SearchResultRestaurant {
  */
 type AgentEventPayload =
   | { type: 'thinking'; message: string }
-  | { type: 'searching'; keywords: string[]; round: number }
+  | { type: 'searching'; keywords: string[]; round: number; searchIntent?: string }
   | { type: 'search_result'; found: number; total: number; restaurants: SearchResultRestaurant[] }
   | { type: 'filtering'; message: string; total: number }
   | { type: 'done'; sessionId?: string; restaurants: Restaurant[]; candidates: Restaurant[]; explanation?: string; unmetConstraints?: string[] }
@@ -87,7 +87,7 @@ export interface AgentTraceEvent {
  */
 export interface AgentSearchCallbacks {
   onThinking?: (message: string) => void;
-  onSearching?: (keywords: string[], round: number) => void;
+  onSearching?: (keywords: string[], round: number, searchIntent?: string) => void;
   onSearchResult?: (found: number, total: number, restaurants: SearchResultRestaurant[]) => void;
   onFiltering?: (message: string, total: number) => void;
   onDone?: (restaurants: Restaurant[], candidates: Restaurant[], explanation?: string, unmetConstraints?: string[]) => void;
@@ -98,6 +98,7 @@ export interface AgentSearchCallbacks {
   onObservation?: (found: number, accepted: number, rejected: number) => void;
   onGuardrail?: (message: string, severity: 'info' | 'warn') => void;
   onQuestion?: (question: AgentQuestion) => void;
+  onPartialResults?: (restaurants: Restaurant[]) => void;
   onSessionPaused?: (sessionId: string) => void;
   onSessionResumed?: (sessionId: string) => void;
   onSessionUpdated?: (sessionId: string) => void;
@@ -166,6 +167,35 @@ export class APIError extends Error {
     super(message);
     this.name = 'APIError';
   }
+}
+
+/**
+ * Agent 错误分类
+ */
+interface AgentErrorInfo {
+  message: string;
+  code: string;
+  recoverable: boolean;
+}
+
+function classifyAgentError(message: string): AgentErrorInfo {
+  // 不可恢复错误
+  if (message.includes('会话已过期')) {
+    return { message, code: 'SESSION_EXPIRED', recoverable: false };
+  }
+  if (message.includes('OPENAI_API_KEY')) {
+    return { message, code: 'CONFIG_ERROR', recoverable: false };
+  }
+
+  // 可恢复错误（Agent 可能已经部分完成）
+  if (message.includes('搜索超时')) {
+    return { message, code: 'SEARCH_TIMEOUT', recoverable: true };
+  }
+  if (message.includes('EvaluationAgent')) {
+    return { message, code: 'EVALUATION_FAILED', recoverable: true };
+  }
+
+  return { message, code: 'UNKNOWN_ERROR', recoverable: true };
 }
 
 /**
@@ -491,7 +521,17 @@ export async function agentSearch(
   sessionId?: string
 ): Promise<AgentSearchResult> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
+  let timeoutId: ReturnType<typeof setTimeout> = setTimeout(() => {}, 0);
+
+  // 心跳检测：如果 30 秒内没有收到任何事件，才超时
+  const resetTimeout = () => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 30000);
+  };
+
+  resetTimeout();
 
   // 如果传入了外部 signal，监听其 abort 事件
   if (signal) {
@@ -544,6 +584,7 @@ export async function agentSearch(
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
+          resetTimeout(); // 收到事件，重置超时
           try {
             const event: AgentEvent = JSON.parse(line.slice(6));
             emitTraceCallback(callbacks, event);
@@ -556,7 +597,7 @@ export async function agentSearch(
                 callbacks?.onStatus?.(event.message);
                 break;
               case 'searching':
-                callbacks?.onSearching?.(event.keywords, event.round);
+                callbacks?.onSearching?.(event.keywords, event.round, event.searchIntent);
                 break;
               case 'search_result':
                 callbacks?.onSearchResult?.(event.found, event.total, event.restaurants);
@@ -641,9 +682,18 @@ export async function agentSearch(
                   );
                 }
                 break;
-              case 'error':
-                callbacks?.onError?.(event.message);
-                throw new APIError(event.message, 'AGENT_ERROR');
+              case 'error': {
+                const agentError = classifyAgentError(event.message);
+                if (agentError.recoverable) {
+                  // 记录错误，但不终止流
+                  callbacks?.onError?.(event.message);
+                } else {
+                  // 不可恢复错误，立即终止
+                  callbacks?.onError?.(event.message);
+                  throw new APIError(event.message, agentError.code);
+                }
+                break;
+              }
             }
           } catch (e) {
             // 忽略解析错误，继续处理
@@ -827,7 +877,9 @@ async function requestAgentStream(
               break;
             case 'tool_start':
             case 'tool_result':
+              break;
             case 'partial_results':
+              callbacks?.onPartialResults?.(event.restaurants);
               break;
             case 'final':
               if (!hasReceivedResult) {

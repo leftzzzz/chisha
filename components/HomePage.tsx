@@ -65,6 +65,9 @@ export const HomePage: React.FC = () => {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [shareSelectedOption, setShareSelectedOption] = useState<TurntableOption | null>(null);
 
+  // Trace 面板状态
+  const [showTrace, setShowTrace] = useState(false);
+
   // 获取搜索错误
   const searchError = state.error;
 
@@ -460,6 +463,42 @@ export const HomePage: React.FC = () => {
               <div className="mt-2 space-y-1 text-xs text-gray-500">
                 {state.agentUnmetConstraints.slice(0, 3).map((item) => (
                   <p key={item}>{item}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Agent 搜索过程（可折叠） */}
+        {state.agentTrace && state.agentTrace.length > 0 && (
+          <div className="mt-4 mx-2 sm:mx-0 border-t border-gray-200 pt-3">
+            <button
+              onClick={() => setShowTrace(!showTrace)}
+              className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700"
+            >
+              <svg
+                className={`w-4 h-4 transition-transform ${showTrace ? 'rotate-90' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              查看搜索过程
+            </button>
+
+            {showTrace && (
+              <div className="mt-3 space-y-2 max-h-60 overflow-y-auto">
+                {state.agentTrace.map((trace, index) => (
+                  <div
+                    key={trace.traceId ?? index}
+                    className="flex items-start gap-2 text-xs text-gray-500"
+                  >
+                    <span className="flex-shrink-0 w-4 h-4 rounded-full bg-gray-100 flex items-center justify-center text-[10px]">
+                      {index + 1}
+                    </span>
+                    <span>{trace.message ?? trace.type}</span>
+                  </div>
                 ))}
               </div>
             )}

@@ -446,10 +446,10 @@ function buildFailureQuestionAction(context: AgentContext): AgentAction {
       question: target
         ? `没有找到符合「${target}」的餐厅，要调整需求或允许放宽吗？`
         : '没有找到符合条件的餐厅，要调整需求或允许放宽吗？',
-      options: ['允许放宽', '换个类型'],
+      options: ['搜更广的品类', '换个类型'],
       allowFreeText: true,
       optionEffects: {
-        '允许放宽': allowBroadenQuestionEffect(context),
+        '搜更广的品类': allowBroadenQuestionEffect(context),
       },
     },
   };
