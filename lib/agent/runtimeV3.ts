@@ -1157,10 +1157,6 @@ async function executeSearchBatch(
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
   emit: EmitAgentEvent
 ): Promise<AgentObservation[]> {
-  if (plans.length === 1) {
-    return [await executeSearchAction(actionId, plans[0], context, searchPlaces, emit)];
-  }
-
   const baseRound = context.attempts.length + 1;
   const results = await mapWithConcurrency(plans, plans.length, async (plan, index) => {
     try {
@@ -1179,6 +1175,8 @@ async function executeSearchBatch(
           retryable: true,
         },
       });
+      // 记为一次已尝试：否则这个关键词会被反复选中，直到预算耗尽。
+      recordFailedAttempt(context, plan);
       return null;
     }
   });
@@ -1204,22 +1202,26 @@ interface SearchPlanResult {
   agentEvaluation: EvaluationAgentOutput;
 }
 
-async function executeSearchAction(
-  actionId: string,
-  plan: SearchPlan,
-  context: AgentV3Context,
-  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
-  emit: EmitAgentEvent
-): Promise<AgentObservation> {
-  const result = await runSearchPlan(
-    actionId,
-    plan,
-    context.attempts.length + 1,
-    context,
-    searchPlaces,
-    emit
+/**
+ * 搜索计划整体失败时记录一次空 attempt。
+ *
+ * searchPlaces 内部已经有 Amap → OSM 的回退，走到这里说明两个数据源都失败了。
+ * 记录下来既能让策略换个关键词继续，也能让这一轮不会因为单个数据源抖动整体失败。
+ */
+function recordFailedAttempt(context: AgentV3Context, plan: SearchPlan): void {
+  context.attempts.push({
+    keywords: plan.keywords,
+    radius: plan.radiusMeters,
+    poiType: plan.poiType,
+    searchIntent: plan.searchIntent,
+    allowedForPrimary: plan.allowedForPrimary,
+    reason: plan.reason,
+    found: 0,
+    accepted: 0,
+  });
+  context.unmetConstraints.push(
+    `搜索「${plan.keywords.join('、')}」时数据源不可用，本轮未取到结果。`
   );
-  return commitSearchPlanResult(result, context, emit);
 }
 
 /**
