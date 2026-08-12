@@ -4,10 +4,9 @@ import {
   extractKnownFoodTerms,
   getPoiTerms,
   normalizeSearchKeywords,
-  resolvePlansWithPoiTaxonomy,
   resolvePoiTypesForKeyword,
 } from '@/lib/agent/poiTaxonomy';
-import type { PlanningAgentOutput, UserGoal } from '@/lib/agent/types';
+import type { UserGoal } from '@/lib/agent/types';
 
 function goal(overrides: Partial<UserGoal> = {}): UserGoal {
   return {
@@ -50,26 +49,6 @@ describe('poiTaxonomy', () => {
     expect(resolvePoiTypesForKeyword('海鲜', undefined, false)).toBe('050119');
     expect(resolvePoiTypesForKeyword('素食', undefined, false)).toBe('050120');
     expect(resolvePoiTypesForKeyword('清真', undefined, false)).toBe('050121');
-  });
-
-  it('keeps alternative targets together when resolving PlanningAgent output', () => {
-    const planningOutput: PlanningAgentOutput = {
-      plans: [{
-        targets: [
-          { label: '日料', kind: 'cuisine', strictness: 'exact' },
-          { label: '韩餐', kind: 'cuisine', strictness: 'exact' },
-        ],
-        radiusMeters: 1800,
-        searchIntent: 'exact',
-        allowedForPrimary: true,
-        reason: '搜索任一可接受品类。',
-      }],
-    };
-
-    const [plan] = resolvePlansWithPoiTaxonomy(planningOutput, goal());
-
-    expect(plan.keywords).toEqual(['日料', '韩餐']);
-    expect(plan.poiType).toBeUndefined();
   });
 
   it('exposes canonical terms for semantic agents without duplicating tables', () => {

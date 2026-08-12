@@ -1,10 +1,4 @@
-import type {
-  PlanningAgentOutput,
-  SearchPlan,
-  SearchTarget,
-  UserGoal,
-} from './types';
-import { SearchPlanSchema } from './schemas/plan';
+import type { SearchTarget } from './types';
 
 export const DEFAULT_POI_TYPE = '050000';
 export const MAX_SEARCH_KEYWORDS = 5;
@@ -255,32 +249,4 @@ export function getPoiTerms(term: string): string[] {
   );
 
   return entry ? Array.from(new Set([entry.canonical, ...entry.terms])) : [term.trim()].filter(Boolean);
-}
-
-export function resolvePlansWithPoiTaxonomy(
-  planningOutput: PlanningAgentOutput,
-  goal: UserGoal
-): SearchPlan[] {
-  const plans: SearchPlan[] = [];
-
-  for (const plan of planningOutput.plans) {
-    const keywords = normalizeSearchKeywords(plan.targets.map((target) => target.label));
-    const poiType = keywords.length === 1
-      ? lookupFoodPoiTypes(keywords[0]) ?? goal.poiType
-      : undefined;
-    const parsed = SearchPlanSchema.safeParse({
-      keywords,
-      radiusMeters: plan.radiusMeters,
-      poiType,
-      searchIntent: plan.searchIntent,
-      allowedForPrimary: plan.allowedForPrimary,
-      reason: plan.reason,
-    });
-
-    if (parsed.success) {
-      plans.push(parsed.data);
-    }
-  }
-
-  return plans;
 }

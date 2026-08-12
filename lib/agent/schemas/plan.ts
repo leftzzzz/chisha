@@ -1,15 +1,5 @@
 import { z } from 'zod';
 
-function defaultArray<T extends z.ZodTypeAny>(schema: T) {
-  return z.preprocess((value) => {
-    if (value === undefined || value === null) {
-      return [];
-    }
-
-    return Array.isArray(value) ? value : [value];
-  }, z.array(schema).default([]).catch([]));
-}
-
 function requiredArray<T extends z.ZodTypeAny>(schema: T) {
   return z.preprocess((value) => {
     return Array.isArray(value) ? value : [value];
@@ -59,23 +49,14 @@ export const SearchTargetSchema = z.preprocess((value) => {
 
 export const SearchIntentSchema = z.enum(['exact', 'synonym', 'broadened', 'fallback']);
 
-export const PlanningAgentPlanSchema = z.object({
-  targets: requiredArray(SearchTargetSchema).pipe(z.array(SearchTargetSchema).min(1).max(5)),
-  radiusMeters: intNumberSchema(100, 50000),
-  searchIntent: SearchIntentSchema,
-  allowedForPrimary: BooleanSchema,
-  reason: reasonWithDefault('根据用户目标规划搜索。'),
-});
-
-export const PlanningAgentOutputSchema = z.object({
-  plans: defaultArray(PlanningAgentPlanSchema).pipe(z.array(PlanningAgentPlanSchema).max(5)),
-});
-
 export const SearchPlanSchema = z.object({
-  keywords: requiredArray(z.string().min(1)).pipe(z.array(z.string().min(1)).min(1).max(5)),
+  // 一次搜索只表达一个餐饮意图（见 AGENTS.md 的高德 POI 搜索规则）。
+  // 约束前移到 schema，Runtime 不再事后拆词。
+  keywords: requiredArray(z.string().min(1)).pipe(z.array(z.string().min(1)).length(1)),
   radiusMeters: intNumberSchema(300, 5000),
   poiType: z.string().regex(/^\d{6}(?:\|\d{6})*$/).optional(),
   searchIntent: SearchIntentSchema,
   allowedForPrimary: BooleanSchema,
   reason: reasonWithDefault('根据用户目标搜索。'),
+  planId: z.string().optional(),
 });

@@ -5,14 +5,21 @@ import {
   JSON_FUNCTION_MAX_TOKENS,
   JSON_FUNCTION_RETRY_MAX_TOKENS,
 } from './modelClient';
-import { DEFAULT_POI_TYPE, lookupFoodPoiTypes, normalizeSearchKeywords } from './poiTaxonomy';
-import { isPrimaryRecommendationAllowed } from './finalGuard';
-import { countDistinctBrands } from '@/lib/restaurantIdentity';
+import { internalFinishNote } from './finishReason';
+import { isOpenExplorationAuthorized, isSearchIntentAuthorizedForPrimary } from './authorization';
 import {
-  isOpenExplorationAuthorized,
-  isSearchIntentAuthorizedForPrimary,
-} from './authorization';
-import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
+  buildNoPrimaryQuestion,
+  buildSearchPlan,
+  distinctPrimaryBrandCount,
+  hasPositiveFoodTarget,
+  hasTriedIntent,
+  hasTriedKeyword,
+  hasUnauthorizedBroadenedCandidates,
+  hasUntriedTarget,
+  isOpenExplorationContext,
+  nextUntriedTarget,
+  primaryCandidates as policyPrimaryCandidates,
+} from './policy';
 import {
   runSearchSupervisor,
   type SearchSupervisorInput,
@@ -27,7 +34,6 @@ import type {
   RestaurantCandidate,
   SearchAttempt,
   SearchKeywordTarget,
-  SearchPlan,
   UserPreferenceSummary,
 } from './types';
 
@@ -46,6 +52,7 @@ const SUPERVISOR_PLANNER_ACTION_TIMEOUT = 60000;
 const SUPERVISOR_PLANNER_ACTION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const SUPERVISOR_PLANNER_ACTION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 const MIN_PRIMARY_BEFORE_OPTIONAL_EXPANSION = 6;
+const OPEN_EXPLORATION_FALLBACK_KEYWORDS = ['餐厅', '美食'];
 
 export interface SupervisorPlannerActionInput {
   message: string;
@@ -258,14 +265,12 @@ function deterministicSupervisorPlannerAction(
   input: SupervisorPlannerActionInput,
   context: AgentContext
 ): AgentAction {
-  const primaryCandidates = context.candidates.filter((candidate) =>
-    isPrimaryRecommendationAllowed(candidate, context)
-  );
-  const distinctBrands = countDistinctBrands(primaryCandidates.map((c) => c.restaurant));
+  const primaryCandidates = policyPrimaryCandidates(context);
+  const distinctBrands = distinctPrimaryBrandCount(context);
 
-  const shouldTryRelatedKeywords = hasUntriedRelatedKeywords(context)
+  const shouldTryRelatedKeywords = hasUntriedTarget(context, 'related')
     && distinctBrands < Math.min(MIN_PRIMARY_BEFORE_OPTIONAL_EXPANSION, context.targetCount);
-  const shouldTryBroadenedKeywords = hasUntriedBroadenedKeywords(context)
+  const shouldTryBroadenedKeywords = hasUntriedTarget(context, 'broadened')
     && distinctBrands === 0;
 
   if (
@@ -275,12 +280,13 @@ function deterministicSupervisorPlannerAction(
   ) {
     return {
       type: 'finish',
+      reason: 'ENOUGH_PRIMARY',
       selectedIds: primaryCandidates.slice(0, context.targetCount).map((candidate) => candidate.restaurant.id),
       candidateIds: context.candidates
         .filter((candidate) => !primaryCandidates.includes(candidate))
         .slice(0, 20)
         .map((candidate) => candidate.restaurant.id),
-      explanation: '已找到通过主推荐准入的候选，停止继续搜索。',
+      explanation: internalFinishNote('ENOUGH_PRIMARY'),
       confidence: 0.82,
     };
   }
@@ -289,8 +295,9 @@ function deterministicSupervisorPlannerAction(
     return primaryCandidates.length > 0
       ? {
           type: 'finish',
+          reason: 'SEARCH_BUDGET_EXHAUSTED',
           selectedIds: primaryCandidates.map((candidate) => candidate.restaurant.id),
-          explanation: '已达到搜索上限，返回当前通过验证的结果。',
+          explanation: internalFinishNote('SEARCH_BUDGET_EXHAUSTED'),
           confidence: 0.62,
         }
       : buildFailureQuestionAction(context);
@@ -300,87 +307,109 @@ function deterministicSupervisorPlannerAction(
     return buildFailureQuestionAction(context);
   }
 
-  const exactTarget = nextUntriedInitialTarget(context);
+  const exactTarget = nextUntriedTarget(context, 'initial');
   if (exactTarget) {
     return {
       type: 'search',
-      plan: buildPlan(context, exactTarget, 'exact', true, '先搜索用户明确表达的餐饮目标。'),
+      plan: buildSearchPlan(context, exactTarget, 'exact', true, '先搜索用户明确表达的餐饮目标。'),
     };
   }
 
   if (isOpenExplorationContext(context) && !hasTriedIntent(context, 'fallback')) {
     return {
       type: 'search',
-      plan: buildPlan(context, ['餐厅', '美食'], 'fallback', true, '开放需求下先使用通用餐饮兜底搜索。'),
+      plan: buildSearchPlan(
+        context,
+        nextFallbackKeyword(context),
+        'fallback',
+        true,
+        '开放需求下先使用通用餐饮兜底搜索。'
+      ),
     };
   }
 
-  const relatedTarget = nextUntriedRelatedTarget(context);
+  const relatedTarget = nextUntriedTarget(context, 'related');
   if (relatedTarget && !hasTriedIntent(context, 'synonym')) {
     return {
       type: 'search',
-      plan: buildPlan(context, relatedTarget, 'synonym', true, '原始搜索不足，继续尝试同义词和近似表达。'),
+      plan: buildSearchPlan(context, relatedTarget, 'synonym', true, '原始搜索不足，继续尝试同义词和近似表达。'),
     };
   }
 
-  const broadenedTarget = nextUntriedBroadenedTarget(context);
+  const broadenedTarget = nextUntriedTarget(context, 'broadened');
   const broadenedTargetAuthorized = broadenedTarget
     ? isSearchIntentAuthorizedForPrimary(context.goal, 'broadened', [broadenedTarget.keyword])
     : false;
   if (broadenedTarget && distinctBrands === 0) {
-    return {
-      type: 'search',
-      plan: buildPlan(
-        context,
-        broadenedTarget,
-        'broadened',
-        broadenedTargetAuthorized,
-        broadenedTargetAuthorized
-          ? '用户允许放宽，扩展到相邻品类。'
-          : '原始目标不足，搜索相邻品类作为候补。'
-      ),
-    };
+    return broadenedSearchAction(context, broadenedTarget, broadenedTargetAuthorized);
   }
 
   if (relatedTarget) {
     return {
       type: 'search',
-      plan: buildPlan(context, relatedTarget, 'synonym', true, '原始搜索不足，继续尝试同义词和近似表达。'),
+      plan: buildSearchPlan(context, relatedTarget, 'synonym', true, '原始搜索不足，继续尝试同义词和近似表达。'),
     };
   }
 
   if (broadenedTarget) {
-    return {
-      type: 'search',
-      plan: buildPlan(
-        context,
-        broadenedTarget,
-        'broadened',
-        broadenedTargetAuthorized,
-        broadenedTargetAuthorized
-          ? '用户允许放宽，扩展到相邻品类。'
-          : '原始目标不足，搜索相邻品类作为候补。'
-      ),
-    };
+    return broadenedSearchAction(context, broadenedTarget, broadenedTargetAuthorized);
   }
 
   if (isOpenExplorationAuthorized(context.goal) && !hasTriedIntent(context, 'fallback')) {
     return {
       type: 'search',
-      plan: buildPlan(context, ['餐厅', '美食'], 'fallback', true, '开放需求下使用通用餐饮兜底搜索。'),
+      plan: buildSearchPlan(
+        context,
+        nextFallbackKeyword(context),
+        'fallback',
+        true,
+        '开放需求下使用通用餐饮兜底搜索。'
+      ),
     };
   }
 
   if (primaryCandidates.length > 0) {
     return {
       type: 'finish',
+      reason: 'NO_MORE_STRATEGY',
       selectedIds: primaryCandidates.map((candidate) => candidate.restaurant.id),
-      explanation: '没有更多可验证搜索策略，返回当前通过验证的推荐。',
+      explanation: internalFinishNote('NO_MORE_STRATEGY'),
       confidence: 0.68,
     };
   }
 
   return buildFailureQuestionAction(context);
+}
+
+function broadenedSearchAction(
+  context: AgentContext,
+  target: SearchKeywordTarget,
+  authorized: boolean
+): AgentAction {
+  return {
+    type: 'search',
+    plan: buildSearchPlan(
+      context,
+      target,
+      'broadened',
+      authorized,
+      authorized
+        ? '用户允许放宽，扩展到相邻品类。'
+        : '原始目标不足，搜索相邻品类作为候补。'
+    ),
+  };
+}
+
+/**
+ * 开放探索的通用兜底词。
+ *
+ * 一次搜索只能带一个意图词，这里按顺序取第一个未尝试过的，
+ * 而不是把多个词塞进同一个 plan（那会被 schema 拒绝）。
+ */
+function nextFallbackKeyword(context: AgentContext): string {
+  return OPEN_EXPLORATION_FALLBACK_KEYWORDS.find(
+    (keyword) => !hasTriedKeyword(context, keyword)
+  ) ?? OPEN_EXPLORATION_FALLBACK_KEYWORDS[0];
 }
 
 function shouldForceOpenExplorationSearch(
@@ -390,246 +419,22 @@ function shouldForceOpenExplorationSearch(
   if (
     !isOpenExplorationAuthorized(context.goal)
     || input.limits.remainingSearchCalls <= 0
-    || initialKeywords(context).length > 0
+    || hasPositiveFoodTarget(context.goal)
   ) {
     return false;
   }
 
-  const primaryCandidates = context.candidates.some((candidate) =>
-    isPrimaryRecommendationAllowed(candidate, context)
-  );
-  if (primaryCandidates) {
+  if (policyPrimaryCandidates(context).length > 0) {
     return false;
   }
 
-  return hasUntriedBroadenedKeywords(context)
-    || hasUntriedRelatedKeywords(context)
+  return hasUntriedTarget(context, 'broadened')
+    || hasUntriedTarget(context, 'related')
     || !hasTriedIntent(context, 'fallback');
 }
 
 function buildFailureQuestionAction(context: AgentContext): AgentAction {
-  const target = [
-    ...context.goal.requestedItems.map((item) => item.name),
-    ...context.goal.primaryKeywords,
-  ].filter(Boolean).slice(0, 3).join('、');
-  const hasStrictDistance = context.goal.hardConstraints.some((constraint) =>
-    constraint.kind === 'distance' && constraint.strict
-  );
-
-  if (hasStrictDistance) {
-    return {
-      type: 'ask_user',
-      question: {
-        reason: '当前严格距离范围内没有找到通过主推荐准入的餐厅。',
-        question: '当前距离范围内没有找到合适餐厅，要扩大范围再搜吗？',
-        options: ['扩大范围', '换个类型'],
-        allowFreeText: true,
-        optionEffects: {
-          '扩大范围': {
-            allowBroaden: true,
-            setDistanceMaxMeters: 5000,
-            addAuthorizations: [{
-              id: `auth_distance_expansion_${Date.now().toString(36)}`,
-              kind: 'distance_expansion',
-              createdAt: Date.now(),
-              reason: '用户授权扩大距离范围。',
-              constraints: { maxMeters: 5000 },
-            }],
-          },
-        },
-      },
-    };
-  }
-
-  return {
-    type: 'ask_user',
-    question: {
-      reason: '没有找到通过主推荐准入的餐厅，需要用户调整或授权放宽。',
-      question: target
-        ? `没有找到符合「${target}」的餐厅，要调整需求或允许放宽吗？`
-        : '没有找到符合条件的餐厅，要调整需求或允许放宽吗？',
-      options: ['搜更广的品类', '换个类型'],
-      allowFreeText: true,
-      optionEffects: {
-        '搜更广的品类': allowBroadenQuestionEffect(context),
-      },
-    },
-  };
-}
-
-function allowBroadenQuestionEffect(
-  context: AgentContext
-): NonNullable<Extract<AgentAction, { type: 'ask_user' }>['question']['optionEffects']>[string] {
-  const hasPrimaryTarget = initialKeywords(context).length > 0;
-  const kind = hasPrimaryTarget ? 'category_broaden' : 'fallback_primary';
-  const searchIntent = hasPrimaryTarget ? 'broadened' : 'fallback';
-
-  return {
-    allowBroaden: true,
-    addAuthorizations: [{
-      id: `auth_${kind}_${Date.now().toString(36)}`,
-      kind,
-      createdAt: Date.now(),
-      reason: hasPrimaryTarget
-        ? '用户授权放宽到相邻品类。'
-        : '用户授权开放推荐，可将兜底餐饮候选作为主推荐。',
-      constraints: {
-        allowedSearchIntents: [searchIntent],
-      },
-    }],
-  };
-}
-
-function buildPlan(
-  context: AgentContext,
-  target: string[] | SearchKeywordTarget,
-  searchIntent: SearchPlan['searchIntent'],
-  allowedForPrimary: boolean,
-  reason: string
-): SearchPlan {
-  const targetKeywords = Array.isArray(target) ? target : [target.keyword];
-  const normalizedKeywords = normalizeSearchKeywords(targetKeywords);
-  const targetPoiTypes = Array.isArray(target) ? undefined : target.poiTypes;
-  const poiType = normalizedKeywords.length === 1
-    ? resolvePlanPoiType(normalizedKeywords[0], targetPoiTypes, context)
-    : undefined;
-
-  return {
-    keywords: normalizedKeywords.length > 0 ? normalizedKeywords : ['餐厅'],
-    radiusMeters: nextRadius(context),
-    poiType: poiType === DEFAULT_POI_TYPE ? undefined : poiType,
-    searchIntent,
-    allowedForPrimary,
-    reason,
-  };
-}
-
-function initialKeywords(context: AgentContext): string[] {
-  return [
-    ...context.goal.primaryKeywords,
-    ...context.goal.requestedItems.map((item) => item.name),
-    ...context.goal.acceptableCategories.map((category) => category.name),
-  ].filter(Boolean);
-}
-
-function isOpenExplorationContext(context: AgentContext): boolean {
-  return isOpenExplorationAuthorized(context.goal) && initialKeywords(context).length === 0;
-}
-
-function nextUntriedInitialTarget(context: AgentContext): SearchKeywordTarget | null {
-  return untriedGoalTargets(context, undefined, initialKeywords(context))[0] ?? null;
-}
-
-function hasUntriedRelatedKeywords(context: AgentContext): boolean {
-  return Boolean(nextUntriedRelatedTarget(context));
-}
-
-function nextUntriedRelatedTarget(context: AgentContext): SearchKeywordTarget | null {
-  return untriedGoalTargets(context, context.goal.relatedTargets, context.goal.relatedKeywords)[0] ?? null;
-}
-
-function hasUntriedBroadenedKeywords(context: AgentContext): boolean {
-  return Boolean(nextUntriedBroadenedTarget(context));
-}
-
-function nextUntriedBroadenedTarget(context: AgentContext): SearchKeywordTarget | null {
-  return untriedGoalTargets(context, context.goal.broadenedTargets, context.goal.broadenedKeywords)[0] ?? null;
-}
-
-function untriedGoalTargets(
-  context: AgentContext,
-  targets: SearchKeywordTarget[] | undefined,
-  fallbackKeywords: string[]
-): SearchKeywordTarget[] {
-  const baseTargets = targets && targets.length > 0
-    ? targets
-    : fallbackKeywords.map((keyword) => ({
-        keyword,
-        poiTypes: inferPoiTypesForGoalKeyword(context, keyword)?.split('|'),
-      }));
-
-  return baseTargets.filter((target) => !hasTriedKeyword(context, target.keyword));
-}
-
-function hasTriedKeyword(context: AgentContext, keyword: string): boolean {
-  const normalizedKeywords = normalizeSearchKeywords([keyword]);
-  return context.attempts.some((attempt) =>
-    attempt.keywords.some((attemptKeyword) => normalizedKeywords.includes(attemptKeyword))
-  );
-}
-
-function hasTriedIntent(context: AgentContext, intent: string): boolean {
-  return context.attempts.some((attempt) => attempt.searchIntent === intent);
-}
-
-function hasUnauthorizedBroadenedCandidates(context: AgentContext): boolean {
-  return context.candidates.some((candidate) => {
-    const attempt = context.attempts[candidate.sourceAttempt - 1];
-    return Boolean(attempt)
-      && (attempt!.searchIntent === 'broadened' || attempt!.searchIntent === 'fallback')
-      && (
-        attempt!.allowedForPrimary === false
-        || !isSearchIntentAuthorizedForPrimary(
-          context.goal,
-          attempt!.searchIntent,
-          attempt!.keywords
-        )
-      )
-      && candidate.verification.status === 'passed'
-      && candidate.verification.hardFailures.length === 0;
-  });
-}
-
-function nextRadius(context: AgentContext): number {
-  const distance = context.goal.hardConstraints.find((constraint) =>
-    constraint.kind === 'distance'
-  );
-  const maxMeters = distance?.maxMeters
-    ?? (typeof distance?.value === 'number' ? distance.value : undefined);
-
-  if (maxMeters !== undefined) {
-    return Math.max(300, Math.min(5000, maxMeters));
-  }
-
-  const latestRadius = context.attempts.at(-1)?.radius ?? 1800;
-  return Math.min(5000, Math.max(300, Math.round(latestRadius * 1.25)));
-}
-
-function resolvePlanPoiType(
-  keyword: string,
-  targetPoiTypes: string[] | undefined,
-  context: AgentContext
-): string | undefined {
-  const sanitizedTargetPoiTypes = Array.from(new Set(targetPoiTypes ?? []))
-    .filter((code) => Boolean(getAmapFoodPoiType(code)))
-    .filter((code) => code !== DEFAULT_POI_TYPE);
-  if (sanitizedTargetPoiTypes.length > 0) {
-    return sanitizedTargetPoiTypes.join('|');
-  }
-
-  return inferPoiTypesForGoalKeyword(context, keyword) ?? context.goal.poiType;
-}
-
-function inferPoiTypesForGoalKeyword(context: AgentContext, keyword: string): string | undefined {
-  const direct = lookupFoodPoiTypes(keyword);
-  if (direct && direct !== DEFAULT_POI_TYPE) {
-    return direct;
-  }
-
-  const relatedTerms = [
-    ...context.goal.requestedItems
-      .filter((item) => item.name === keyword || item.aliases.includes(keyword))
-      .flatMap((item) => [item.name, ...item.aliases]),
-    ...context.goal.acceptableCategories.map((category) => category.name),
-  ];
-  for (const term of relatedTerms) {
-    const inferred = lookupFoodPoiTypes(term);
-    if (inferred && inferred !== DEFAULT_POI_TYPE) {
-      return inferred;
-    }
-  }
-
-  return direct;
+  return { type: 'ask_user', question: buildNoPrimaryQuestion(context) };
 }
 
 async function callSupervisorPlannerActionModel(input: SupervisorPlannerActionInput): Promise<AgentAction> {

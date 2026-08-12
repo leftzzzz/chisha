@@ -41,9 +41,15 @@ export function applyFinalGuard(
   };
 }
 
+/**
+ * 主推荐准入所需的最小上下文。
+ * AgentContext / PolicyContext 均结构性满足，便于策略层复用。
+ */
+export type CandidateAdmissionContext = Pick<AgentContext, 'goal' | 'attempts' | 'location'>;
+
 export function isPrimaryRecommendationAllowed(
   candidate: RestaurantCandidate,
-  context: AgentContext
+  context: CandidateAdmissionContext
 ): boolean {
   if (!isCandidateFreshForContext(candidate, context)) {
     return false;
@@ -296,6 +302,6 @@ function buildUnmetConstraints(
   return Array.from(new Set(unmet.filter(Boolean)));
 }
 
-function hasRequiredItems(context: AgentContext): boolean {
+function hasRequiredItems(context: CandidateAdmissionContext): boolean {
   return context.goal.requestedItems.some((item) => item.required);
 }

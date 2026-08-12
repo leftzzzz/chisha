@@ -670,33 +670,29 @@ describe('runSearchAgentV3', () => {
     expect(searchedPlans[0].keywords).toEqual(['餐厅']);
     expect(result.restaurants.length).toBeGreaterThan(0);
 
+    // 单关键词约束已前移到 SearchPlanSchema，Runtime 不再靠 guard 事后拆词，
+    // 因此不应再出现 MULTI_INTENT_KEYWORDS 改写往返。
     const guardDecisions = result.runtimeState?.trace
       ?.filter((item) => item.type === 'guard_decision')
       .map((item) => item.guardDecision);
-    expect(guardDecisions).toEqual(expect.arrayContaining([
+    expect(guardDecisions).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
-        type: 'request_rewrite',
         violations: expect.arrayContaining([
           expect.objectContaining({ code: 'MULTI_INTENT_KEYWORDS' }),
         ]),
       }),
     ]));
-    expect(result.runtimeState?.trace).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: 'runtime_decision',
-        output: expect.objectContaining({ reason: 'guard_rewrite_exhausted' }),
-      }),
-    ]));
+    expect(searchedPlans.every((plan) => plan.keywords.length === 1)).toBe(true);
   });
 
-  it('does not infer an open recommendation goal if the Supervisor truncates', async () => {
+  it('pauses with a clarifying question instead of searching when the Supervisor truncates', async () => {
     const supervisorMock = runSupervisorPlanner as jest.Mock;
     supervisorMock.mockRejectedValueOnce(
       new Error('SupervisorPlannerAgent returned truncated function arguments')
     );
     const searchedPlans: SearchPlan[] = [];
 
-    await expect(runSearchAgentV3(
+    const result = await runSearchAgentV3(
       {
         query: '没有具体想吃的，你来选',
         location,
@@ -712,9 +708,44 @@ describe('runSearchAgentV3', () => {
         searchedPlans.push(plan);
         return [restaurant('r1', '社区餐厅', '餐饮', 300)];
       }
-    )).rejects.toThrow('SupervisorPlannerAgent returned truncated function arguments');
+    );
 
+    // 关键不变量：截断的理解结果不能被当成搜索目标。
     expect(searchedPlans).toEqual([]);
+    expect(result.paused).toBe(true);
+    expect(result.question?.question).toContain('想吃点什么');
+    expect(result.runtimeState?.trace).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'error',
+        error: expect.objectContaining({ code: 'SUPERVISOR_UNAVAILABLE' }),
+      }),
+    ]));
+  });
+
+  it('falls back to raw-query search when the Supervisor fails but the query names a dish', async () => {
+    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    supervisorMock.mockRejectedValueOnce(new Error('SupervisorPlannerAgent API failed: 500'));
+    const searchedPlans: SearchPlan[] = [];
+
+    await runSearchAgentV3(
+      {
+        query: '想吃火锅',
+        location,
+        runtimeState: {
+          attempts: [],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      async (plan) => {
+        searchedPlans.push(plan);
+        return [restaurant('r1', '老灶火锅', '火锅', 300)];
+      }
+    );
+
+    expect(searchedPlans[0]?.keywords).toEqual(['火锅']);
   });
 
   it('records the observed provider when search falls back to OSM results', async () => {

@@ -75,7 +75,7 @@ describe('SupervisorPlannerAgent action controller', () => {
       expect(action?.type).toBe('search');
       if (action?.type === 'search') {
         expect(action.plan).toEqual(expect.objectContaining({
-          keywords: ['餐厅', '美食'],
+          keywords: ['餐厅'],
           searchIntent: 'fallback',
           allowedForPrimary: true,
         }));
@@ -139,7 +139,7 @@ describe('SupervisorPlannerAgent action controller', () => {
       expect(action?.type).toBe('search');
       if (action?.type === 'search') {
         expect(action.plan).toEqual(expect.objectContaining({
-          keywords: ['餐厅', '美食'],
+          keywords: ['餐厅'],
           searchIntent: 'fallback',
           allowedForPrimary: true,
         }));

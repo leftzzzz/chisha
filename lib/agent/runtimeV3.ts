@@ -9,26 +9,40 @@ import {
 import { evaluateSearchResult, mergeCandidates } from './evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
-import { countDistinctBrands } from '@/lib/restaurantIdentity';
+import { logger } from '@/lib/logger';
+import { describeFinish, internalFinishNote, type FinishReason } from './finishReason';
 import {
-  isOpenExplorationAuthorized,
-  isSearchIntentAuthorizedForPrimary,
-} from './authorization';
+  buildDegradedGoalFromQuery,
+  buildEmptyDegradedGoal,
+  DEGRADED_CLARIFYING_QUESTION,
+  DEGRADED_GOAL_NOTICE,
+} from './degraded';
+import { isSearchIntentAuthorizedForPrimary } from './authorization';
+import {
+  buildNoPrimaryQuestion,
+  buildPostAuthorizationNoPrimaryQuestion,
+  inferPoiTypesForGoalKeyword,
+  buildSearchPlan,
+  createPlanId,
+  distinctPrimaryBrandCount,
+  getStrictDistanceMaxMeters,
+  hasPrimaryCandidates,
+  hasTriedIntent,
+  hasTriedPlan,
+  nextUntriedTarget,
+  questionAsksForBroadenAuthorization,
+  resolveSearchActionPoiType,
+  untriedTargets,
+} from './policy';
 import {
   hasPromotedBroadenedPrimaryCandidates,
   promoteAuthorizedBroadenedResults,
 } from './broadenAdmission';
 import { SearchPlanSchema } from './schemas/plan';
 import { finalizeRecommendations } from './resultAssembler';
-import {
-  DEFAULT_POI_TYPE,
-  isGenericSearchKeyword,
-  lookupFoodPoiTypes,
-  normalizeSearchKeywords,
-} from './poiTaxonomy';
+import { DEFAULT_POI_TYPE, isGenericSearchKeyword, normalizeSearchKeywords } from './poiTaxonomy';
 import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
 import { runEvaluationAgent, type EvaluationAgentInput } from './subagents/evaluationAgent';
-import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
 import {
   deriveContextInvalidationPlan,
   deriveGoalSignature,
@@ -36,9 +50,11 @@ import {
   withUpdatedGoalVersion,
 } from './goalVersion';
 import type { ContextInvalidationPlan } from './goalVersion';
+import { AgentRunError } from './types';
 import type {
   AgentAction,
   AgentContext,
+  AgentErrorCode,
   AgentFinalResult,
   AgentInput,
   AgentObservation,
@@ -81,21 +97,66 @@ const DEFAULT_AGENT_EVALUATION_CONCURRENCY = parsePositiveInt(process.env.AGENT_
 const CONFIGURED_AGENT_EVALUATION_LIMIT = parseOptionalPositiveInt(process.env.AGENT_EVALUATION_LIMIT);
 const MAX_HARD_REJECTED_REASON_DETAILS = 6;
 const MAX_HARD_REJECTED_OBSERVATIONS = 20;
+/** 并行搜索开关：关闭时一次 action 只执行一个计划，行为与串行完全一致。 */
+const AGENT_PARALLEL_SEARCH = process.env.AGENT_PARALLEL_SEARCH === 'true';
+const AGENT_SEARCH_CONCURRENCY = parsePositiveInt(process.env.AGENT_SEARCH_CONCURRENCY, 3);
 
+/**
+ * 执行一轮 Agent 搜索。
+ *
+ * 失败时抛出 {@link AgentRunError}，其中携带失败前的运行状态，
+ * 供 route 层把这一轮的 trace 落库——失败路径与成功路径同等留痕。
+ */
 export async function runSearchAgentV3(
   input: AgentInput,
   emit: EmitAgentEvent,
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>
 ): Promise<AgentFinalResult> {
+  const contextRef: { current?: AgentV3Context } = {};
+
+  try {
+    return await runAgentTurn(input, emit, searchPlaces, contextRef);
+  } catch (error) {
+    if (error instanceof AgentRunError) {
+      throw error;
+    }
+
+    const code = toAgentErrorCode(error);
+    const message = error instanceof Error ? error.message : String(error);
+    const context = contextRef.current;
+
+    if (context) {
+      appendTrace(context, 'error', {
+        error: { code, message, retryable: isRetryableAgentError(code) },
+      });
+      throw new AgentRunError(message, code, snapshotRuntimeState(context), error);
+    }
+
+    throw new AgentRunError(message, code, undefined, error);
+  }
+}
+
+async function runAgentTurn(
+  input: AgentInput,
+  emit: EmitAgentEvent,
+  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
+  contextRef: { current?: AgentV3Context }
+): Promise<AgentFinalResult> {
   emit({ type: 'thinking', message: '正在理解你的需求...' });
   emit({ type: 'status', message: '正在分析您的需求...' });
 
-  const supervisorOutput = await getSupervisorPlannerOutput(input);
-  const conversationMode = inferRuntimeConversationMode(input, supervisorOutput);
+  const resolution = await resolveTurnGoal(input);
+  const supervisorOutput = resolution.supervisorOutput;
+  const conversationMode = resolution.conversationMode;
   const baseGoal = withUpdatedGoalVersion(
-    resolveSupervisorGoal(input, supervisorOutput),
+    resolution.goal,
     conversationMode === 'start_new_goal' ? undefined : input.runtimeState?.goal
   );
+
+  if (resolution.degraded) {
+    emit({ type: 'status', message: DEGRADED_GOAL_NOTICE });
+  }
+
   const invalidationPlan = deriveContextInvalidationPlan(
     input.runtimeState?.goal,
     baseGoal,
@@ -104,7 +165,7 @@ export async function runSearchAgentV3(
   );
   const resetPlan = deriveSearchStateResetPlan(invalidationPlan, conversationMode);
   let goal = baseGoal;
-  if (!supervisorOutput.question && baseGoal.clarificationNeeded.length === 0) {
+  if (!supervisorOutput?.question && baseGoal.clarificationNeeded.length === 0) {
     emit({ type: 'status', message: '正在联想相关搜索词...' });
     goal = applyKeywordExpansion(
       baseGoal,
@@ -116,6 +177,10 @@ export async function runSearchAgentV3(
     );
   }
   const context = createInitialContext(input, goal, resetPlan);
+  contextRef.current = context;
+  if (resolution.degraded) {
+    appendTrace(context, 'error', { error: resolution.degraded });
+  }
   appendTrace(context, 'user_message', {
     input: {
       message: input.query,
@@ -135,7 +200,8 @@ export async function runSearchAgentV3(
       resetPlan,
     },
   });
-  const clarifyingQuestion = supervisorOutput.question
+  const clarifyingQuestion = resolution.clarifyingQuestion
+    ?? supervisorOutput?.question
     ?? getInitialClarifyingQuestion(goal);
 
   if (clarifyingQuestion) {
@@ -149,14 +215,7 @@ export async function runSearchAgentV3(
     promotion.promotedCandidates > 0
     || hasPromotedBroadenedPrimaryCandidates(context)
   ) {
-    const action: AgentAction = {
-      type: 'finish',
-      selectedIds: context.candidates
-        .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
-        .map((candidate) => candidate.restaurant.id),
-      explanation: '用户已授权放宽，已将上一轮候补结果重新纳入主推荐。',
-      confidence: 0.66,
-    };
+    const action = buildFinishAction(context, 'BROADEN_PROMOTION', 0.66);
     appendAction(context, action, emit);
     return finish(context, action, emit);
   }
@@ -175,39 +234,31 @@ export async function runSearchAgentV3(
       return finish(context, guarded.action, emit);
     }
 
-    const observation = await executeSearchAction(
+    const observations = await executeSearchBatch(
       actionRecord.id,
-      guarded.action.plan,
+      planParallelBatch(context, guarded.action.plan),
       context,
       searchPlaces,
       emit
     );
-    context.observations.push(observation);
 
-    emit({
-      type: 'observation',
-      actionId: observation.actionId,
-      traceId: observation.traceId,
-      found: observation.rawCount,
-      accepted: observation.acceptedPrimaryIds.length,
-      rejected: observation.hardRejected.length,
-    });
+    for (const observation of observations) {
+      context.observations.push(observation);
+      emit({
+        type: 'observation',
+        actionId: observation.actionId,
+        traceId: observation.traceId,
+        found: observation.rawCount,
+        accepted: observation.acceptedPrimaryIds.length,
+        rejected: observation.hardRejected.length,
+      });
+    }
 
     if (context.attempts.length >= context.maxSearchCalls) {
       const fallback: AgentAction = hasPrimaryCandidates(context)
-        ? {
-            type: 'finish',
-            selectedIds: context.candidates
-              .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
-              .map((candidate) => candidate.restaurant.id),
-            explanation: '已达到搜索上限，返回当前通过验证的推荐。',
-            confidence: 0.62,
-          }
-        : {
-            type: 'ask_user',
-            question: buildNoPrimaryQuestion(context),
-      };
-      appendTrace(context, 'runtime_decision', {
+        ? buildFinishAction(context, 'SEARCH_BUDGET_EXHAUSTED', 0.62)
+        : { type: 'ask_user', question: buildNoPrimaryQuestion(context) };
+      const decisionTrace = appendTrace(context, 'runtime_decision', {
         output: {
           reason: 'search_budget_exhausted',
           action: fallback,
@@ -219,6 +270,7 @@ export async function runSearchAgentV3(
       emit({
         type: 'guardrail',
         actionId: fallbackRecord.id,
+        traceId: decisionTrace.id,
         message: '已达到本轮搜索动作上限，Runtime 强制进入结束或追问。',
         severity: 'warn',
       });
@@ -231,11 +283,7 @@ export async function runSearchAgentV3(
     }
   }
 
-  const forcedFinish: Extract<AgentAction, { type: 'finish' }> = {
-    type: 'finish',
-    explanation: '已达到 Agent 动作上限，返回当前通过验证的结果。',
-    confidence: 0.6,
-  };
+  const forcedFinish = buildFinishAction(context, 'ACTION_BUDGET_EXHAUSTED', 0.6, false);
   appendTrace(context, 'runtime_decision', {
     output: {
       reason: 'action_budget_exhausted',
@@ -245,6 +293,114 @@ export async function runSearchAgentV3(
     },
   });
   return finish(context, forcedFinish, emit);
+}
+
+/**
+ * 构造一个内部 finish 动作。
+ *
+ * 用户可见文案由 reason 决定（describeFinish），explanation 只进 trace。
+ */
+function buildFinishAction(
+  context: AgentV3Context,
+  reason: FinishReason,
+  confidence: number,
+  withSelectedIds = true
+): Extract<AgentAction, { type: 'finish' }> {
+  return {
+    type: 'finish',
+    reason,
+    selectedIds: withSelectedIds
+      ? context.candidates
+          .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
+          .map((candidate) => candidate.restaurant.id)
+      : undefined,
+    explanation: internalFinishNote(reason),
+    confidence,
+  };
+}
+
+interface TurnGoalResolution {
+  goal: UserGoal;
+  conversationMode: ConversationMode;
+  supervisorOutput: Awaited<ReturnType<typeof runSupervisorPlanner>> | null;
+  degraded?: { code: AgentErrorCode; message: string; retryable: boolean };
+  clarifyingQuestion?: PendingQuestion;
+}
+
+/**
+ * 解析本轮目标。
+ *
+ * Supervisor 不可用时降级为"按原文关键词搜索"，抽不出关键词则转为追问，
+ * 而不是让整轮请求失败——这是入口唯一没有降级路径的历史缺口。
+ */
+async function resolveTurnGoal(input: AgentInput): Promise<TurnGoalResolution> {
+  try {
+    const supervisorOutput = await getSupervisorPlannerOutput(input);
+    return {
+      goal: resolveSupervisorGoal(input, supervisorOutput),
+      conversationMode: inferRuntimeConversationMode(input, supervisorOutput),
+      supervisorOutput,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('SupervisorPlannerAgent unavailable, falling back to raw query search', {
+      error: message,
+    });
+
+    const degraded = {
+      code: 'SUPERVISOR_UNAVAILABLE' as const,
+      message,
+      retryable: true,
+    };
+    const degradedGoal = buildDegradedGoalFromQuery(input.query);
+
+    if (degradedGoal) {
+      return {
+        goal: degradedGoal,
+        conversationMode: 'start_new_goal',
+        supervisorOutput: null,
+        degraded,
+      };
+    }
+
+    return {
+      goal: buildEmptyDegradedGoal(input.query),
+      conversationMode: 'start_new_goal',
+      supervisorOutput: null,
+      degraded,
+      clarifyingQuestion: { ...DEGRADED_CLARIFYING_QUESTION },
+    };
+  }
+}
+
+function toAgentErrorCode(error: unknown): AgentErrorCode {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (/OPENAI_API_KEY|AMAP_API_KEY|is required/i.test(message)) {
+    return 'CONFIG_MISSING';
+  }
+
+  if (/429|rate\s*limit|too many requests/i.test(message)) {
+    return 'RATE_LIMITED';
+  }
+
+  if (/SupervisorPlannerAgent/i.test(message)) {
+    return 'SUPERVISOR_UNAVAILABLE';
+  }
+
+  if (/EvaluationAgent/i.test(message)) {
+    return 'EVALUATION_FAILED';
+  }
+
+  if (/amap|osm|搜索超时|poi/i.test(message)) {
+    return 'SEARCH_PROVIDER_FAILED';
+  }
+
+  return 'UNKNOWN';
+}
+
+function isRetryableAgentError(code: AgentErrorCode): boolean {
+  return code !== 'CONFIG_MISSING' && code !== 'SESSION_EXPIRED';
 }
 
 function resolveSupervisorGoal(
@@ -733,14 +889,16 @@ async function guardSearchAction(
     };
   }
 
-  const keywords = normalizeSearchKeywords(action.plan.keywords)
+  // SearchPlanSchema 已经把"一次搜索一个意图词"约束在类型层，
+  // 这里只负责剔除命中排除项的关键词。
+  const guardedKeywords = normalizeSearchKeywords(action.plan.keywords)
     .filter((keyword) => !context.goal.exclusions.some((exclusion) => keyword.includes(exclusion)))
-    .slice(0, 5);
-  if (keywords.length !== action.plan.keywords.length) {
+    .slice(0, 1);
+  if (guardedKeywords.length !== action.plan.keywords.length) {
     notes.push('已移除命中明确排除项的搜索关键词。');
   }
 
-  if (keywords.length === 0) {
+  if (guardedKeywords.length === 0) {
     return {
       type: 'reject',
       violations: [
@@ -751,9 +909,6 @@ async function guardSearchAction(
       fallback: 'ask_user',
     };
   }
-
-  const guardedKeywords = keywords.slice(0, 1);
-  const hasMultipleKeywords = keywords.length > guardedKeywords.length;
 
   const strictMax = getStrictDistanceMaxMeters(context.goal);
   const requestedRadius = Number.isFinite(action.plan.radiusMeters)
@@ -797,9 +952,9 @@ async function guardSearchAction(
   }
 
   const selectedPoiType = resolveSearchActionPoiType(
+    context.goal,
     planBeforePoiType.data.keywords[0],
-    action.plan.poiType,
-    context.goal
+    action.plan.poiType
   );
 
   const parsed = SearchPlanSchema.safeParse({
@@ -829,24 +984,9 @@ async function guardSearchAction(
     };
   }
 
-  const guardedAction: AgentAction = { type: 'search', plan: parsed.data };
-  if (hasMultipleKeywords) {
-    return {
-      type: 'request_rewrite',
-      violations: [
-        violation('MULTI_INTENT_KEYWORDS', '模型输出了多关键词搜索计划，需要拆成单关键词 action。', 'warn', {
-          originalKeywords: keywords,
-          suggestedKeywords: guardedKeywords,
-        }),
-      ],
-      instruction: '将 SearchPlan.keywords 改为单个餐饮意图词；如果仍需搜索其他关键词，请在后续 action 中逐个输出。',
-      suggestedAction: guardedAction,
-    };
-  }
-
   return {
     type: 'allow',
-    action: guardedAction,
+    action: { type: 'search', plan: parsed.data },
     notes,
   };
 }
@@ -891,34 +1031,32 @@ function buildExpansionSearchBeforeFinish(context: AgentV3Context): AgentAction 
     return null;
   }
 
-  const primaryCandidates = context.candidates.filter((candidate) =>
-    isPrimaryRecommendationAllowed(candidate, context)
-  );
-  const distinctBrands = countDistinctBrands(primaryCandidates.map((c) => c.restaurant));
+  const distinctBrands = distinctPrimaryBrandCount(context);
   if (distinctBrands >= context.targetCount) {
     return null;
   }
 
-  const relatedTarget = nextUntriedGoalTarget(context, context.goal.relatedTargets, context.goal.relatedKeywords);
+  const relatedTarget = nextUntriedTarget(context, 'related');
   if (relatedTarget && !hasTriedIntent(context, 'synonym')) {
     return {
       type: 'search',
-      plan: buildRuntimePlan(context, relatedTarget, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
+      plan: buildSearchPlan(context, relatedTarget, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
     };
   }
 
-  const broadenedTarget = distinctBrands === 0
-    ? nextUntriedGoalTarget(context, context.goal.broadenedTargets, context.goal.broadenedKeywords)
-    : null;
+  const broadenedTarget = distinctBrands === 0 ? nextUntriedTarget(context, 'broadened') : null;
   if (broadenedTarget) {
+    const authorized = isSearchIntentAuthorizedForPrimary(context.goal, 'broadened', [
+      broadenedTarget.keyword,
+    ]);
     return {
       type: 'search',
-      plan: buildRuntimePlan(
+      plan: buildSearchPlan(
         context,
         broadenedTarget,
         'broadened',
-        isSearchIntentAuthorizedForPrimary(context.goal, 'broadened', [broadenedTarget.keyword]),
-        isSearchIntentAuthorizedForPrimary(context.goal, 'broadened', [broadenedTarget.keyword])
+        authorized,
+        authorized
           ? '用户允许放宽，继续尝试 Agent 联想到的相邻品类。'
           : '没有主推荐，搜索 Agent 联想到的相邻品类作为候补。'
       ),
@@ -928,11 +1066,131 @@ function buildExpansionSearchBeforeFinish(context: AgentV3Context): AgentAction 
   if (relatedTarget) {
     return {
       type: 'search',
-      plan: buildRuntimePlan(context, relatedTarget, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
+      plan: buildSearchPlan(context, relatedTarget, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
     };
   }
 
   return null;
+}
+
+/**
+ * 决定本轮可以并行铺开哪些搜索计划。
+ *
+ * 模型仍然只输出一个计划（"下一步做什么"由模型决定），
+ * 能不能顺带把已知的未尝试关键词一起搜（"这一步铺多宽"）由策略决定。
+ * 关闭开关时恒返回单计划，行为与串行完全一致。
+ */
+function planParallelBatch(context: AgentV3Context, primaryPlan: SearchPlan): SearchPlan[] {
+  const plans = [withPlanId(primaryPlan)];
+  const remaining = context.maxSearchCalls - context.attempts.length;
+
+  if (!AGENT_PARALLEL_SEARCH || remaining <= 1 || primaryPlan.searchIntent === 'fallback') {
+    return plans;
+  }
+
+  const budget = Math.min(AGENT_SEARCH_CONCURRENCY, remaining) - 1;
+  if (budget <= 0) {
+    return plans;
+  }
+
+  const plannedKeywords = new Set(primaryPlan.keywords);
+  const companionKind = primaryPlan.searchIntent === 'broadened' ? 'broadened' : 'related';
+
+  for (const target of untriedTargetsForParallel(context, companionKind)) {
+    if (plans.length > budget) {
+      break;
+    }
+
+    const [keyword] = normalizeSearchKeywords([target.keyword]);
+    if (!keyword || plannedKeywords.has(keyword)) {
+      continue;
+    }
+
+    plannedKeywords.add(keyword);
+    plans.push(
+      buildSearchPlan(
+        context,
+        target,
+        primaryPlan.searchIntent,
+        primaryPlan.allowedForPrimary,
+        '与本轮主计划并行尝试的联想关键词。'
+      )
+    );
+  }
+
+  return plans;
+}
+
+function untriedTargetsForParallel(
+  context: AgentV3Context,
+  kind: 'related' | 'broadened'
+): SearchKeywordTarget[] {
+  const targets = untriedTargets(context, kind);
+  return kind === 'related' ? targets : targets.filter(() => hasPrimaryCandidates(context) === false);
+}
+
+function withPlanId(plan: SearchPlan): SearchPlan {
+  return plan.planId ? plan : { ...plan, planId: createPlanId() };
+}
+
+/**
+ * 执行一批搜索计划。
+ *
+ * 批内计划并行发起（Amap 请求 + 候选验证），attempts 按 plans 顺序追加，
+ * 保证 candidate.sourceAttempt 索引稳定；单个计划失败不影响同批其他计划。
+ */
+async function executeSearchBatch(
+  actionId: string,
+  plans: SearchPlan[],
+  context: AgentV3Context,
+  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
+  emit: EmitAgentEvent
+): Promise<AgentObservation[]> {
+  if (plans.length === 1) {
+    return [await executeSearchAction(actionId, plans[0], context, searchPlaces, emit)];
+  }
+
+  const baseRound = context.attempts.length + 1;
+  const results = await mapWithConcurrency(plans, plans.length, async (plan, index) => {
+    try {
+      return await runSearchPlan(actionId, plan, baseRound + index, context, searchPlaces, emit);
+    } catch (error) {
+      logger.warn('Parallel search plan failed', {
+        keywords: plan.keywords,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      appendTrace(context, 'error', {
+        actionId,
+        input: { plan },
+        error: {
+          code: 'SEARCH_PROVIDER_FAILED',
+          message: error instanceof Error ? error.message : String(error),
+          retryable: true,
+        },
+      });
+      return null;
+    }
+  });
+
+  const observations: AgentObservation[] = [];
+  for (const result of results) {
+    if (result) {
+      observations.push(commitSearchPlanResult(result, context, emit));
+    }
+  }
+
+  return observations;
+}
+
+interface SearchPlanResult {
+  actionId: string;
+  plan: SearchPlan;
+  restaurants: Restaurant[];
+  provider: AgentObservation['provider'];
+  hardGuard: ReturnType<typeof applyHardConstraintGuard>;
+  hardRejectedReasons: string[];
+  evaluationRestaurants: Restaurant[];
+  agentEvaluation: EvaluationAgentOutput;
 }
 
 async function executeSearchAction(
@@ -942,8 +1200,37 @@ async function executeSearchAction(
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
   emit: EmitAgentEvent
 ): Promise<AgentObservation> {
-  const round = context.attempts.length + 1;
-  emit({ type: 'searching', keywords: plan.keywords, round, searchIntent: plan.searchIntent });
+  const result = await runSearchPlan(
+    actionId,
+    plan,
+    context.attempts.length + 1,
+    context,
+    searchPlaces,
+    emit
+  );
+  return commitSearchPlanResult(result, context, emit);
+}
+
+/**
+ * 只读阶段：发起搜索并完成候选验证，不修改 context 的 attempts / candidates。
+ *
+ * 并行执行时多个计划同时处于该阶段，因此这里不能写入顺序敏感的状态。
+ */
+async function runSearchPlan(
+  actionId: string,
+  plan: SearchPlan,
+  round: number,
+  context: AgentV3Context,
+  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
+  emit: EmitAgentEvent
+): Promise<SearchPlanResult> {
+  emit({
+    type: 'searching',
+    keywords: plan.keywords,
+    round,
+    searchIntent: plan.searchIntent,
+    planId: plan.planId,
+  });
   const toolStartTrace = appendTrace(context, 'tool_start', {
     actionId,
     input: {
@@ -956,6 +1243,7 @@ async function executeSearchAction(
     traceId: toolStartTrace.id,
     tool: 'search_restaurants',
     args: plan,
+    planId: plan.planId,
   });
 
   const toolStartedAt = Date.now();
@@ -984,17 +1272,18 @@ async function executeSearchAction(
       provider,
       durationMs: toolDurationMs,
     },
+    planId: plan.planId,
   });
   emit({
     type: 'search_result',
     found: restaurants.length,
     total: restaurants.length,
+    planId: plan.planId,
     restaurants: summarizeRestaurantsForEvent(restaurants),
   });
 
   const hardGuard = applyHardConstraintGuard(restaurants, context.goal);
   const hardRejectedReasons = summarizeHardRejectedReasons(hardGuard.rejected);
-  context.unmetConstraints.push(...hardRejectedReasons);
 
   const evaluationRestaurants = selectRestaurantsForEvaluation(hardGuard.passed, context.targetCount);
   if (evaluationRestaurants.length > 0) {
@@ -1046,6 +1335,34 @@ async function executeSearchAction(
     },
     error: evaluationError,
   });
+
+  return {
+    actionId,
+    plan,
+    restaurants,
+    provider,
+    hardGuard,
+    hardRejectedReasons,
+    evaluationRestaurants,
+    agentEvaluation,
+  };
+}
+
+/**
+ * 写入阶段：把一个计划的结果并入运行状态。
+ *
+ * 串行执行，attempts 按调用顺序追加，因此 sourceAttempt 索引始终稳定。
+ */
+function commitSearchPlanResult(
+  result: SearchPlanResult,
+  context: AgentV3Context,
+  emit: EmitAgentEvent
+): AgentObservation {
+  const { actionId, plan, restaurants, provider, hardGuard, hardRejectedReasons } = result;
+  const { evaluationRestaurants, agentEvaluation } = result;
+  const sourceAttempt = context.attempts.length + 1;
+
+  context.unmetConstraints.push(...hardRejectedReasons);
   if (!plan.allowedForPrimary && restaurants.length > 0) {
     context.unmetConstraints.push('未授权放宽或兜底结果只作为候补，不进入主推荐。');
   }
@@ -1061,7 +1378,7 @@ async function executeSearchAction(
     evaluationRestaurants,
     context,
     plan,
-    round,
+    sourceAttempt,
     verdictGuard.output
   );
   mergeCandidates(context, evaluated.acceptedCandidates);
@@ -1354,26 +1671,6 @@ function createTraceId(prefix: string): string {
 
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
-
-const EXPLANATION_MAP: Record<string, string> = {
-  '已达到搜索上限，返回当前通过验证的推荐。':
-    '已为您搜索附近多个方向，以下是精选推荐。',
-  '已达到 Agent 动作上限，返回当前通过验证的结果。':
-    '已为您完成全面搜索，以下是最佳推荐。',
-  'Guard 拒绝继续执行该动作，返回当前通过验证的推荐。':
-    '已为您找到合适餐厅，以下是推荐结果。',
-  '没有更多可验证搜索策略，返回当前通过验证的推荐。':
-    '已为您搜索多个方向，以下是精选推荐。',
-  '已达到本轮搜索动作上限，Runtime 强制进入结束或追问。':
-    '搜索已完成，以下是推荐结果。',
-  '用户已授权放宽，已将上一轮候补结果重新纳入主推荐。':
-    '已根据您的要求扩大搜索范围，以下是推荐结果。',
-};
-
-function translateExplanation(rawExplanation: string): string {
-  return EXPLANATION_MAP[rawExplanation] ?? rawExplanation;
-}
-
 function finish(
   context: AgentV3Context,
   action: Extract<AgentAction, { type: 'finish' }>,
@@ -1388,7 +1685,7 @@ function finish(
   const finalResult = finalizeRecommendations(context, {
     selectedIds: action.selectedIds,
     candidateIds: action.candidateIds,
-    explanation: translateExplanation(action.explanation),
+    explanation: describeFinish(action.reason, action.explanation),
     confidence: action.confidence,
   });
 
@@ -1419,7 +1716,7 @@ function buildPausedResult(context: AgentV3Context, question: PendingQuestion): 
     explanation: question.reason ?? '需要用户补充信息后继续搜索。',
     confidence: 0.4,
   });
-  appendTrace(context, 'question', {
+  const questionTrace = appendTrace(context, 'question', {
     output: {
       question,
       partialRestaurantIds: partialResult.restaurants.map((restaurant) => restaurant.id),
@@ -1431,359 +1728,12 @@ function buildPausedResult(context: AgentV3Context, question: PendingQuestion): 
     ...partialResult,
     paused: true,
     question,
+    questionTraceId: questionTrace.id,
     runtimeState: {
       ...snapshotRuntimeState(context),
       pendingQuestion: question,
     },
   };
-}
-
-function buildNoPrimaryQuestion(context: AgentV3Context): PendingQuestion {
-  const target = [
-    ...context.goal.requestedItems.map((item) => item.name),
-    ...context.goal.primaryKeywords,
-  ].filter(Boolean).slice(0, 3).join('、');
-  const hasStrictDistance = context.goal.hardConstraints.some((constraint) =>
-    constraint.kind === 'distance' && constraint.strict
-  );
-
-  if (hasStrictDistance) {
-    return {
-      reason: '当前严格距离范围内没有找到通过主推荐准入的餐厅。',
-      question: '当前距离范围内没有找到合适餐厅，要扩大范围再搜吗？',
-      options: ['扩大范围', '换个类型'],
-      allowFreeText: true,
-      optionEffects: {
-        '扩大范围': {
-          allowBroaden: true,
-          setDistanceMaxMeters: 5000,
-          addAuthorizations: [{
-            id: `auth_distance_expansion_${Date.now().toString(36)}`,
-            kind: 'distance_expansion',
-            createdAt: Date.now(),
-            reason: '用户授权扩大距离范围。',
-            constraints: { maxMeters: 5000 },
-          }],
-        },
-      },
-    };
-  }
-
-  const exhaustedQuestion = buildPostAuthorizationNoPrimaryQuestion(context);
-  if (exhaustedQuestion) {
-    return exhaustedQuestion;
-  }
-
-  return {
-    reason: '没有找到通过主推荐准入的餐厅。',
-    question: target
-      ? `没有找到符合「${target}」的餐厅，要调整需求或允许放宽吗？`
-      : '没有找到符合条件的餐厅，要调整需求或允许放宽吗？',
-    options: ['搜更广的品类', '换个类型'],
-    allowFreeText: true,
-    optionEffects: {
-      '搜更广的品类': allowBroadenQuestionEffect(context.goal),
-    },
-  };
-}
-
-function buildPostAuthorizationNoPrimaryQuestion(context: AgentV3Context): PendingQuestion | null {
-  if (hasPrimaryCandidates(context)) {
-    return null;
-  }
-
-  const hasPrimaryTarget = hasPositiveFoodTarget(context.goal);
-  if (hasPrimaryTarget) {
-    if (!hasCategoryBroadenAuthorization(context) || hasUntriedBroadenedTarget(context)) {
-      return null;
-    }
-
-    const target = primaryTargetLabel(context.goal);
-    const canAskFallback = !isOpenExplorationAuthorized(context.goal)
-      && !hasTriedIntent(context, 'fallback');
-    const options = canAskFallback ? ['随便推荐', '换个类型'] : ['换个类型'];
-    const optionEffects = canAskFallback
-      ? { '随便推荐': fallbackPrimaryQuestionEffect() }
-      : undefined;
-    const attemptedBroadenedSearch = hasTriedIntent(context, 'broadened');
-
-    return {
-      reason: attemptedBroadenedSearch
-        ? '已授权并尝试放宽到相邻品类，但没有找到通过主推荐准入的餐厅。'
-        : '已授权放宽，但没有更多可尝试的相邻品类。',
-      question: target
-        ? postBroadenQuestionText(target, attemptedBroadenedSearch)
-        : postBroadenQuestionText(undefined, attemptedBroadenedSearch),
-      options,
-      allowFreeText: true,
-      optionEffects,
-    };
-  }
-
-  if (
-    isOpenExplorationAuthorized(context.goal)
-    && hasTriedIntent(context, 'fallback')
-    && !hasUntriedBroadenedTarget(context)
-  ) {
-    return {
-      reason: '已按开放推荐搜索，但没有找到通过主推荐准入的餐厅。',
-      question: '已经按开放推荐搜索过，仍没有找到合适餐厅。换个类型或补充一个想吃的方向吧。',
-      options: ['换个类型'],
-      allowFreeText: true,
-    };
-  }
-
-  return null;
-}
-
-function postBroadenQuestionText(target: string | undefined, attemptedBroadenedSearch: boolean): string {
-  if (attemptedBroadenedSearch) {
-    return target
-      ? `已经放宽搜索过「${target}」相关品类，仍没有找到合适餐厅。要换个类型，还是改成随便推荐？`
-      : '已经放宽搜索过相邻品类，仍没有找到合适餐厅。要换个类型，还是改成随便推荐？';
-  }
-
-  return target
-    ? `没有更多「${target}」相关品类可继续搜索。要换个类型，还是改成随便推荐？`
-    : '没有更多相邻品类可继续搜索。要换个类型，还是改成随便推荐？';
-}
-
-function allowBroadenQuestionEffect(goal: UserGoal): NonNullable<PendingQuestion['optionEffects']>[string] {
-  const hasPrimaryTarget = [
-    ...goal.primaryKeywords,
-    ...goal.requestedItems.map((item) => item.name),
-    ...goal.acceptableCategories.map((category) => category.name),
-  ].some((item) => item.trim().length > 0);
-  const kind = hasPrimaryTarget ? 'category_broaden' : 'fallback_primary';
-  const searchIntent = hasPrimaryTarget ? 'broadened' : 'fallback';
-
-  return {
-    allowBroaden: true,
-    addAuthorizations: [{
-      id: `auth_${kind}_${Date.now().toString(36)}`,
-      kind,
-      createdAt: Date.now(),
-      reason: hasPrimaryTarget
-        ? '用户授权放宽到相邻品类。'
-        : '用户授权开放推荐，可将兜底餐饮候选作为主推荐。',
-      constraints: {
-        allowedSearchIntents: [searchIntent],
-      },
-    }],
-  };
-}
-
-function fallbackPrimaryQuestionEffect(): NonNullable<PendingQuestion['optionEffects']>[string] {
-  return {
-    allowBroaden: true,
-    addSoftPreferences: [{ name: '默认多样性', weight: 1, verifiable: true }],
-    addAuthorizations: [{
-      id: `auth_fallback_primary_${Date.now().toString(36)}`,
-      kind: 'fallback_primary',
-      createdAt: Date.now(),
-      reason: '用户授权改为开放推荐，可将兜底餐饮候选作为主推荐。',
-      constraints: {
-        allowedSearchIntents: ['fallback'],
-      },
-    }],
-  };
-}
-
-function hasPrimaryCandidates(context: AgentV3Context): boolean {
-  return context.candidates.some((candidate) =>
-    isPrimaryRecommendationAllowed(candidate, context)
-  );
-}
-
-function hasTriedPlan(context: AgentV3Context, plan: SearchPlan): boolean {
-  const key = searchPlanKey(plan);
-  return context.attempts.some((attempt) =>
-    `${attempt.keywords.join('|')}:${attempt.radius}:${attempt.poiType ?? ''}` === key
-  );
-}
-
-function nextUntriedGoalTarget(
-  context: AgentV3Context,
-  targets: SearchKeywordTarget[] | undefined,
-  fallbackKeywords: string[]
-): SearchKeywordTarget | null {
-  const baseTargets = targets && targets.length > 0
-    ? targets
-    : fallbackKeywords.map((keyword) => ({
-        keyword,
-        poiTypes: lookupFoodPoiTypes(keyword)?.split('|'),
-      }));
-
-  return baseTargets.find((target) => !hasTriedKeyword(context, target.keyword)) ?? null;
-}
-
-function hasUntriedBroadenedTarget(context: AgentV3Context): boolean {
-  return Boolean(nextUntriedGoalTarget(
-    context,
-    context.goal.broadenedTargets,
-    context.goal.broadenedKeywords
-  ));
-}
-
-function hasTriedKeyword(context: AgentV3Context, keyword: string): boolean {
-  const normalizedKeywords = normalizeSearchKeywords([keyword]);
-  return context.attempts.some((attempt) =>
-    attempt.keywords.some((attemptKeyword) => normalizedKeywords.includes(attemptKeyword))
-  );
-}
-
-function hasTriedIntent(context: AgentV3Context, intent: SearchPlan['searchIntent']): boolean {
-  return context.attempts.some((attempt) => attempt.searchIntent === intent);
-}
-
-function hasCategoryBroadenAuthorization(context: AgentV3Context): boolean {
-  return isSearchIntentAuthorizedForPrimary(
-    context.goal,
-    'broadened',
-    broadenedGoalKeywords(context.goal)
-  );
-}
-
-function broadenedGoalKeywords(goal: UserGoal): string[] {
-  return [
-    ...goal.broadenedKeywords,
-    ...(goal.broadenedTargets ?? []).map((target) => target.keyword),
-  ].filter(Boolean);
-}
-
-function hasPositiveFoodTarget(goal: UserGoal): boolean {
-  return [
-    ...goal.primaryKeywords,
-    ...goal.requestedItems.map((item) => item.name),
-    ...goal.acceptableCategories.map((category) => category.name),
-  ].some((item) => item.trim().length > 0);
-}
-
-function primaryTargetLabel(goal: UserGoal): string {
-  return [
-    ...goal.requestedItems.map((item) => item.name),
-    ...goal.primaryKeywords,
-    ...goal.acceptableCategories.map((category) => category.name),
-  ].filter(Boolean).slice(0, 3).join('、');
-}
-
-function questionAsksForBroadenAuthorization(question: PendingQuestion): boolean {
-  return question.options?.some((option) => option.includes('放宽')) === true
-    || question.question.includes('允许放宽')
-    || Object.values(question.optionEffects ?? {}).some((effect) => effect.allowBroaden === true);
-}
-
-function buildRuntimePlan(
-  context: AgentV3Context,
-  target: string[] | SearchKeywordTarget,
-  searchIntent: SearchPlan['searchIntent'],
-  allowedForPrimary: boolean,
-  reason: string
-): SearchPlan {
-  const targetKeywords = Array.isArray(target) ? target : [target.keyword];
-  const normalizedKeywords = normalizeSearchKeywords(targetKeywords);
-  const targetPoiTypes = Array.isArray(target) ? undefined : target.poiTypes;
-  const poiType = normalizedKeywords.length === 1
-    ? resolveRuntimePlanPoiType(normalizedKeywords[0], targetPoiTypes, context.goal)
-    : undefined;
-
-  return SearchPlanSchema.parse({
-    keywords: normalizedKeywords,
-    radiusMeters: nextRuntimeRadius(context),
-    poiType,
-    searchIntent,
-    allowedForPrimary,
-    reason,
-  });
-}
-
-function resolveRuntimePlanPoiType(
-  keyword: string,
-  targetPoiTypes: string[] | undefined,
-  goal: UserGoal
-): string | undefined {
-  const sanitizedTargetPoiTypes = Array.from(new Set(targetPoiTypes ?? []))
-    .filter((code) => Boolean(getAmapFoodPoiType(code)))
-    .filter((code) => code !== DEFAULT_POI_TYPE);
-  if (sanitizedTargetPoiTypes.length > 0) {
-    return sanitizedTargetPoiTypes.join('|');
-  }
-
-  return inferPoiTypesForGoalKeyword(goal, keyword) ?? goal.poiType;
-}
-
-function resolveSearchActionPoiType(
-  keyword: string,
-  planPoiType: string | undefined,
-  goal: UserGoal
-): string | undefined {
-  const keywordPoiType = inferPoiTypesForGoalKeyword(goal, keyword);
-  if (keywordPoiType) {
-    return keywordPoiType;
-  }
-
-  const sanitizedPlanPoiTypes = sanitizePoiTypeCodes(planPoiType);
-  if (sanitizedPlanPoiTypes.length > 0) {
-    return sanitizedPlanPoiTypes.join('|');
-  }
-
-  return sanitizePoiTypeCodes(goal.poiType).join('|') || undefined;
-}
-
-function inferPoiTypesForGoalKeyword(goal: UserGoal | undefined, keyword: string): string | undefined {
-  const direct = lookupFoodPoiTypes(keyword);
-  if (direct && direct !== DEFAULT_POI_TYPE) {
-    return direct;
-  }
-
-  if (!goal) {
-    return direct;
-  }
-
-  const relatedTerms = [
-    ...goal.requestedItems
-      .filter((item) => item.name === keyword || item.aliases.includes(keyword))
-      .flatMap((item) => [item.name, ...item.aliases]),
-    ...goal.acceptableCategories.map((category) => category.name),
-  ];
-  for (const term of relatedTerms) {
-    const inferred = lookupFoodPoiTypes(term);
-    if (inferred && inferred !== DEFAULT_POI_TYPE) {
-      return inferred;
-    }
-  }
-
-  return direct;
-}
-
-function sanitizePoiTypeCodes(poiType: string | undefined): string[] {
-  return Array.from(new Set((poiType ?? '').split('|')))
-    .filter((code) => Boolean(getAmapFoodPoiType(code)))
-    .filter((code) => code !== DEFAULT_POI_TYPE)
-    .slice(0, 5);
-}
-
-function nextRuntimeRadius(context: AgentV3Context): number {
-  const strictMax = getStrictDistanceMaxMeters(context.goal);
-  if (strictMax !== undefined) {
-    return Math.max(300, Math.min(5000, strictMax));
-  }
-
-  const latestRadius = context.attempts.at(-1)?.radius ?? 1800;
-  return Math.min(5000, Math.max(300, Math.round(latestRadius * 1.25)));
-}
-
-function searchPlanKey(plan: SearchPlan): string {
-  return `${plan.keywords.join('|')}:${plan.radiusMeters}:${plan.poiType ?? ''}`;
-}
-
-function getStrictDistanceMaxMeters(goal: UserGoal): number | undefined {
-  const strictDistance = goal.hardConstraints.find((constraint) =>
-    constraint.kind === 'distance' && constraint.strict
-  );
-
-  return strictDistance?.maxMeters
-    ?? (typeof strictDistance?.value === 'number' ? strictDistance.value : undefined);
 }
 
 function candidateToVerdict(candidate: RestaurantCandidate): CandidateVerdict {

@@ -118,7 +118,7 @@ export function markStaleCandidatesForContext(
 
 export function isCandidateFreshForContext(
   candidate: RestaurantCandidate,
-  context: AgentContext
+  context: Pick<AgentContext, 'goal' | 'location'>
 ): boolean {
   return !markStaleCandidateForContext(candidate, context.goal, context.location).stale;
 }
