@@ -7,7 +7,9 @@
  */
 
 import { z } from 'zod';
+import { AgentRunError } from '@/lib/agent/types';
 import type {
+  AgentErrorCode,
   AgentEvent,
   AgentInput,
   AgentSession,
@@ -32,6 +34,14 @@ import { getClientIP, rateLimit } from '@/lib/rateLimit';
 
 const AGENT_POI_PAGES_PER_SEARCH = parsePositiveInt(process.env.AGENT_POI_PAGES_PER_SEARCH, 2);
 const AGENT_DETAIL_ENRICH_LIMIT = parsePositiveInt(process.env.AGENT_DETAIL_ENRICH_LIMIT, 6);
+/**
+ * 流级心跳间隔。
+ *
+ * 单次候选验证的超时是 60s，期间没有任何业务事件；客户端靠心跳区分
+ * "还在算"和"已经卡死"。改动心跳间隔必须同步检查 lib/api.ts 的
+ * HEARTBEAT_TIMEOUT_MS，二者需保持数倍关系。
+ */
+const AGENT_HEARTBEAT_INTERVAL_MS = parsePositiveInt(process.env.AGENT_HEARTBEAT_MS, 10000);
 
 const LocationSchema = z.object({
   lat: z.number(),
@@ -74,7 +84,8 @@ async function pauseSessionWithQuestion(
   controller: ReadableStreamDefaultController,
   session: AgentSession,
   question: PendingQuestion,
-  resultState?: AgentInput['runtimeState']
+  resultState?: AgentInput['runtimeState'],
+  questionTraceId?: string
 ): Promise<void> {
   if (resultState) {
     await applyRuntimeStateToSessionAsync(session, {
@@ -87,12 +98,17 @@ async function pauseSessionWithQuestion(
   await saveAgentSessionAsync(session);
   sendEvent(controller, {
     type: 'question',
+    traceId: questionTraceId,
     sessionId: session.id,
     question: question.question,
     options: question.options,
     allowFreeText: question.allowFreeText ?? true,
   });
-  sendEvent(controller, { type: 'session_paused', sessionId: session.id });
+  sendEvent(controller, {
+    type: 'session_paused',
+    traceId: questionTraceId,
+    sessionId: session.id,
+  });
   controller.close();
 }
 
@@ -136,6 +152,24 @@ export async function POST(request: Request) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      let heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
+        try {
+          sendEvent(controller, { type: 'heartbeat', at: Date.now() });
+        } catch {
+          // 客户端已断开，停止心跳即可。
+          stopHeartbeat();
+        }
+      }, AGENT_HEARTBEAT_INTERVAL_MS);
+
+      function stopHeartbeat(): void {
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = undefined;
+        }
+      }
+
+      let activeSession: AgentSession | undefined;
+
       try {
         const resumableSession = requestData.sessionId
           ? await getAgentSessionAsync(requestData.sessionId)
@@ -145,7 +179,10 @@ export async function POST(request: Request) {
           sendEvent(controller, {
             type: 'error',
             message: '会话已过期，请重新发起搜索',
+            code: 'SESSION_EXPIRED',
+            recoverable: false,
           });
+          stopHeartbeat();
           controller.close();
           return;
         }
@@ -159,7 +196,10 @@ export async function POST(request: Request) {
           sendEvent(controller, {
             type: 'error',
             message: '会话已过期，请重新发起搜索',
+            code: 'SESSION_EXPIRED',
+            recoverable: false,
           });
+          stopHeartbeat();
           controller.close();
           return;
         }
@@ -172,6 +212,7 @@ export async function POST(request: Request) {
           });
         }
 
+        activeSession = session;
         const previousLocation = session.location;
         session.location = requestData.location;
 
@@ -231,7 +272,14 @@ export async function POST(request: Request) {
         }
 
         if (result.paused && result.question) {
-          await pauseSessionWithQuestion(controller, session, result.question, result.runtimeState);
+          await pauseSessionWithQuestion(
+            controller,
+            session,
+            result.question,
+            result.runtimeState,
+            result.questionTraceId
+          );
+          stopHeartbeat();
           return;
         }
 
@@ -239,13 +287,38 @@ export async function POST(request: Request) {
         await appendAssistantMessageAsync(session, result.explanation);
         await saveAgentSessionAsync(session);
         sendSessionUpdated(controller, session);
+        stopHeartbeat();
         controller.close();
       } catch (error) {
-        logger.error('Agent chat stream error', { error });
+        // 失败的 turn 也要留痕：AgentRunError 携带失败前的运行状态，
+        // 先落库再报错，否则最需要 trace 的这一轮什么都查不到。
+        const code: AgentErrorCode = error instanceof AgentRunError ? error.code : 'UNKNOWN';
+        const message = error instanceof Error ? error.message : 'Agent 对话搜索失败';
+
+        logger.error('Agent chat stream error', {
+          sessionId: activeSession?.id,
+          code,
+          error: message,
+        });
+
+        if (error instanceof AgentRunError && error.runtimeState && activeSession) {
+          try {
+            await applyRuntimeStateToSessionAsync(activeSession, error.runtimeState);
+          } catch (persistError) {
+            logger.warn('Failed to persist runtime state for a failed turn', {
+              sessionId: activeSession.id,
+              error: persistError instanceof Error ? persistError.message : String(persistError),
+            });
+          }
+        }
+
         sendEvent(controller, {
           type: 'error',
-          message: error instanceof Error ? error.message : 'Agent 对话搜索失败',
+          message,
+          code,
+          recoverable: code !== 'CONFIG_MISSING' && code !== 'SESSION_EXPIRED',
         });
+        stopHeartbeat();
         controller.close();
       }
     },

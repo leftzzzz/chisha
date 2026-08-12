@@ -294,14 +294,6 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
             }));
           },
 
-          onStrategyChange: (reason) => {
-            setProgress(prev => ({
-              ...prev,
-              status: 'searching',
-              message: `正在调整策略：${reason}`,
-            }));
-          },
-
           onAction: (summary, actionType) => {
             setProgress(prev => ({
               ...prev,
