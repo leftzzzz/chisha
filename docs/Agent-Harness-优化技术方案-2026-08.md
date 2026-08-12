@@ -581,7 +581,43 @@ const useDeterministic = process.env.AGENT_DETERMINISTIC === '1' || !OPENAI_API_
 
 ---
 
-## 9. 与既有文档的关系
+## 9. 落地状态（2026-08-12）
+
+| 模块 | 状态 | 说明 |
+|---|---|---|
+| M1 policy.ts | ✅ 已落地 | 6 组重复逻辑各只剩一份；两处语义差异按 runtime 语义合并 |
+| M2 FinishReason | ✅ 已落地 | 删除 EXPLANATION_MAP；`finishReason.test.ts` 含内部术语词表校验 |
+| M3 单关键词 schema | ✅ 已落地 | `keywords` 收紧为单值，删除 MULTI_INTENT_KEYWORDS 改写往返与违规码 |
+| M4 并行 fan-out | ✅ 已落地（默认关闭） | `AGENT_PARALLEL_SEARCH`；附带修复失败计划被反复重试的缺陷 |
+| M5 降级 | ✅ 已落地 | 入口降级只接受 taxonomy 已知餐饮词；验证失败追问区分"没搜到/验证不可用" |
+| M6 观测 | ✅ 已落地 | 心跳、失败落 trace、traceId 补齐、契约单源、错误码、模型指标、trace 裁剪、`?include=trace`、日志上下文 |
+| M7 模型分级 | ✅ 已落地 | 4 个 env；同时删除命中率接近 0 的进程内评估缓存 |
+| M8 清理与可测性 | ✅ 已落地 | 删除 4 个死代码文件；`AGENT_DETERMINISTIC` 取代 NODE_ENV 短路 |
+| M8.3 eval 集 | ⬜ 未做 | 指标埋点（M6.6）已就绪，eval 集本身留待后续 |
+| 上下文压缩 | ⬜ 未做 | 见评审文档"待优化"第 24 项，已确认暂缓 |
+
+### 验收结果
+
+| 编号 | 结果 |
+|---|---|
+| A1 重复逻辑各剩一份 | ✅ 代码检索确认 |
+| A2 finish 不透内部术语 | ✅ 词表校验用例通过 |
+| A3 兜底不再触发额外 planner 调用 | ✅ guard 不再产生 MULTI_INTENT 改写 |
+| A4 单轮串行模型调用 ≤ 4 | ⚠️ 结构上成立（fan-out 合并轮次），未在真实模型下实测；指标埋点已就绪 |
+| A5 静默超时时 UI 报错 | ✅ `api.heartbeat.test.ts` + 本地流验证 |
+| A6 失败 turn 留有 error trace | ✅ 路由用例 + 本地验证（5 条 error trace） |
+| A7 前端可见 guard/runtime 决策 | ✅ 强制决策与追问事件均带 traceId（本地流确认） |
+| A8 可回答本轮 token/耗时 | ✅ `model_call` trace + turn 日志 |
+| A9 D1 单行增长放缓 | ✅ 持久化 trace 仅含决策类节点（本地 18 条，无高频节点） |
+| A10 type-check + test 通过 | ✅ 260 tests / 30 suites 全绿，lint 无告警，`npm run build` 通过 |
+
+本地端到端验证（无 OPENAI_API_KEY、无 AMAP_API_KEY 的最恶劣环境）：
+理解降级 → 单意图词搜索（火锅/涮锅/中餐，poiType 正确）→ 数据源全失败但逐个记为
+已尝试 → 达到预算上限 → 追问暂停。全程无 500，事件流带 planId / traceId / heartbeat。
+
+---
+
+## 10. 与既有文档的关系
 
 - `docs/agent-harness-review-2026-08.md`：本方案的问题依据，编号一一对应（M1↔3.1、M2↔3.1、M3↔3.2、M4↔3.3、M5↔3.6、M6↔3.9、M7↔3.3/3.6、M8↔3.8/3.10）。
 - `docs/agent-architecture-review.md`（2026-05）：已过期，其 P0 项已落地，保留作历史记录。

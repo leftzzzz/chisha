@@ -194,7 +194,6 @@ export interface EvaluationAgentOutput {
 export type GuardrailViolationCode =
   | 'SEARCH_BUDGET_EXCEEDED'
   | 'INVALID_PLAN_SCHEMA'
-  | 'MULTI_INTENT_KEYWORDS'
   | 'UNAUTHORIZED_BROADENING'
   | 'STRICT_DISTANCE_EXCEEDED'
   | 'DUPLICATE_PLAN'

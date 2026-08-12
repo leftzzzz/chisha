@@ -36,3 +36,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Cloudflare 本地状态（wrangler dev / d1 --local）
+.wrangler/
