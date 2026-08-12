@@ -246,7 +246,9 @@ describe('EvaluationAgent', () => {
     expect(secondBody.max_completion_tokens).toBe(8192);
   });
 
-  it('reuses cached model verdicts for identical evaluation requests', async () => {
+  it('calls the model for every evaluation request', async () => {
+    // 进程内缓存已删除：Workers 上每个 isolate 独立且短命，命中率接近 0，
+    // 但 key 计算开销每次都付。跨请求复用应由 D1/KV 承担并附命中率埋点。
     mockEvaluationResponse({
       verdicts: [{
         restaurantId: 'r1',
@@ -261,7 +263,7 @@ describe('EvaluationAgent', () => {
       }],
       selectedIds: ['r1'],
       candidateIds: [],
-      explanation: 'cached ok',
+      explanation: 'ok',
       unmetConstraints: [],
     });
 
@@ -277,8 +279,33 @@ describe('EvaluationAgent', () => {
     const second = await runEvaluationAgent(request);
 
     expect(first.source).toBe('model');
-    expect(second.source).toBe('cache');
-    expect(second.selectedIds).toEqual(['r1']);
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(second.source).toBe('model');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('records model call metrics into the provided sink', async () => {
+    mockEvaluationResponse({
+      verdicts: [],
+      selectedIds: [],
+      candidateIds: [],
+      explanation: 'ok',
+      unmetConstraints: [],
+    });
+
+    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
+    const metricsSink: { modelCallMetrics?: unknown[] } = {};
+
+    await runEvaluationAgent({
+      metricsSink,
+      goal: goal(),
+      plan: exactPlan,
+      restaurants: [restaurant('r1', '城中牛排馆', '西餐厅', 300)],
+      targetCount: 8,
+    });
+
+    expect(metricsSink.modelCallMetrics).toHaveLength(1);
+    expect(metricsSink.modelCallMetrics?.[0]).toEqual(
+      expect.objectContaining({ agentName: 'EvaluationAgent', ok: true, attempts: 1 })
+    );
   });
 });

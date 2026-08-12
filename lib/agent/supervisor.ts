@@ -5,6 +5,7 @@ import {
   JSON_FUNCTION_RETRY_MAX_TOKENS,
 } from './modelClient';
 import { promoteAuthorizedBroadenedResults } from './broadenAdmission';
+import type { MetricsSink } from './metrics';
 import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
 import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
 import { deriveGoalSignature, withUpdatedGoalVersion } from './goalVersion';
@@ -28,13 +29,16 @@ import type {
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
+const OPENAI_MODEL = process.env.OPENAI_MODEL_SUPERVISOR
+  || process.env.OPENAI_MODEL
+  || 'gpt-4o';
 const SUPERVISOR_TIMEOUT = 60000;
 const SUPERVISOR_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const SUPERVISOR_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 
 export interface SearchSupervisorInput {
   message: string;
+  metricsSink?: MetricsSink;
   previousGoal?: UserGoal;
   preferenceSummary?: UserPreferenceSummary;
   pendingQuestion?: PendingQuestion;
@@ -577,6 +581,7 @@ async function callSupervisorModel(
 ): Promise<SearchSupervisorOutput> {
   return callJsonFunctionAgent({
     agentName: 'SupervisorPlannerAgent',
+    metricsSink: input.metricsSink,
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
     model: OPENAI_MODEL,

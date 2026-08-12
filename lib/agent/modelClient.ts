@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
+import { recordModelCall, type MetricsSink, type ModelCallMetrics } from './metrics';
 import {
   extractModelFunctionArguments,
   isModelFunctionOutputTruncated,
@@ -51,6 +52,8 @@ const SCHEMA_REPAIR_PROMPT = `上一轮函数参数没有通过运行时 schema 
 
 export interface JsonFunctionAgentOptions<T> {
   agentName: string;
+  /** 可选指标容器；传入后每次模型调用都会记录耗时、token、重试与降级情况。 */
+  metricsSink?: MetricsSink;
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -81,8 +84,24 @@ export interface JsonFunctionParseResult<T> {
 export async function callJsonFunctionAgent<T>(
   options: JsonFunctionAgentOptions<T>
 ): Promise<T> {
+  const tracker = createMetricsTracker(options);
+
+  try {
+    const result = await runJsonFunctionAgent(options, tracker);
+    tracker.finish(true);
+    return result;
+  } catch (error) {
+    tracker.finish(false);
+    throw error;
+  }
+}
+
+async function runJsonFunctionAgent<T>(
+  options: JsonFunctionAgentOptions<T>,
+  tracker: MetricsTracker
+): Promise<T> {
   const first = parseJsonFunctionAgentResponse(
-    await requestJsonFunctionAgent(options, options.maxTokens),
+    tracker.track(await requestJsonFunctionAgent(options, options.maxTokens)),
     options
   );
 
@@ -97,7 +116,7 @@ export async function callJsonFunctionAgent<T>(
     });
 
     const retry = parseJsonFunctionAgentResponse(
-      await requestJsonFunctionAgent(options, options.retryMaxTokens!),
+      tracker.track(await requestJsonFunctionAgent(options, options.retryMaxTokens!)),
       options
     );
 
@@ -126,10 +145,10 @@ export async function callJsonFunctionAgent<T>(
     });
 
     const retry = parseJsonFunctionAgentResponse(
-      await requestJsonFunctionAgent(
+      tracker.track(await requestJsonFunctionAgent(
         withSchemaRepairInstruction(options, first.error),
         options.maxTokens
-      ),
+      )),
       options
     );
 
@@ -145,6 +164,53 @@ export async function callJsonFunctionAgent<T>(
   }
 
   throw first.error ?? new Error(`${options.agentName} returned invalid function arguments`);
+}
+
+interface MetricsTracker {
+  /** 记录一次 HTTP 往返，并原样返回响应体供后续解析。 */
+  track(outcome: RequestOutcome): ChatCompletionFunctionResponse;
+  finish(ok: boolean): void;
+}
+
+function createMetricsTracker<T>(options: JsonFunctionAgentOptions<T>): MetricsTracker {
+  const startedAt = Date.now();
+  const state: Omit<ModelCallMetrics, 'durationMs' | 'ok'> = {
+    agentName: options.agentName,
+    model: options.model,
+    promptTokens: undefined,
+    completionTokens: undefined,
+    attempts: 0,
+    mode: 'tools',
+    truncated: false,
+  };
+
+  return {
+    track(outcome) {
+      state.attempts += outcome.attempts;
+      state.mode = outcome.mode;
+      state.promptTokens = addTokens(state.promptTokens, outcome.data.usage?.prompt_tokens);
+      state.completionTokens = addTokens(state.completionTokens, outcome.data.usage?.completion_tokens);
+      if (outcome.data.choices?.[0]?.finish_reason === 'length') {
+        state.truncated = true;
+      }
+      return outcome.data;
+    },
+    finish(ok) {
+      recordModelCall(options.metricsSink, {
+        ...state,
+        durationMs: Date.now() - startedAt,
+        ok,
+      });
+    },
+  };
+}
+
+function addTokens(current: number | undefined, next: number | undefined): number | undefined {
+  if (next === undefined) {
+    return current;
+  }
+
+  return (current ?? 0) + next;
 }
 
 export function parseJsonFunctionAgentResponse<T>(
@@ -195,14 +261,22 @@ export function parseJsonFunctionAgentResponse<T>(
   };
 }
 
+interface RequestOutcome {
+  data: ChatCompletionFunctionResponse;
+  mode: ChatToolCallMode;
+  attempts: number;
+}
+
 async function requestJsonFunctionAgent<T>(
   options: JsonFunctionAgentOptions<T>,
   maxTokens: number
-): Promise<ChatCompletionFunctionResponse> {
+): Promise<RequestOutcome> {
   const modes = preferredToolCallModes();
   let lastError: Error | undefined;
+  let attempts = 0;
 
   for (const mode of modes) {
+    attempts += 1;
     const response = await fetchWithTimeout(
       `${options.baseUrl}/chat/completions`,
       {
@@ -217,7 +291,7 @@ async function requestJsonFunctionAgent<T>(
     );
 
     if (response.ok) {
-      return response.json();
+      return { data: await response.json(), mode, attempts };
     }
 
     const error = await buildChatCompletionError(options.agentName, options.model, mode, response);

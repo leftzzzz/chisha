@@ -37,6 +37,8 @@ export interface PolicyContext {
   location: Location;
   targetCount: number;
   maxSearchCalls: number;
+  /** 本轮是否发生过候选验证失败（限流/超时等），用于区分"没搜到"与"验证不可用"。 */
+  evaluationDegraded?: boolean;
 }
 
 export type TargetKind = 'initial' | 'related' | 'broadened';
@@ -326,6 +328,16 @@ export function hasUnauthorizedBroadenedCandidates(ctx: PolicyContext): boolean 
  * 分支优先级：strict 距离 > 已授权放宽但仍无结果 > 通用调整/放宽。
  */
 export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
+  // 验证服务失败时不能说"没找到合适餐厅"——那是把系统故障说成搜索结果。
+  if (ctx.evaluationDegraded && !hasPrimaryCandidates(ctx)) {
+    return {
+      reason: '候选验证服务暂时不可用，本轮结果无法进入主推荐。',
+      question: '验证服务暂时不可用，没能确认这些餐厅是否符合你的要求。要重试一次吗？',
+      options: ['重试', '换个类型'],
+      allowFreeText: true,
+    };
+  }
+
   if (getStrictDistanceMaxMeters(ctx.goal) !== undefined) {
     return {
       reason: '当前严格距离范围内没有找到通过主推荐准入的餐厅。',

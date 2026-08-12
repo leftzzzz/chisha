@@ -6,6 +6,7 @@ import {
   JSON_FUNCTION_RETRY_MAX_TOKENS,
 } from './modelClient';
 import { internalFinishNote } from './finishReason';
+import type { MetricsSink } from './metrics';
 import { isOpenExplorationAuthorized, isSearchIntentAuthorizedForPrimary } from './authorization';
 import {
   buildNoPrimaryQuestion,
@@ -47,7 +48,9 @@ export type { SearchSupervisorInput, SearchSupervisorOutput } from './supervisor
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
+const OPENAI_MODEL = process.env.OPENAI_MODEL_PLANNER
+  || process.env.OPENAI_MODEL
+  || 'gpt-4o';
 const SUPERVISOR_PLANNER_ACTION_TIMEOUT = 60000;
 const SUPERVISOR_PLANNER_ACTION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const SUPERVISOR_PLANNER_ACTION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
@@ -162,12 +165,12 @@ export async function decideSupervisorPlannerAction(
     return deterministicSupervisorPlannerAction(input, context);
   }
 
-  if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
+  if (!OPENAI_API_KEY || isDeterministicMode()) {
     return deterministicSupervisorPlannerAction(input, context);
   }
 
   try {
-    return await callSupervisorPlannerActionModel(input);
+    return await callSupervisorPlannerActionModel(input, context);
   } catch (error) {
     logger.warn('SupervisorPlannerAgent action model unavailable, using deterministic action', {
       error: error instanceof Error ? error.message : String(error),
@@ -195,6 +198,16 @@ export function createActionRecord(action: AgentAction): AgentActionRecord {
     createdAt: Date.now(),
     summary: summarizeAction(action),
   };
+}
+
+/**
+ * 是否强制走确定性分支。
+ *
+ * 用显式开关而不是 NODE_ENV==='test'：后者让模型决策路径在测试中完全不可达，
+ * 覆盖率为 0。测试默认开启（jest.setup.js），需要测模型路径的用例自行关闭。
+ */
+function isDeterministicMode(): boolean {
+  return process.env.AGENT_DETERMINISTIC === '1';
 }
 
 function isActionPlanningInput(input: SupervisorPlannerInput): input is SupervisorPlannerActionInput {
@@ -437,9 +450,13 @@ function buildFailureQuestionAction(context: AgentContext): AgentAction {
   return { type: 'ask_user', question: buildNoPrimaryQuestion(context) };
 }
 
-async function callSupervisorPlannerActionModel(input: SupervisorPlannerActionInput): Promise<AgentAction> {
+async function callSupervisorPlannerActionModel(
+  input: SupervisorPlannerActionInput,
+  metricsSink?: MetricsSink
+): Promise<AgentAction> {
   return callJsonFunctionAgent({
     agentName: 'SupervisorPlannerAgent action',
+    metricsSink,
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
     model: OPENAI_MODEL,

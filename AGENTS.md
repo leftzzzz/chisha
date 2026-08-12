@@ -41,23 +41,32 @@ Core state files:
 - `context/AppReducer.ts` - State reducer logic
 
 ### Key Directories
-- `app/api/` - API routes (agent/search, search, geocode)
+- `app/api/` - API routes (agent/chat 为主链路，agent/search 为兼容入口)
 - `components/` - React components organized by feature (input/, turntable/, restaurant/, map/, layout/)
 - `hooks/` - Custom hooks (useAppState, useLocation, useRestaurantSearch, useTurntable)
-- `lib/` - Services and utilities (llm.ts, amap.ts, osm.ts, storage.ts, api.ts)
+- `lib/` - Services and utilities (agent/, amap.ts, osm.ts, storage.ts, api.ts)
 - `types/` - TypeScript type definitions
 
+### Agent Harness (`lib/agent/`)
+主链路：`/api/agent/chat` → `runSearchAgentV3`。职责边界见
+`docs/Agent-Harness-优化技术方案-2026-08.md`。
+
+- `runtimeV3.ts` - 唯一 loop controller：预算、事件、状态提交
+- `policy.ts` - **确定性策略唯一实现**（计划构造、半径、poiType、追问、授权、
+  关键词队列）。Runtime 与 Planner 都从这里取，不要在任一侧再写一份
+- `supervisor.ts` / `supervisorPlanner.ts` - 目标理解与 action 决策（模型）
+- `subagents/evaluationAgent.ts` - 候选语义验证（模型）
+- `subagents/keywordExpansionAgent.ts` - 搜索词联想（模型）
+- `guards.ts` / `finalGuard.ts` - 确定性硬约束过滤与主推荐准入
+- `finishReason.ts` - 结束原因枚举与用户文案映射（不要用字符串匹配生成文案）
+- `degraded.ts` - Supervisor 不可用时的降级目标
+- `metrics.ts` / `turnLogger.ts` / `tracePersistence.ts` - 观测：模型指标、
+  带 sessionId/turnId 的日志、trace 持久化裁剪
+
 ### External Services
-- **OpenAI** (`lib/llm.ts`) - NLU for parsing user queries
+- **OpenAI 兼容接口** (`lib/agent/modelClient.ts`) - 所有 Agent 的模型调用入口
 - **Amap** (`lib/amap.ts`) - Primary POI search for China
 - **OpenStreetMap** (`lib/osm.ts`) - Global fallback
-
-### Amap POI Search Rules
-- Reference docs before changing Amap search behavior: https://lbs.amap.com/api/webservice/guide/api-advanced/newpoisearch
-- Treat `keywords` as a single search intent/term per POI request. Do not merge unrelated food intents into one `keywords` value such as `川菜|咖啡|奶茶`.
-- Use `types`/`poiType` for Amap POI category constraints. Only apply a narrow `poiType` when it matches the current keyword; otherwise use the broad catering type `050000`.
-- For multiple user search items, fan out into separate Amap requests per keyword or compatible keyword group, then deduplicate and rank locally.
-- Avoid combining multiple keywords with one narrow `poiType`, because one category can suppress valid results for other keywords.
 
 ### Data Flow
 1. User inputs natural language query
@@ -77,7 +86,15 @@ AMAP_API_KEY=           # 高德地图 API key
 Optional:
 ```
 OPENAI_BASE_URL=        # Custom OpenAI endpoint
-OPENAI_MODEL=           # Model override (default: gpt-4)
+OPENAI_MODEL=           # Model override (default: gpt-4o)
+OPENAI_MODEL_SUPERVISOR= # 目标理解模型（默认继承 OPENAI_MODEL）
+OPENAI_MODEL_PLANNER=   # action 决策模型（默认继承 OPENAI_MODEL）
+OPENAI_MODEL_EVALUATION= # 候选验证模型，调用量最大，可配便宜模型
+OPENAI_MODEL_KEYWORD=   # 关键词联想模型（默认继承 OPENAI_MODEL）
+AGENT_PARALLEL_SEARCH=  # true 开启一轮内并行搜索（默认 false）
+AGENT_SEARCH_CONCURRENCY= # 并行搜索上限（默认 3）
+AGENT_HEARTBEAT_MS=     # SSE 心跳间隔（默认 10000）
+AGENT_DETERMINISTIC=    # 1 时强制走确定性分支，测试默认开启
 AMAP_SECURITY_CODE=     # Amap digital signature
 ```
 

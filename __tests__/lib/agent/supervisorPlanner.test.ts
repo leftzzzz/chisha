@@ -33,10 +33,10 @@ function goal(overrides: Partial<UserGoal> = {}): UserGoal {
 
 describe('SupervisorPlannerAgent action controller', () => {
   it('forces fallback search for open exploration goals before asking the model', async () => {
-    const originalNodeEnv = process.env.NODE_ENV;
+    const originalDeterministic = process.env.AGENT_DETERMINISTIC;
     const originalApiKey = process.env.OPENAI_API_KEY;
     const fetchWithTimeout = jest.fn();
-    process.env.NODE_ENV = 'production';
+    delete process.env.AGENT_DETERMINISTIC;
     process.env.OPENAI_API_KEY = 'test-key';
     jest.resetModules();
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
@@ -82,7 +82,11 @@ describe('SupervisorPlannerAgent action controller', () => {
       }
       expect(fetchWithTimeout).not.toHaveBeenCalled();
     } finally {
-      process.env.NODE_ENV = originalNodeEnv;
+      if (originalDeterministic === undefined) {
+        delete process.env.AGENT_DETERMINISTIC;
+      } else {
+        process.env.AGENT_DETERMINISTIC = originalDeterministic;
+      }
       if (originalApiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
       } else {
@@ -94,10 +98,10 @@ describe('SupervisorPlannerAgent action controller', () => {
   });
 
   it('keeps generic fallback before specific open-exploration targets', async () => {
-    const originalNodeEnv = process.env.NODE_ENV;
+    const originalDeterministic = process.env.AGENT_DETERMINISTIC;
     const originalApiKey = process.env.OPENAI_API_KEY;
     const fetchWithTimeout = jest.fn();
-    process.env.NODE_ENV = 'production';
+    delete process.env.AGENT_DETERMINISTIC;
     process.env.OPENAI_API_KEY = 'test-key';
     jest.resetModules();
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
@@ -146,7 +150,11 @@ describe('SupervisorPlannerAgent action controller', () => {
       }
       expect(fetchWithTimeout).not.toHaveBeenCalled();
     } finally {
-      process.env.NODE_ENV = originalNodeEnv;
+      if (originalDeterministic === undefined) {
+        delete process.env.AGENT_DETERMINISTIC;
+      } else {
+        process.env.AGENT_DETERMINISTIC = originalDeterministic;
+      }
       if (originalApiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
       } else {

@@ -6,27 +6,6 @@ import {
   normalizeSearchKeywords,
   resolvePoiTypesForKeyword,
 } from '@/lib/agent/poiTaxonomy';
-import type { UserGoal } from '@/lib/agent/types';
-
-function goal(overrides: Partial<UserGoal> = {}): UserGoal {
-  return {
-    intent: 'find_restaurants',
-    rawQuery: '想吃牛排',
-    requestedItems: [],
-    acceptableCategories: [],
-    alternativeGroups: [],
-    primaryKeywords: [],
-    relatedKeywords: [],
-    broadenedKeywords: [],
-    hardConstraints: [],
-    softPreferences: [],
-    exclusions: [],
-    ambiguity: [],
-    clarificationNeeded: [],
-    allowBroaden: false,
-    ...overrides,
-  };
-}
 
 describe('poiTaxonomy', () => {
   it('resolves keyword-specific Amap POI types without using caller fallback for multi-keyword plans', () => {

@@ -12,11 +12,14 @@ import {
 } from '../poiTaxonomy';
 import { AMAP_FOOD_POI_TYPES, getAmapFoodPoiType } from '../amapPoiTypeCatalog';
 import { KeywordExpansionOutputSchema } from '../schemas/keywordExpansion';
+import type { MetricsSink } from '../metrics';
 import type { SearchAttempt, SearchKeywordTarget, UserGoal, UserPreferenceSummary } from '../types';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
+const OPENAI_MODEL = process.env.OPENAI_MODEL_KEYWORD
+  || process.env.OPENAI_MODEL
+  || 'gpt-4o';
 const KEYWORD_EXPANSION_TIMEOUT = 60000;
 const KEYWORD_EXPANSION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const KEYWORD_EXPANSION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
@@ -38,6 +41,7 @@ const OPEN_EXPLORATION_DEMOTED_KEYWORDS = new Set([
 ]);
 
 export interface KeywordExpansionAgentInput {
+  metricsSink?: MetricsSink;
   goal: UserGoal;
   attempts: SearchAttempt[];
   preferenceSummary?: UserPreferenceSummary;
@@ -122,7 +126,7 @@ export async function runKeywordExpansionAgent(
     };
   }
 
-  if (!OPENAI_API_KEY || process.env.NODE_ENV === 'test') {
+  if (!OPENAI_API_KEY || process.env.AGENT_DETERMINISTIC === '1') {
     return deterministicKeywordExpansion(input.goal, input.attempts);
   }
 
@@ -176,6 +180,7 @@ async function callKeywordExpansionModel(
 ): Promise<KeywordExpansionOutput> {
   return callJsonFunctionAgent({
     agentName: 'KeywordExpansionAgent',
+    metricsSink: input.metricsSink,
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
     model: OPENAI_MODEL,

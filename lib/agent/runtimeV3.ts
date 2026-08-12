@@ -9,7 +9,8 @@ import {
 import { evaluateSearchResult, mergeCandidates } from './evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
-import { logger } from '@/lib/logger';
+import { createTurnLogger } from './turnLogger';
+import { summarizeTurnMetrics, type MetricsSink } from './metrics';
 import { describeFinish, internalFinishNote, type FinishReason } from './finishReason';
 import {
   buildDegradedGoalFromQuery,
@@ -145,7 +146,9 @@ async function runAgentTurn(
   emit({ type: 'thinking', message: '正在理解你的需求...' });
   emit({ type: 'status', message: '正在分析您的需求...' });
 
-  const resolution = await resolveTurnGoal(input);
+  // context 要等目标解析完才能构造，先用独立容器收集这一阶段的模型指标。
+  const turnMetrics: MetricsSink = {};
+  const resolution = await resolveTurnGoal(input, turnMetrics);
   const supervisorOutput = resolution.supervisorOutput;
   const conversationMode = resolution.conversationMode;
   const baseGoal = withUpdatedGoalVersion(
@@ -170,6 +173,7 @@ async function runAgentTurn(
     goal = applyKeywordExpansion(
       baseGoal,
       await runKeywordExpansionAgent({
+        metricsSink: turnMetrics,
         goal: baseGoal,
         attempts: resetPlan.clearAttempts ? [] : (input.runtimeState?.attempts ?? []),
         preferenceSummary: input.preferenceSummary,
@@ -177,6 +181,7 @@ async function runAgentTurn(
     );
   }
   const context = createInitialContext(input, goal, resetPlan);
+  context.modelCallMetrics = turnMetrics.modelCallMetrics ?? [];
   contextRef.current = context;
   if (resolution.degraded) {
     appendTrace(context, 'error', { error: resolution.degraded });
@@ -333,9 +338,12 @@ interface TurnGoalResolution {
  * Supervisor 不可用时降级为"按原文关键词搜索"，抽不出关键词则转为追问，
  * 而不是让整轮请求失败——这是入口唯一没有降级路径的历史缺口。
  */
-async function resolveTurnGoal(input: AgentInput): Promise<TurnGoalResolution> {
+async function resolveTurnGoal(
+  input: AgentInput,
+  metricsSink: MetricsSink
+): Promise<TurnGoalResolution> {
   try {
-    const supervisorOutput = await getSupervisorPlannerOutput(input);
+    const supervisorOutput = await getSupervisorPlannerOutput(input, metricsSink);
     return {
       goal: resolveSupervisorGoal(input, supervisorOutput),
       conversationMode: inferRuntimeConversationMode(input, supervisorOutput),
@@ -343,9 +351,10 @@ async function resolveTurnGoal(input: AgentInput): Promise<TurnGoalResolution> {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.warn('SupervisorPlannerAgent unavailable, falling back to raw query search', {
-      error: message,
-    });
+    createTurnLogger(input.sessionId).warn(
+      'SupervisorPlannerAgent unavailable, falling back to raw query search',
+      { error: message }
+    );
 
     const degraded = {
       code: 'SUPERVISOR_UNAVAILABLE' as const,
@@ -423,9 +432,11 @@ function resolveSupervisorGoal(
 }
 
 async function getSupervisorPlannerOutput(
-  input: AgentInput
+  input: AgentInput,
+  metricsSink: MetricsSink
 ): Promise<Awaited<ReturnType<typeof runSupervisorPlanner>>> {
   return runSupervisorPlanner({
+    metricsSink,
     message: input.query,
     previousGoal: input.runtimeState?.goal,
     pendingQuestion: input.runtimeState?.pendingQuestion,
@@ -1155,7 +1166,7 @@ async function executeSearchBatch(
     try {
       return await runSearchPlan(actionId, plan, baseRound + index, context, searchPlaces, emit);
     } catch (error) {
-      logger.warn('Parallel search plan failed', {
+      createTurnLogger(context.sessionId, context.turnId).warn('Parallel search plan failed', {
         keywords: plan.keywords,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1298,6 +1309,7 @@ async function runSearchPlan(
   let evaluationError: EvaluationAgentOutput['error'];
   const agentEvaluation = evaluationRestaurants.length > 0
     ? await runBatchedEvaluationAgent({
+      metricsSink: context,
       goal: context.goal,
       plan,
       restaurants: evaluationRestaurants,
@@ -1310,6 +1322,7 @@ async function runSearchPlan(
       preferenceSummary: context.preferenceSummary,
     }).catch((error) => {
       evaluationError = evaluationFailureFromError(error);
+      context.evaluationDegraded = true;
       return buildUnverifiedEvaluationFallback(evaluationRestaurants, context.targetCount, evaluationError);
     })
     : {
@@ -1671,6 +1684,26 @@ function createTraceId(prefix: string): string {
 
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
+/**
+ * 汇总本轮模型调用指标，写入 trace 与日志。
+ *
+ * 逐次调用的明细留在 metrics 数组里，trace 只保留一条汇总，
+ * 避免高频节点把 session 行撑大。
+ */
+function recordTurnMetrics(context: AgentV3Context, outcome: 'final' | 'paused'): void {
+  const metrics = summarizeTurnMetrics(context);
+  appendTrace(context, 'model_call', {
+    output: { outcome, ...metrics },
+  });
+  createTurnLogger(context.sessionId, context.turnId).info('agent turn finished', {
+    outcome,
+    attempts: context.attempts.length,
+    actions: context.actions.length,
+    candidates: context.candidates.length,
+    ...metrics,
+  });
+}
+
 function finish(
   context: AgentV3Context,
   action: Extract<AgentAction, { type: 'finish' }>,
@@ -1704,6 +1737,7 @@ function finish(
     },
   });
   emit({ type: 'final', traceId: finalTrace.id, sessionId: context.sessionId, ...finalResult });
+  recordTurnMetrics(context, 'final');
 
   return {
     ...finalResult,
@@ -1723,6 +1757,8 @@ function buildPausedResult(context: AgentV3Context, question: PendingQuestion): 
       partialCandidateIds: partialResult.candidates.map((restaurant) => restaurant.id),
     },
   });
+
+  recordTurnMetrics(context, 'paused');
 
   return {
     ...partialResult,

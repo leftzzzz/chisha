@@ -17,7 +17,8 @@ jest.mock('@/lib/agent/runtimeV3', () => ({
 }));
 
 import { POST } from '@/app/api/agent/chat/route';
-import { createAgentSession, saveAgentSession } from '@/lib/agent/session';
+import { createAgentSession, getAgentSession, saveAgentSession } from '@/lib/agent/session';
+import { AgentRunError } from '@/lib/agent/types';
 import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import type { RestaurantCandidate, SearchAttempt, UserGoal } from '@/lib/agent/types';
 import type { Location } from '@/types';
@@ -277,5 +278,63 @@ describe('/api/agent/chat', () => {
     }));
     expect(runtimeInput.runtimeState.attempts[0].allowedForPrimary).toBe(false);
     expect(runtimeInput.runtimeState.candidates[0].verification.primaryEligible).toBe(false);
+  });
+
+  it('persists the trace of a failed turn before reporting the error', async () => {
+    // 失败路径与成功路径同等留痕：最需要 trace 的这一轮不能什么都查不到。
+    const session = createAgentSession('想吃日料', location);
+    session.goal = goal();
+    saveAgentSession(session);
+
+    (runSearchAgentV3 as jest.Mock).mockImplementationOnce(async () => {
+      throw new AgentRunError('EvaluationAgent API failed: 429', 'RATE_LIMITED', {
+        attempts: [],
+        candidates: [],
+        actions: [],
+        observations: [],
+        trace: [{
+          id: 'trace_error_1',
+          sessionId: session.id,
+          turnId: 'turn-1',
+          type: 'error',
+          createdAt: 1,
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'EvaluationAgent API failed: 429',
+            retryable: true,
+          },
+        }],
+      });
+    });
+
+    const response = await POST(jsonRequest({
+      message: '想吃日料',
+      location,
+      sessionId: session.id,
+    }));
+    const events = await readSseEvents(response);
+    const errorEvent = events.find((event) => event.type === 'error');
+
+    expect(errorEvent).toEqual(expect.objectContaining({
+      code: 'RATE_LIMITED',
+      recoverable: true,
+    }));
+    expect(getAgentSession(session.id)?.trace).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'error' }),
+    ]));
+  });
+
+  it('reports an expired session with a structured error code', async () => {
+    const response = await POST(jsonRequest({
+      message: '想吃日料',
+      location,
+      sessionId: 'missing-session',
+    }));
+    const events = await readSseEvents(response);
+
+    expect(events.find((event) => event.type === 'error')).toEqual(expect.objectContaining({
+      code: 'SESSION_EXPIRED',
+      recoverable: false,
+    }));
   });
 });

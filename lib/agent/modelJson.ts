@@ -1,4 +1,11 @@
+export interface ChatCompletionUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
 export interface ChatCompletionFunctionResponse {
+  usage?: ChatCompletionUsage;
   choices?: Array<{
     finish_reason?: string;
     message?: {

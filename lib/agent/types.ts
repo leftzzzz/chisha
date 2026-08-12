@@ -1,5 +1,6 @@
 import type { Location, Restaurant } from '@/types';
 import type { FinishReason } from './finishReason';
+import type { ModelCallMetrics } from './metrics';
 
 export type SearchIntent = 'exact' | 'synonym' | 'broadened' | 'fallback';
 
@@ -406,6 +407,10 @@ export interface AgentContext extends AgentInput {
   maxSteps: number;
   maxSearchCalls: number;
   targetCount: number;
+  /** 本轮模型调用指标；由 metrics.ts 填充。 */
+  modelCallMetrics?: ModelCallMetrics[];
+  /** 本轮是否发生过候选验证失败，用于区分"没搜到"与"验证服务不可用"。 */
+  evaluationDegraded?: boolean;
 }
 
 export interface AgentFinalResult {

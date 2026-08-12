@@ -74,9 +74,9 @@ describe('KeywordExpansionAgent', () => {
   });
 
   it('does not generate expansions when there is no positive food target or open authorization', async () => {
-    const originalNodeEnv = process.env.NODE_ENV;
+    const originalDeterministic = process.env.AGENT_DETERMINISTIC;
     const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.NODE_ENV = 'production';
+    delete process.env.AGENT_DETERMINISTIC;
     process.env.OPENAI_API_KEY = 'test-key';
     jest.resetModules();
 
@@ -101,15 +101,19 @@ describe('KeywordExpansionAgent', () => {
       expect(expansion.relatedTargets).toEqual([]);
       expect(expansion.broadenedTargets).toEqual([]);
     } finally {
-      process.env.NODE_ENV = originalNodeEnv;
+      if (originalDeterministic === undefined) {
+        delete process.env.AGENT_DETERMINISTIC;
+      } else {
+        process.env.AGENT_DETERMINISTIC = originalDeterministic;
+      }
       process.env.OPENAI_API_KEY = originalApiKey;
     }
   });
 
   it('uses model-generated broadened keywords for open recommendations without primary targets', async () => {
-    const originalNodeEnv = process.env.NODE_ENV;
+    const originalDeterministic = process.env.AGENT_DETERMINISTIC;
     const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.NODE_ENV = 'production';
+    delete process.env.AGENT_DETERMINISTIC;
     process.env.OPENAI_API_KEY = 'test-key';
     jest.resetModules();
 
@@ -168,15 +172,19 @@ describe('KeywordExpansionAgent', () => {
         ['小吃', ['050310']],
       ]);
     } finally {
-      process.env.NODE_ENV = originalNodeEnv;
+      if (originalDeterministic === undefined) {
+        delete process.env.AGENT_DETERMINISTIC;
+      } else {
+        process.env.AGENT_DETERMINISTIC = originalDeterministic;
+      }
       process.env.OPENAI_API_KEY = originalApiKey;
     }
   });
 
   it('demotes Japanese-cuisine targets for open recommendations', async () => {
-    const originalNodeEnv = process.env.NODE_ENV;
+    const originalDeterministic = process.env.AGENT_DETERMINISTIC;
     const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.NODE_ENV = 'production';
+    delete process.env.AGENT_DETERMINISTIC;
     process.env.OPENAI_API_KEY = 'test-key';
     jest.resetModules();
 
@@ -220,15 +228,19 @@ describe('KeywordExpansionAgent', () => {
       expect(expansion.broadenedKeywords).toEqual(['小吃', '中餐', '快餐']);
       expect(expansion.broadenedKeywords[0]).not.toBe('日料');
     } finally {
-      process.env.NODE_ENV = originalNodeEnv;
+      if (originalDeterministic === undefined) {
+        delete process.env.AGENT_DETERMINISTIC;
+      } else {
+        process.env.AGENT_DETERMINISTIC = originalDeterministic;
+      }
       process.env.OPENAI_API_KEY = originalApiKey;
     }
   });
 
   it('uses model-generated expansions when the Agent is available', async () => {
-    const originalNodeEnv = process.env.NODE_ENV;
+    const originalDeterministic = process.env.AGENT_DETERMINISTIC;
     const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.NODE_ENV = 'production';
+    delete process.env.AGENT_DETERMINISTIC;
     process.env.OPENAI_API_KEY = 'test-key';
     jest.resetModules();
 
@@ -271,7 +283,11 @@ describe('KeywordExpansionAgent', () => {
         ['荞麦面', ['050202']],
       ]);
     } finally {
-      process.env.NODE_ENV = originalNodeEnv;
+      if (originalDeterministic === undefined) {
+        delete process.env.AGENT_DETERMINISTIC;
+      } else {
+        process.env.AGENT_DETERMINISTIC = originalDeterministic;
+      }
       process.env.OPENAI_API_KEY = originalApiKey;
     }
   });
