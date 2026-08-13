@@ -1,4 +1,4 @@
-jest.mock('@/lib/agent/runtimeV3', () => ({
+jest.mock('@/lib/agent/orchestrator/runtime', () => ({
   runSearchAgentV3: jest.fn(async (
     input: { runtimeState?: unknown },
     emit: (event: Record<string, unknown>) => void
@@ -19,7 +19,7 @@ jest.mock('@/lib/agent/runtimeV3', () => ({
 import { POST } from '@/app/api/agent/chat/route';
 import { createAgentSession, getAgentSession, saveAgentSession } from '@/lib/agent/session';
 import { AgentRunError } from '@/lib/agent/types';
-import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
+import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
 import type { RestaurantCandidate, SearchAttempt, UserGoal } from '@/lib/agent/types';
 import type { Location } from '@/types';
 import { ReadableStream } from 'stream/web';

@@ -1,43 +1,45 @@
+/**
+ * GoalUnderstandingAgent：把用户的自然语言变成结构化 UserGoal / GoalPatch。
+ *
+ * 它是**子 Agent**，不是主 Agent——流程由 orchestrator/policy 决定。这里只回答
+ * 两个语义问题：用户想要什么，以及这句话与上文是什么关系（conversationMode）。
+ * "因此该不该清空搜索状态"是编排层的判断，不在这里。
+ *
+ * 目标合并、打补丁等纯函数在 `lib/agent/goal.ts`。
+ */
+
 import { logger } from '@/lib/logger';
 import {
   callJsonFunctionAgent,
   JSON_FUNCTION_MAX_TOKENS,
   JSON_FUNCTION_RETRY_MAX_TOKENS,
-} from './modelClient';
-import { promoteAuthorizedBroadenedResults } from './broadenAdmission';
-import type { MetricsSink } from './metrics';
-import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
-import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
-import { deriveGoalSignature, withUpdatedGoalVersion } from './goalVersion';
-import { AgentError } from './types';
+} from '../modelClient';
+import { normalizePendingAnswerPatch, primaryTargetSetSignature } from '../goal';
+import type { MetricsSink } from '../metrics';
+import { UserGoalSchema } from '../schemas/goal';
+import { GoalUnderstandingOutputSchema } from '../schemas/clarification';
+import { deriveGoalSignature } from '../goalVersion';
+import { AgentError } from '../types';
 import type {
-  AgentAuthorization,
   AgentMessage,
-  AgentInput,
-  AgentSession,
-  ClarificationEffect,
-  CandidateVerdict,
-  Constraint,
   ConversationMode,
-  GoalCategory,
   GoalPatch,
   PendingQuestion,
-  RequestedItem,
-  SearchAttempt,
   UserGoal,
   UserPreferenceSummary,
-} from './types';
+} from '../types';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+// 环境变量名保持 OPENAI_MODEL_SUPERVISOR 不变：改名会让已部署的 secret 失效。
 const OPENAI_MODEL = process.env.OPENAI_MODEL_SUPERVISOR
   || process.env.OPENAI_MODEL
-  || 'gpt-4o';
-const SUPERVISOR_TIMEOUT = 60000;
-const SUPERVISOR_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
-const SUPERVISOR_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
+  || 'deepseek-v4-flash-0731';
+const GOAL_UNDERSTANDING_TIMEOUT = 60000;
+const GOAL_UNDERSTANDING_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
+const GOAL_UNDERSTANDING_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 
-export interface SearchSupervisorInput {
+export interface GoalUnderstandingInput {
   message: string;
   metricsSink?: MetricsSink;
   previousGoal?: UserGoal;
@@ -45,21 +47,19 @@ export interface SearchSupervisorInput {
   pendingQuestion?: PendingQuestion;
   messages?: AgentMessage[];
   failureReason?: string;
-  attempts?: SearchAttempt[];
-  verdictSummary?: CandidateVerdict[];
 }
 
-export interface SearchSupervisorOutput {
+export interface GoalUnderstandingOutput {
   goal?: UserGoal;
   patch?: GoalPatch;
   question?: PendingQuestion;
   conversationMode?: ConversationMode;
-  nextAction?: 'plan' | 'ask_user' | 'finish';
 }
 
-const SYSTEM_PROMPT = `你是 SupervisorPlannerAgent，是餐厅搜索主 Agent。你负责理解用户消息、维护 UserGoal、生成 GoalPatch、决定是否追问或进入计划阶段。
+const SYSTEM_PROMPT = `你是 GoalUnderstandingAgent，餐厅搜索系统的目标理解子 Agent。你负责理解用户消息、维护 UserGoal、生成 GoalPatch，并判断信息是否足够、是否需要先追问。
 
 边界：
+0. 你不决定搜索流程——搜什么、搜几轮、何时结束由系统的策略层决定，不要在输出里安排后续步骤。
 1. 你可以理解用户意图、菜品、菜系、排除项、偏好和歧义。
 2. 你不能调用高德，也不能生成或修改餐厅事实。
 3. 你不能生成高德 POI typecode；只输出 UserGoal、GoalPatch 或 PendingQuestion。
@@ -68,12 +68,12 @@ const SYSTEM_PROMPT = `你是 SupervisorPlannerAgent，是餐厅搜索主 Agent�
 6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
 7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
 7a. 如果追问给出选项，必须尽量给每个选项设置 optionEffects；选项只是分类说明时，effect 要指向被澄清的原始目标，不能把选项标签当搜索词。
-8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么/没有具体想吃的”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，加入“默认多样性”软偏好，进入 plan 后由 KeywordExpansionHelper 生成开放探索词；不要 ask_user，也不要把这些词当 keywords。
+8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么/没有具体想吃的”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，加入“默认多样性”软偏好，进入 plan 后由 KeywordExpansionAgent 生成开放探索词；不要 ask_user，也不要把这些词当 keywords。
 8a. 用户只是“附近有什么/吃点/清淡点/健康点/便宜点/环境好/人气高”等软偏好或开放询问、但没有明确授权随意/随机推荐且没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
-9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true，加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
+9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/你推荐/直接推荐/按你推荐/你看着办”等，表示授权开放推荐；输出 patch.allowBroaden=true，加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
 10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
 11. primaryKeywords 只能放用户正向想吃的、适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
-12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords/broadenedKeywords 及 relatedTargets/broadenedTargets 由 KeywordExpansionHelper 负责生成，初始目标保持空数组即可。
+12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords/broadenedKeywords 及 relatedTargets/broadenedTargets 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
 13. 处理 pendingQuestion 的用户回复时，必须结合 previousGoal.rawQuery、pendingQuestion 和历史 messages 重新总结完整需求；当前 message 不是独立新需求。
 14. 如果用户回复命中的是上轮澄清问题的选项标签或分类说明，不要把该标签本身作为搜索词；优先通过 pendingQuestion.optionEffects 或历史上下文恢复被澄清的原始目标。
 15. 否定条件、口味限制、排除项、开放授权和软偏好都不是搜索目标，不能进入 primaryKeywords、requestedItems 或 acceptableCategories。类似“不要辣的，其他都可以”应表达为硬约束/开放授权，并在缺少正向餐饮目标时追问，不要输出“不辣”“都可以”作为关键词。
@@ -89,8 +89,8 @@ const SYSTEM_PROMPT = `你是 SupervisorPlannerAgent，是餐厅搜索主 Agent�
 6. 如果用户坚持某个当前事实字段无法验证的条件“必须满足”，优先 ask_user 说明无法验证并让用户选择是否改为软偏好或调整需求。
 7. 多轮追问回答也必须重新分类，不要把用户的普通补充文本默认塞进 requestedItems。`;
 
-const SUPERVISOR_FUNCTION = {
-  name: 'superviseRestaurantSearch',
+const GOAL_UNDERSTANDING_FUNCTION = {
+  name: 'understandRestaurantGoal',
   description: 'Understand or update a restaurant search goal.',
   parameters: {
     type: 'object',
@@ -102,37 +102,33 @@ const SUPERVISOR_FUNCTION = {
         type: 'string',
         enum: ['continue_current_goal', 'patch_current_goal', 'start_new_goal'],
       },
-      nextAction: { type: 'string', enum: ['plan', 'ask_user', 'finish'] },
     },
   },
 };
 
-export async function runSearchSupervisor(
-  input: SearchSupervisorInput
-): Promise<SearchSupervisorOutput> {
-  const deterministicOutput = deterministicClarificationAnswer(input);
-  if (deterministicOutput) {
-    return deterministicOutput;
-  }
-
+export async function runGoalUnderstandingAgent(
+  input: GoalUnderstandingInput
+): Promise<GoalUnderstandingOutput> {
+  // 追问选项的确定性处理由编排层完成（按 optionId 查 effect，不调模型）。
+  // 这里只处理自由文本——用户说了什么，只有模型能判断。
   if (!OPENAI_API_KEY) {
-    throw new AgentError('OPENAI_API_KEY is required for SupervisorPlannerAgent', 'CONFIG_MISSING', false);
+    throw new AgentError('OPENAI_API_KEY is required for GoalUnderstandingAgent', 'CONFIG_MISSING', false);
   }
 
   try {
-    return normalizeSupervisorOutput(input, await callSupervisorModel(input));
+    return normalizeGoalUnderstandingOutput(input, await callGoalUnderstandingModel(input));
   } catch (error) {
-    logger.warn('SupervisorPlannerAgent unavailable', {
+    logger.warn('GoalUnderstandingAgent unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
   }
 }
 
-function normalizeSupervisorOutput(
-  input: SearchSupervisorInput,
-  output: SearchSupervisorOutput
-): SearchSupervisorOutput {
+function normalizeGoalUnderstandingOutput(
+  input: GoalUnderstandingInput,
+  output: GoalUnderstandingOutput
+): GoalUnderstandingOutput {
   const conversationMode = inferConversationMode(input, output);
 
   if (!input.previousGoal) {
@@ -153,7 +149,6 @@ function normalizeSupervisorOutput(
     return {
       patch: normalizePendingAnswerPatch(input.previousGoal, output.patch),
       conversationMode,
-      nextAction: 'plan',
     };
   }
 
@@ -164,19 +159,27 @@ function normalizeSupervisorOutput(
         clarificationNeeded: [],
       }),
       conversationMode,
-      nextAction: 'plan',
     };
   }
 
-  logger.warn('SupervisorPlannerAgent returned no goal patch for a pending clarification answer', {
+  // 模型在追问上下文里又提了一个问题：这是合法输出，不是服务故障。
+  // "同一个问题不能连问两次"由 Runtime 的追问指纹不变量兜底。
+  if (output.question) {
+    return {
+      question: output.question,
+      conversationMode,
+    };
+  }
+
+  logger.warn('GoalUnderstandingAgent returned nothing for a pending clarification answer', {
     question: input.pendingQuestion.question,
   });
-  throw new AgentError('SupervisorPlannerAgent returned no goal patch for a pending clarification answer', 'SUPERVISOR_UNAVAILABLE', true);
+  throw new AgentError('GoalUnderstandingAgent returned no goal, patch or question for a pending clarification answer', 'SUPERVISOR_UNAVAILABLE', true);
 }
 
 function inferConversationMode(
-  input: SearchSupervisorInput,
-  output: SearchSupervisorOutput
+  input: GoalUnderstandingInput,
+  output: GoalUnderstandingOutput
 ): ConversationMode {
   if (!input.previousGoal) {
     return 'start_new_goal';
@@ -198,7 +201,7 @@ function inferConversationMode(
     return 'continue_current_goal';
   }
 
-  if (primaryTargetSignature(input.previousGoal) !== primaryTargetSignature(output.goal)) {
+  if (primaryTargetSetSignature(input.previousGoal) !== primaryTargetSetSignature(output.goal)) {
     return 'start_new_goal';
   }
 
@@ -207,381 +210,12 @@ function inferConversationMode(
     : 'patch_current_goal';
 }
 
-function normalizePendingAnswerPatch(previousGoal: UserGoal, patch: GoalPatch): GoalPatch {
-  const alreadyReplacesTargets = patch.replacePrimaryKeywords !== undefined
-    || patch.replaceRequestedItems !== undefined
-    || patch.replaceCategories !== undefined;
-  const addedTargets = [
-    ...(patch.addRequestedItems ?? []).map((item) => item.name),
-    ...(patch.addCategories ?? []).map((category) => category.name),
-  ].filter(Boolean);
-
-  if (alreadyReplacesTargets || addedTargets.length === 0 || !hasPrimaryTargets(previousGoal)) {
-    return patch;
-  }
-
-  return GoalPatchSchema.parse({
-    ...patch,
-    replaceRequestedItems: patch.addRequestedItems ?? [],
-    replaceCategories: patch.addCategories ?? [],
-    replacePrimaryKeywords: addedTargets,
-    addRequestedItems: undefined,
-    addCategories: undefined,
-  });
-}
-
-function deterministicClarificationAnswer(
-  input: SearchSupervisorInput
-): SearchSupervisorOutput | null {
-  if (!input.previousGoal) {
-    return null;
-  }
-
-  const normalizedAnswer = input.message.trim();
-  if (!normalizedAnswer) {
-    return null;
-  }
-
-  const exactEffect = input.pendingQuestion?.optionEffects?.[normalizedAnswer];
-  if (exactEffect) {
-    return deterministicPatchOutput(
-      input.previousGoal,
-      goalPatchFromClarificationEffect(exactEffect, input.previousGoal)
-    );
-  }
-
-  return null;
-}
-
-function deterministicPatchOutput(previousGoal: UserGoal, patch: GoalPatch): SearchSupervisorOutput {
-  return {
-    patch: normalizePendingAnswerPatch(previousGoal, patch),
-    conversationMode: 'patch_current_goal',
-    nextAction: 'plan',
-  };
-}
-
-export async function understandSearchGoal(input: AgentInput): Promise<UserGoal> {
-  const output = await runSearchSupervisor({
-    message: input.query,
-    previousGoal: input.runtimeState?.goal,
-    preferenceSummary: input.preferenceSummary,
-    messages: input.messages,
-  });
-
-  if (output.goal) {
-    return withUpdatedGoalVersion(output.goal, input.runtimeState?.goal);
-  }
-
-  if (output.patch && input.runtimeState?.goal) {
-    return applyGoalPatch(input.runtimeState.goal, output.patch, input.query);
-  }
-
-  throw new AgentError('SupervisorPlannerAgent returned no goal or patch', 'SUPERVISOR_UNAVAILABLE', true);
-}
-
-export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal.rawQuery): UserGoal {
-  const replacingPrimaryTargets = patch.replacePrimaryKeywords !== undefined
-    || patch.replaceRequestedItems !== undefined
-    || patch.replaceCategories !== undefined;
-  const patched: UserGoal = {
-    ...goal,
-    rawQuery,
-    poiType: replacingPrimaryTargets ? undefined : goal.poiType,
-    requestedItems: patch.replaceRequestedItems
-      ?? mergeByName(goal.requestedItems, patch.addRequestedItems ?? []),
-    acceptableCategories: patch.replaceCategories
-      ?? mergeCategories(goal.acceptableCategories, patch.addCategories ?? []),
-    relatedKeywords: replacingPrimaryTargets ? [] : goal.relatedKeywords,
-    broadenedKeywords: replacingPrimaryTargets ? [] : goal.broadenedKeywords,
-    relatedTargets: replacingPrimaryTargets ? [] : goal.relatedTargets,
-    broadenedTargets: replacingPrimaryTargets ? [] : goal.broadenedTargets,
-    softPreferences: mergePreferences(goal.softPreferences, patch.addSoftPreferences ?? []),
-    hardConstraints: mergeConstraints(
-      goal.hardConstraints.filter((constraint) =>
-        !(patch.removeConstraints ?? []).includes(constraint.label)
-      ),
-      patch.addConstraints ?? []
-    ),
-    authorizations: mergeAuthorizations(
-      goal.authorizations ?? [],
-      patch.addAuthorizations ?? inferAuthorizationsFromLegacyPatch(patch, goal)
-    ),
-    allowBroaden: patch.allowBroaden ?? goal.allowBroaden,
-    ambiguity: mergeStrings(goal.ambiguity, [patch.reason]),
-    clarificationNeeded: [],
-  };
-
-  const primaryKeywordBase = patch.replacePrimaryKeywords
-    ?? (replacingPrimaryTargets
-      ? [
-          ...(patch.replaceRequestedItems ?? []).map((item) => item.name),
-          ...(patch.replaceCategories ?? []).map((category) => category.name),
-        ]
-      : patched.primaryKeywords);
-  patched.primaryKeywords = mergeStrings(
-    primaryKeywordBase,
-    [
-      ...(patch.addRequestedItems ?? []).map((item) => item.name),
-      ...(patch.addCategories ?? []).map((category) => category.name),
-    ]
-  );
-  patched.exclusions = patched.hardConstraints
-    .filter((constraint) => constraint.kind === 'exclude_category')
-    .flatMap((constraint) => constraint.values ?? []);
-
-  return withUpdatedGoalVersion(UserGoalSchema.parse(patched), goal);
-}
-
-export function applySupervisorClarifyingAnswer(session: AgentSession, answer: string): void {
-  const goal = session.goal;
-  if (!goal) {
-    session.pendingQuestion = undefined;
-    return;
-  }
-
-  const normalized = answer.trim();
-  const effect = normalized
-    ? session.pendingQuestion?.optionEffects?.[normalized]
-    : undefined;
-  if (!effect) {
-    session.pendingQuestion = undefined;
-    return;
-  }
-
-  const patch = goalPatchFromClarificationEffect(effect, goal);
-  const rawQuery = normalized && !goal.rawQuery.includes(normalized)
-    ? `${goal.rawQuery}，${normalized}`
-    : goal.rawQuery;
-  session.goal = applyGoalPatch(goal, patch, rawQuery);
-  if (effect.allowBroaden === true) {
-    promoteAuthorizedBroadenedResults(session);
-  }
-  session.pendingQuestion = undefined;
-}
-
-export function clarificationNeedToPendingQuestion(
-  need: UserGoal['clarificationNeeded'][number]
-): PendingQuestion {
-  return PendingQuestionSchema.parse({
-    reason: need.reason,
-    question: need.question,
-    options: need.options?.map((option) => option.label),
-    allowFreeText: need.allowFreeText,
-    optionEffects: Object.fromEntries(
-      (need.options ?? [])
-        .filter((option) => option.effect)
-        .map((option) => [option.label, option.effect!])
-    ),
-  });
-}
-
-function hasPrimaryTargets(goal: UserGoal): boolean {
-  return [
-    ...goal.primaryKeywords,
-    ...goal.requestedItems.map((item) => item.name),
-    ...goal.acceptableCategories.map((category) => category.name),
-  ].some((item) => item.trim().length > 0);
-}
-
-function primaryTargetSignature(goal: UserGoal): string {
-  return Array.from(new Set([
-    ...goal.primaryKeywords,
-    ...goal.requestedItems.map((item) => item.name),
-    ...goal.acceptableCategories.map((category) => category.name),
-  ].map((item) => item.trim()).filter(Boolean))).sort().join('|');
-}
-
-function goalPatchFromClarificationEffect(
-  effect: ClarificationEffect,
-  previousGoal?: UserGoal
-): GoalPatch {
-  const addConstraints: Constraint[] = [];
-  const replaceRequestedItems = effect.replaceRequestedItems?.filter(Boolean);
-  const replaceCategories = effect.replaceCategories?.filter(Boolean);
-  const replacePrimaryKeywords = effect.replacePrimaryKeywords?.filter(Boolean);
-  const addRequestedItems = effect.addRequestedItems?.filter(Boolean);
-  const addCategories = effect.addCategories?.filter(Boolean);
-
-  if (effect.setDistanceMaxMeters !== undefined) {
-    addConstraints.push({
-      kind: 'distance',
-      label: `${Math.round(effect.setDistanceMaxMeters)}米内`,
-      value: effect.setDistanceMaxMeters,
-      maxMeters: effect.setDistanceMaxMeters,
-      strict: false,
-    });
-  }
-
-  return GoalPatchSchema.parse({
-    replaceRequestedItems: replaceRequestedItems?.length
-      ? replaceRequestedItems.map((item) => ({
-          name: item,
-          required: true,
-          aliases: [],
-        }))
-      : undefined,
-    replaceCategories: replaceCategories?.length
-      ? replaceCategories.map((category) => ({
-          name: category,
-          confidence: 0.8,
-        }))
-      : undefined,
-    replacePrimaryKeywords: replacePrimaryKeywords?.length ? replacePrimaryKeywords : undefined,
-    addRequestedItems: addRequestedItems?.length
-      ? addRequestedItems.map((item) => ({
-          name: item,
-          required: true,
-          aliases: [],
-        }))
-      : undefined,
-    addCategories: addCategories?.length
-      ? addCategories.map((category) => ({
-          name: category,
-          confidence: 0.8,
-        }))
-      : undefined,
-    addSoftPreferences: effect.addSoftPreferences,
-    addConstraints,
-    removeConstraints: effect.setDistanceMaxMeters !== undefined
-      ? strictDistanceConstraintLabels(previousGoal)
-      : undefined,
-    addAuthorizations: effect.addAuthorizations
-      ?? inferAuthorizationsFromClarificationEffect(effect, previousGoal),
-    allowBroaden: effect.allowBroaden,
-    reason: '根据用户追问选项更新目标。',
-  });
-}
-
-function inferAuthorizationsFromClarificationEffect(
-  effect: ClarificationEffect,
-  previousGoal?: UserGoal
-): AgentAuthorization[] | undefined {
-  if (effect.setDistanceMaxMeters !== undefined) {
-    return [
-      createAuthorization('distance_expansion', '用户授权扩大距离范围。', {
-        maxMeters: effect.setDistanceMaxMeters,
-      }),
-    ];
-  }
-
-  if (effect.allowBroaden !== true) {
-    return undefined;
-  }
-
-  return [
-    hasPrimaryTargets(previousGoal ?? emptyGoalForAuthorization())
-      ? createAuthorization('category_broaden', '用户授权放宽到相邻品类。', {
-          allowedSearchIntents: ['broadened'],
-        })
-      : createAuthorization('fallback_primary', '用户授权开放推荐，可将兜底餐饮候选作为主推荐。', {
-          allowedSearchIntents: ['fallback'],
-        }),
-  ];
-}
-
-function inferAuthorizationsFromLegacyPatch(
-  patch: GoalPatch,
-  previousGoal: UserGoal
-): AgentAuthorization[] {
-  if (patch.allowBroaden !== true) {
-    return [];
-  }
-
-  const distanceConstraint = patch.addConstraints?.find((constraint) =>
-    constraint.kind === 'distance' && constraint.maxMeters !== undefined && constraint.strict !== true
-  );
-  if (distanceConstraint?.maxMeters !== undefined) {
-    return [
-      createAuthorization('distance_expansion', '用户授权扩大距离范围。', {
-        maxMeters: distanceConstraint.maxMeters,
-      }),
-    ];
-  }
-
-  return [
-    hasPrimaryTargets(previousGoal)
-      ? createAuthorization('category_broaden', '用户授权放宽到相邻品类。', {
-          allowedSearchIntents: ['broadened'],
-        })
-      : createAuthorization('fallback_primary', '用户授权开放推荐，可将兜底餐饮候选作为主推荐。', {
-          allowedSearchIntents: ['fallback'],
-        }),
-  ];
-}
-
-function createAuthorization(
-  kind: AgentAuthorization['kind'],
-  reason: string,
-  constraints?: AgentAuthorization['constraints']
-): AgentAuthorization {
-  return {
-    id: `auth_${kind}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    kind,
-    createdAt: Date.now(),
-    reason,
-    constraints,
-  };
-}
-
-function mergeAuthorizations(
-  left: AgentAuthorization[],
-  right: AgentAuthorization[]
-): AgentAuthorization[] {
-  const byKey = new Map<string, AgentAuthorization>();
-  for (const authorization of [...left, ...right]) {
-    byKey.set(authorizationKey(authorization), authorization);
-  }
-  return Array.from(byKey.values());
-}
-
-function authorizationKey(authorization: AgentAuthorization): string {
-  return [
-    authorization.kind,
-    authorization.reason,
-    authorization.constraints?.maxMeters ?? '',
-    (authorization.constraints?.allowedSearchIntents ?? []).join('|'),
-    (authorization.constraints?.allowedKeywords ?? []).join('|'),
-  ].join(':');
-}
-
-function emptyGoalForAuthorization(): UserGoal {
-  return {
-    intent: 'find_restaurants',
-    rawQuery: '',
-    requestedItems: [],
-    acceptableCategories: [],
-    alternativeGroups: [],
-    primaryKeywords: [],
-    relatedKeywords: [],
-    broadenedKeywords: [],
-    relatedTargets: [],
-    broadenedTargets: [],
-    hardConstraints: [],
-    softPreferences: [],
-    exclusions: [],
-    ambiguity: [],
-    clarificationNeeded: [],
-    authorizations: [],
-    allowBroaden: false,
-  };
-}
-
-function strictDistanceConstraintLabels(goal: UserGoal | undefined): string[] {
-  const labels = goal?.hardConstraints
-    .filter((constraint) => constraint.kind === 'distance' && constraint.strict)
-    .map((constraint) => constraint.label)
-    .filter(Boolean);
-
-  return labels && labels.length > 0 ? labels : ['楼下500米内', '步行1公里内'];
-}
-
-async function callSupervisorModel(
-  input: SearchSupervisorInput,
-  maxTokens = SUPERVISOR_MAX_TOKENS
-): Promise<SearchSupervisorOutput> {
+async function callGoalUnderstandingModel(
+  input: GoalUnderstandingInput,
+  maxTokens = GOAL_UNDERSTANDING_MAX_TOKENS
+): Promise<GoalUnderstandingOutput> {
   return callJsonFunctionAgent({
-    agentName: 'SupervisorPlannerAgent',
+    agentName: 'GoalUnderstandingAgent',
     metricsSink: input.metricsSink,
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
@@ -596,11 +230,6 @@ async function callSupervisorModel(
         failureReason: input.failureReason,
         preferenceSummary: input.preferenceSummary,
       },
-      toolObservations: {
-        untrusted: true,
-        attempts: input.attempts,
-        verdictSummary: input.verdictSummary,
-      },
       policy: {
         conversationModes: ['continue_current_goal', 'patch_current_goal', 'start_new_goal'],
         authorizationScopes: [
@@ -611,64 +240,14 @@ async function callSupervisorModel(
         ],
       },
     },
-    functionDefinition: SUPERVISOR_FUNCTION,
-    functionName: 'superviseRestaurantSearch',
-    schema: SearchSupervisorOutputSchema,
+    functionDefinition: GOAL_UNDERSTANDING_FUNCTION,
+    functionName: 'understandRestaurantGoal',
+    schema: GoalUnderstandingOutputSchema,
     temperature: 0,
     maxTokens,
-    retryMaxTokens: SUPERVISOR_RETRY_MAX_TOKENS,
-    timeoutMs: SUPERVISOR_TIMEOUT,
-  }) as Promise<SearchSupervisorOutput>;
-}
-
-function mergeStrings(left: string[], right: string[]): string[] {
-  return Array.from(new Set([...left, ...right].map((item) => item.trim()).filter(Boolean)));
-}
-
-function mergeByName<T extends RequestedItem>(left: T[], right: T[]): T[] {
-  const byName = new Map<string, T>();
-  for (const item of [...left, ...right]) {
-    byName.set(item.name, item);
-  }
-  return Array.from(byName.values());
-}
-
-function mergeCategories(left: GoalCategory[], right: GoalCategory[]): GoalCategory[] {
-  const byName = new Map<string, GoalCategory>();
-  for (const category of [...left, ...right]) {
-    const existing = byName.get(category.name);
-    byName.set(category.name, {
-      name: category.name,
-      confidence: existing ? Math.max(existing.confidence, category.confidence) : category.confidence,
-    });
-  }
-  return Array.from(byName.values());
-}
-
-function mergePreferences(left: UserGoal['softPreferences'], right: UserGoal['softPreferences']): UserGoal['softPreferences'] {
-  const byName = new Map<string, UserGoal['softPreferences'][number]>();
-  for (const preference of [...left, ...right]) {
-    const existing = byName.get(preference.name);
-    byName.set(preference.name, {
-      name: preference.name,
-      weight: existing ? Math.max(existing.weight, preference.weight) : preference.weight,
-      verifiable: existing ? existing.verifiable || preference.verifiable : preference.verifiable,
-    });
-  }
-  return Array.from(byName.values());
-}
-
-function mergeConstraints(left: Constraint[], right: Constraint[]): Constraint[] {
-  const seen = new Set<string>();
-  const constraints: Constraint[] = [];
-  for (const constraint of [...left, ...right]) {
-    const key = `${constraint.kind}:${constraint.label}:${JSON.stringify(constraint.value ?? constraint.values ?? '')}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      constraints.push(constraint);
-    }
-  }
-  return constraints;
+    retryMaxTokens: GOAL_UNDERSTANDING_RETRY_MAX_TOKENS,
+    timeoutMs: GOAL_UNDERSTANDING_TIMEOUT,
+  }) as Promise<GoalUnderstandingOutput>;
 }
 
 function userGoalJsonSchema() {
@@ -680,7 +259,7 @@ function userGoalJsonSchema() {
       rawQuery: { type: 'string' },
       poiType: {
         type: 'string',
-        description: '只有已有上下文非常确定时才保留；Supervisor 不要自行生成新的高德 POI typecode。',
+        description: '只有已有上下文非常确定时才保留；不要自行生成新的高德 POI typecode。',
       },
       requestedItems: {
         type: 'array',
@@ -719,12 +298,12 @@ function userGoalJsonSchema() {
       },
       relatedTargets: {
         type: 'array',
-        description: '由 KeywordExpansionHelper 维护；Supervisor 初始化时保持空数组。',
+        description: '由 KeywordExpansionAgent 维护；理解目标时保持空数组。',
         items: searchKeywordTargetJsonSchema(),
       },
       broadenedTargets: {
         type: 'array',
-        description: '由 KeywordExpansionHelper 维护；Supervisor 初始化时保持空数组。',
+        description: '由 KeywordExpansionAgent 维护；理解目标时保持空数组。',
         items: searchKeywordTargetJsonSchema(),
       },
       hardConstraints: {

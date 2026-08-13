@@ -19,7 +19,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL_EVALUATION
   || process.env.OPENAI_MODEL
-  || 'gpt-4o';
+  || 'deepseek-v4-flash-0731';
 const EVALUATION_TIMEOUT = 60000;
 const EVALUATION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const EVALUATION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
@@ -37,16 +37,17 @@ export interface EvaluationAgentInput {
   preferenceSummary?: UserPreferenceSummary;
 }
 
-const SYSTEM_PROMPT = `你是餐厅搜索系统的 EvaluationAgent。你只根据用户目标、搜索计划和餐厅事实字段做候选语义验证与排序。
+const SYSTEM_PROMPT = `你是餐厅搜索系统的 EvaluationAgent。你**逐家**判断餐厅是否满足用户目标，只依据输入的餐厅事实字段。
+
+你不负责挑选最终推荐，也不负责排序——那由系统的确定性规则完成。你只对每一家给出裁决。
 
 规则：
 1. 不编造菜单、评分、人均、营业状态或距离；只能基于输入事实给 evidence。
 2. 用户明确要求的菜品必须被验证。没有证据但品类兼容时输出 unverified，不能直接当主推荐。
 3. 类别冲突或命中排除/停业/距离硬约束时输出 failed。
-4. softPreferences 只能影响排序、evidence 或 warnings；不能让候选变成 failed，也不能要求模型编造当前事实字段没有的数据。
-5. selectedIds 只能选择 status=passed 且 primaryEligible=true 的餐厅。
-6. candidateIds 可以包含 unverified 或放宽候选，但必须解释 warnings/conflicts。
-7. 同等质量时优先距离更近，最近删除的餐厅降权。`;
+4. softPreferences 只能体现在 evidence 或 warnings 里；不能让候选变成 failed，也不能据此编造事实字段没有的数据。
+5. confidence 表示"这家店满足目标"的把握，不是"这家店有多好"。
+6. 每一家都要给裁决，不要遗漏，也不要合并同名门店。`;
 
 const EVALUATION_FUNCTION = {
   name: 'evaluateRestaurantCandidates',
@@ -82,12 +83,10 @@ const EVALUATION_FUNCTION = {
           ],
         },
       },
-      selectedIds: { type: 'array', items: { type: 'string' } },
-      candidateIds: { type: 'array', items: { type: 'string' } },
       explanation: { type: 'string' },
       unmetConstraints: { type: 'array', items: { type: 'string' } },
     },
-    required: ['verdicts', 'selectedIds', 'candidateIds', 'explanation', 'unmetConstraints'],
+    required: ['verdicts', 'explanation', 'unmetConstraints'],
   },
 };
 
@@ -121,11 +120,29 @@ async function callEvaluationModel(input: EvaluationAgentInput): Promise<Evaluat
   });
 }
 
+/**
+ * 只把"判断这家店符不符合"真正需要的部分交给模型。
+ *
+ * 刻意排除 authorizations / allowBroaden / relatedTargets / broadenedTargets /
+ * goalVersion / clarificationNeeded —— 那些是编排层的状态，跟单家餐厅是否满足
+ * 目标无关。让子 Agent 看见编排状态，等于请它一起参与编排。
+ *
+ * plan 同理只保留搜索词：allowedForPrimary / planId / radiusMeters 是授权与
+ * 调度信息，授权由 applyVerdictGuard 在事后与裁决相与，不该影响裁决本身。
+ */
 function buildEvaluationModelInput(input: EvaluationAgentInput) {
   return {
     trustedContext: {
-      goal: input.goal,
-      plan: input.plan,
+      target: {
+        rawQuery: input.goal.rawQuery,
+        requestedItems: input.goal.requestedItems,
+        acceptableCategories: input.goal.acceptableCategories,
+        alternativeGroups: input.goal.alternativeGroups,
+        hardConstraints: input.goal.hardConstraints,
+        softPreferences: input.goal.softPreferences,
+        exclusions: input.goal.exclusions,
+      },
+      searchedKeywords: input.plan.keywords,
       targetCount: input.targetCount,
       preferenceSummary: input.preferenceSummary,
     },
@@ -136,7 +153,6 @@ function buildEvaluationModelInput(input: EvaluationAgentInput) {
         id: candidate.restaurant.id,
         name: candidate.restaurant.name,
         cuisineType: candidate.restaurant.cuisineType,
-        sourceAttempt: candidate.sourceAttempt,
         verdict: {
           status: candidate.verdict.status,
           primaryEligible: candidate.verdict.primaryEligible,
@@ -150,8 +166,8 @@ function buildEvaluationModelInput(input: EvaluationAgentInput) {
     },
     policy: {
       restaurantFactsAreUntrusted: true,
-      selectedIdsMustComeFromRestaurants: true,
       doNotInventMissingFacts: true,
+      verdictPerRestaurant: true,
     },
   };
 }

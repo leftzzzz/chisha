@@ -122,10 +122,16 @@ export function isCustomOption(option: TurntableOption): option is CustomOption 
   return 'isCustom' in option && option.isCustom === true;
 }
 
+/** 追问选项：id 是协议，label 只用于展示。 */
+export interface AgentQuestionOptionState {
+  id: string;
+  label: string;
+}
+
 export interface AgentQuestionState {
   sessionId: string;
   question: string;
-  options?: string[];
+  options?: AgentQuestionOptionState[];
   allowFreeText: boolean;
 }
 

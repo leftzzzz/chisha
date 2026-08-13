@@ -8,14 +8,14 @@
  * 更新基线：EVAL_UPDATE_BASELINE=1 npm run eval
  */
 
-jest.mock('@/lib/agent/supervisorPlanner', () => {
-  const actual = jest.requireActual('@/lib/agent/supervisorPlanner');
+jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
+  const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
   const harness = jest.requireActual('@/evals/harness');
 
   return {
     ...actual,
-    runSupervisorPlanner: (input: unknown, context?: unknown) =>
-      harness.routeSupervisorPlanner(actual, input, context),
+    runGoalUnderstandingAgent: (input: unknown, context?: unknown) =>
+      harness.routeGoalUnderstanding(actual, input, context),
   };
 });
 

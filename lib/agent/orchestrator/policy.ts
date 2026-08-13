@@ -2,54 +2,68 @@
  * Agent 确定性策略的唯一实现，也是唯一的 planner。
  *
  * "下一步做什么"完全由这里决定：模型不再参与常规轮次的动作决策。
- * 历史上这套顺序逻辑同时存在于 runtimeV3、supervisorPlanner 和 guard 三处，
+ * 历史上这套顺序逻辑同时存在于 runtime、目标理解与 guard 三处，
  * 阈值已经漂移过（见 docs/agent-loop-shape-review-2026-08.md 3.2）。
  *
  * 边界：这里只做"给定状态该怎么做"的确定性决策，不做语义理解（属于
  * Supervisor / KeywordExpansion），也不做候选准入（属于 FinalGuard）。
  */
 
-import type { Location } from '@/types';
 import { countDistinctBrands } from '@/lib/restaurantIdentity';
-import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
-import { isOpenExplorationAuthorized, isSearchIntentAuthorizedForPrimary } from './authorization';
-import { isPrimaryRecommendationAllowed } from './finalGuard';
-import type { FinishReason } from './finishReason';
+import { getAmapFoodPoiType } from '../amapPoiTypeCatalog';
+import { isOpenExplorationAuthorized, isSearchIntentAuthorizedForPrimary } from '../authorization';
+import { isPrimaryRecommendationAllowed } from '../finalGuard';
+import type { FinishReason } from '../finishReason';
+import {
+  applyClarificationOptionToGoal,
+  clarificationOptionLabel,
+  getStrictDistanceMaxMeters,
+  hasClarificationOption,
+} from '../goal';
+import { validateSearchPlan } from '../guards';
+import type { ContextInvalidationPlan } from '../goalVersion';
+import {
+  hasTriedIntent,
+  hasTriedKeyword,
+  hasTriedPlan,
+  searchPlanKey,
+} from '../searchAttempts';
 import {
   DEFAULT_POI_TYPE,
   lookupFoodPoiTypes,
   normalizeSearchKeywords,
-} from './poiTaxonomy';
-import { SearchPlanSchema } from './schemas/plan';
+} from '../poiTaxonomy';
+import { SearchPlanSchema } from '../schemas/plan';
+import {
+  buildQuestionFingerprint,
+  CLARIFICATION_OPTION,
+  clarificationOption,
+} from '../clarificationOptions';
 import type {
+  AgentErrorCode,
+  AgentInput,
   ClarificationEffect,
+  ConversationMode,
+  GuardrailViolation,
   PendingQuestion,
+  PolicyContext,
   RestaurantCandidate,
-  SearchAttempt,
   SearchIntent,
   SearchKeywordTarget,
   SearchPlan,
   UserGoal,
-} from './types';
+} from '../types';
 
-/** 策略所需的最小上下文；AgentContext / AgentV3Context 均结构性满足。 */
-export interface PolicyContext {
-  goal: UserGoal;
-  attempts: SearchAttempt[];
-  candidates: RestaurantCandidate[];
-  location: Location;
-  targetCount: number;
-  maxSearchCalls: number;
-  /** 本轮是否发生过候选验证失败（限流/超时等），用于区分"没搜到"与"验证不可用"。 */
-  evaluationDegraded?: boolean;
-}
+export { hasTriedIntent, hasTriedKeyword, hasTriedPlan, searchPlanKey };
+export { getStrictDistanceMaxMeters };
+export type { PolicyContext };
 
 export type TargetKind = 'initial' | 'related' | 'broadened';
 
 /**
  * 策略阈值的唯一来源。
  *
- * 这两个数此前分别写在 supervisorPlanner（min(6, targetCount)）与 runtime
+ * 这两个数此前分别写在 planner（min(6, targetCount)）与 runtime
  * guard（targetCount）里，在 6–8 个品牌的区间给出相反结论。合并到这里。
  */
 export const POLICY_LIMITS = {
@@ -86,9 +100,15 @@ const RADIUS_GROWTH = 1.25;
 const MAX_POI_TYPE_CODES = 5;
 const OPEN_EXPLORATION_FALLBACK_KEYWORDS = ['餐厅', '美食'];
 
+/** 被 guard 拒绝的计划；策略生成的计划违规即 bug，交给 Runtime 记录与上报。 */
+export interface RejectedPlan {
+  plan: SearchPlan;
+  violations: GuardrailViolation[];
+}
+
 /** 策略给 Runtime 的决策。Runtime 只负责执行，不再自行推导下一步。 */
 export type PolicyDecision =
-  | { kind: 'search'; plans: SearchPlan[] }
+  | { kind: 'search'; plans: SearchPlan[]; rejectedPlans: RejectedPlan[] }
   | {
       kind: 'finish';
       reason: FinishReason;
@@ -98,7 +118,15 @@ export type PolicyDecision =
     }
   /** 确定性关键词全部试完仍无主推荐，交给模型重新构思方向 */
   | { kind: 'replan'; exhausted: { triedKeywords: string[]; triedIntents: SearchIntent[] } }
-  | { kind: 'ask'; question: PendingQuestion };
+  | { kind: 'ask'; question: PendingQuestion }
+  /** 本批计划全部未通过 guard——策略 bug，需要上报后重新决策 */
+  | { kind: 'invalid_plans'; rejectedPlans: RejectedPlan[] }
+  /**
+   * 本轮无法给出任何可信结果，必须以错误结束。
+   *
+   * 策略层不抛错（保持纯函数），由 Runtime 决定用哪个 AgentError 抛出。
+   */
+  | { kind: 'abort'; reason: Extract<AgentErrorCode, 'EVALUATION_FAILED'> };
 
 /** decideNextAction 需要的额外运行时状态。 */
 export interface PolicyRuntimeState {
@@ -113,13 +141,22 @@ export interface PolicyRuntimeState {
 /**
  * 决定下一步做什么。
  *
- * 分支顺序即优先级：够了就结束 > 预算耗尽 > 有未授权候补就请求授权 >
- * 还有可搜的就搜 > 有主推荐就结束 > 还能重新构思就 replan > 追问。
+ * 分支顺序即优先级：验证不可用就立刻收敛 > 够了就结束 > 预算耗尽 >
+ * 有未授权候补就请求授权 > 还有可搜的就搜 > 有主推荐就结束 >
+ * 还能重新构思就 replan > 追问。
  */
 export function decideNextAction(
   ctx: PolicyContext,
   runtime: PolicyRuntimeState = {}
 ): PolicyDecision {
+  // 验证环节挂了就别再搜了：搜回来的东西没人能验证，继续扩搜只是在
+  // 重复调用高德（线上实测同一批 POI 被"火锅/涮锅/牛肉火锅"搜了三遍）。
+  if (ctx.evaluationFailed) {
+    return hasPrimaryCandidates(ctx)
+      ? finishDecision(ctx, 'PARTIAL_EVALUATION_FAILURE', 0.6)
+      : { kind: 'abort', reason: 'EVALUATION_FAILED' };
+  }
+
   const distinctBrands = distinctPrimaryBrandCount(ctx);
   const remainingSearchCalls = Math.max(0, ctx.maxSearchCalls - ctx.attempts.length);
 
@@ -138,9 +175,21 @@ export function decideNextAction(
     return { kind: 'ask', question: buildNoPrimaryQuestion(ctx) };
   }
 
-  const plans = planSearchBatch(ctx, remainingSearchCalls);
+  // 计划在这里就过一遍 guard：策略自己生成的计划违规属于编程错误，不该等到
+  // Runtime 才发现，更不该像以前那样"记为已尝试再重新决策"绕过去——那会把
+  // 策略侧的 bug 伪装成"这个词搜过了"。
+  const { plans, rejectedPlans } = partitionPlansByValidity(
+    ctx,
+    planSearchBatch(ctx, remainingSearchCalls)
+  );
   if (plans.length > 0) {
-    return { kind: 'search', plans };
+    return { kind: 'search', plans, rejectedPlans };
+  }
+
+  // 一批全被拒：这是策略侧的 bug，必须响。单独给一个决策类型，Runtime 据此
+  // 按 error 级别上报并把它们记为已尝试，然后再决策一次。
+  if (rejectedPlans.length > 0) {
+    return { kind: 'invalid_plans', rejectedPlans };
   }
 
   if (hasPrimaryCandidates(ctx)) {
@@ -184,13 +233,32 @@ export function planSearchBatch(
   }
 
   if (isOpenExplorationContext(ctx) && !hasTriedIntent(ctx, 'fallback')) {
+    // 开放推荐优先铺开 KeywordExpansion 给的探索词（规则 1b 把它们放在
+    // broadenedTargets）。只搜一个通用词「餐厅」等于把选择权交给高德排序，
+    // 转盘的品类分布全看运气。
+    const exploration = untriedTargets(ctx, 'broadened');
+    if (exploration.length > 0) {
+      const explorationPlans = buildPlanBatch(
+        ctx,
+        exploration,
+        'fallback',
+        () => true,
+        budget,
+        '开放推荐：并发尝试多个探索方向，保证品类多样性。'
+      );
+
+      if (explorationPlans.length > 0) {
+        return explorationPlans;
+      }
+    }
+
     return buildPlanBatch(
       ctx,
       [{ keyword: nextFallbackKeyword(ctx) }],
       'fallback',
       () => true,
       1,
-      '开放需求下先使用通用餐饮兜底搜索。'
+      '开放需求下没有可用的探索词，使用通用餐饮兜底搜索。'
     );
   }
 
@@ -435,27 +503,6 @@ export function sanitizePoiTypeCodes(poiType: string | undefined): string[] {
     .slice(0, MAX_POI_TYPE_CODES);
 }
 
-export function getStrictDistanceMaxMeters(goal: UserGoal): number | undefined {
-  const strictDistance = goal.hardConstraints.find(
-    (constraint) => constraint.kind === 'distance' && constraint.strict
-  );
-
-  return strictDistance?.maxMeters
-    ?? (typeof strictDistance?.value === 'number' ? strictDistance.value : undefined);
-}
-
-export function searchPlanKey(plan: SearchPlan): string {
-  return `${plan.keywords.join('|')}:${plan.radiusMeters}:${plan.poiType ?? ''}`;
-}
-
-export function hasTriedPlan(ctx: PolicyContext, plan: SearchPlan): boolean {
-  const key = searchPlanKey(plan);
-  return ctx.attempts.some(
-    (attempt) =>
-      `${attempt.keywords.join('|')}:${attempt.radius}:${attempt.poiType ?? ''}` === key
-  );
-}
-
 export function createPlanId(): string {
   if (globalThis.crypto?.randomUUID) {
     return `plan_${globalThis.crypto.randomUUID()}`;
@@ -505,17 +552,6 @@ export function nextUntriedTarget(
 
 export function hasUntriedTarget(ctx: PolicyContext, kind: TargetKind): boolean {
   return untriedTargets(ctx, kind).length > 0;
-}
-
-export function hasTriedKeyword(ctx: PolicyContext, keyword: string): boolean {
-  const normalizedKeywords = normalizeSearchKeywords([keyword]);
-  return ctx.attempts.some((attempt) =>
-    attempt.keywords.some((attemptKeyword) => normalizedKeywords.includes(attemptKeyword))
-  );
-}
-
-export function hasTriedIntent(ctx: PolicyContext, intent: SearchPlan['searchIntent']): boolean {
-  return ctx.attempts.some((attempt) => attempt.searchIntent === intent);
 }
 
 function baseTargets(goal: UserGoal, kind: TargetKind): SearchKeywordTarget[] {
@@ -600,24 +636,20 @@ export function hasUnauthorizedBroadenedCandidates(ctx: PolicyContext): boolean 
  * 分支优先级：strict 距离 > 已授权放宽但仍无结果 > 通用调整/放宽。
  */
 export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
-  // 验证服务失败时不能说"没找到合适餐厅"——那是把系统故障说成搜索结果。
-  if (ctx.evaluationDegraded && !hasPrimaryCandidates(ctx)) {
-    return {
-      reason: '候选验证服务暂时不可用，本轮结果无法进入主推荐。',
-      question: '验证服务暂时不可用，没能确认这些餐厅是否符合你的要求。要重试一次吗？',
-      options: ['重试', '换个类型'],
-      allowFreeText: true,
-    };
-  }
+  // 验证不可用不再走追问：那是系统故障，应该报错而不是伪装成"没找到"。
+  // 见 decideNextAction 的 evaluationFailed 分支。
 
   if (getStrictDistanceMaxMeters(ctx.goal) !== undefined) {
     return {
       reason: '当前严格距离范围内没有找到通过主推荐准入的餐厅。',
       question: '当前距离范围内没有找到合适餐厅，要扩大范围再搜吗？',
-      options: ['扩大范围', '换个类型'],
+      options: [
+        clarificationOption(CLARIFICATION_OPTION.EXPAND_DISTANCE),
+        clarificationOption(CLARIFICATION_OPTION.CHANGE_TARGET),
+      ],
       allowFreeText: true,
       optionEffects: {
-        扩大范围: {
+        [CLARIFICATION_OPTION.EXPAND_DISTANCE]: {
           allowBroaden: true,
           setDistanceMaxMeters: MAX_RADIUS_METERS,
           addAuthorizations: [
@@ -652,10 +684,13 @@ export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
     question: target
       ? `没有找到符合「${target}」的餐厅，要调整需求或允许放宽吗？`
       : '没有找到符合条件的餐厅，要调整需求或允许放宽吗？',
-    options: ['搜更广的品类', '换个类型'],
+    options: [
+      clarificationOption(CLARIFICATION_OPTION.AUTHORIZE_CATEGORY_BROADEN),
+      clarificationOption(CLARIFICATION_OPTION.CHANGE_TARGET),
+    ],
     allowFreeText: true,
     optionEffects: {
-      搜更广的品类: buildBroadenEffect(ctx.goal),
+      [CLARIFICATION_OPTION.AUTHORIZE_CATEGORY_BROADEN]: buildBroadenEffect(ctx.goal),
     },
   };
 }
@@ -686,9 +721,16 @@ export function buildPostAuthorizationNoPrimaryQuestion(
         ? '已授权并尝试放宽到相邻品类，但没有找到通过主推荐准入的餐厅。'
         : '已授权放宽，但没有更多可尝试的相邻品类。',
       question: postBroadenQuestionText(target || undefined, attemptedBroadenedSearch),
-      options: canAskFallback ? ['随便推荐', '换个类型'] : ['换个类型'],
+      options: canAskFallback
+        ? [
+            clarificationOption(CLARIFICATION_OPTION.AUTHORIZE_FALLBACK_PRIMARY),
+            clarificationOption(CLARIFICATION_OPTION.CHANGE_TARGET),
+          ]
+        : undefined,
       allowFreeText: true,
-      optionEffects: canAskFallback ? { 随便推荐: buildFallbackPrimaryEffect() } : undefined,
+      optionEffects: canAskFallback
+        ? { [CLARIFICATION_OPTION.AUTHORIZE_FALLBACK_PRIMARY]: buildFallbackPrimaryEffect() }
+        : undefined,
     };
   }
 
@@ -700,7 +742,6 @@ export function buildPostAuthorizationNoPrimaryQuestion(
     return {
       reason: '已按开放推荐搜索，但没有找到通过主推荐准入的餐厅。',
       question: '已经按开放推荐搜索过，仍没有找到合适餐厅。换个类型或补充一个想吃的方向吧。',
-      options: ['换个类型'],
       allowFreeText: true,
     };
   }
@@ -764,4 +805,250 @@ function postBroadenQuestionText(
 
 function clampRadius(radius: number): number {
   return Math.max(MIN_RADIUS_METERS, Math.min(MAX_RADIUS_METERS, Math.round(radius)));
+}
+
+// ---------------------------------------------------------------------------
+// 计划校验
+// ---------------------------------------------------------------------------
+
+/**
+ * 按 guard 结论把一批计划分成可执行与被拒两堆。
+ *
+ * 策略层自己调 guard 而不是让 Runtime 调：这样"什么计划可以执行"始终是一个
+ * 判断，Runtime 只负责把被拒的那堆报出去。
+ */
+export function partitionPlansByValidity(
+  ctx: PolicyContext,
+  plans: SearchPlan[]
+): { plans: SearchPlan[]; rejectedPlans: RejectedPlan[] } {
+  const valid: SearchPlan[] = [];
+  const rejectedPlans: RejectedPlan[] = [];
+
+  for (const plan of plans) {
+    const violations = validateSearchPlan(plan, ctx);
+    if (violations.length === 0) {
+      valid.push(plan);
+    } else {
+      rejectedPlans.push({ plan, violations });
+    }
+  }
+
+  return { plans: valid, rejectedPlans };
+}
+
+// ---------------------------------------------------------------------------
+// 本轮入口
+// ---------------------------------------------------------------------------
+
+/**
+ * 本轮从哪儿开始。
+ *
+ * 两条互斥的入口：用户点了追问选项（按 id 查 effect，确定性执行，不调模型），
+ * 或者用户输入了自由文本（交给 GoalUnderstandingAgent，代码不猜语义）。
+ *
+ * 返回 `understand` 时 Runtime 才去调模型；其余分支全程无模型参与。
+ */
+export type TurnEntryDecision =
+  /** 交给目标理解子 Agent，message 是要送进去的那句话 */
+  | { kind: 'understand'; message: string }
+  /** 选项带 effect：确定性打补丁 */
+  | { kind: 'apply_effect'; goal: UserGoal; conversationMode: ConversationMode }
+  /** 「重试」：原样重跑本轮，不动 goal */
+  | { kind: 'rerun_current_goal'; goal: UserGoal }
+  /** 「换个类型」：等用户说新需求 */
+  | { kind: 'ask'; goal: UserGoal; question: PendingQuestion }
+  /** 选项已失效或没有可执行内容；Runtime 据此抛 INVALID_OPTION */
+  | { kind: 'invalid_option'; optionId: string; reason: 'unavailable' | 'no_label' };
+
+export function decideTurnEntry(input: AgentInput): TurnEntryDecision {
+  const optionId = input.optionId?.trim();
+  if (!optionId) {
+    return { kind: 'understand', message: input.query };
+  }
+
+  const previousGoal = input.runtimeState?.goal;
+  const pendingQuestion = input.runtimeState?.pendingQuestion;
+
+  if (!previousGoal || !hasClarificationOption(pendingQuestion, optionId)) {
+    return { kind: 'invalid_option', optionId, reason: 'unavailable' };
+  }
+
+  // 「重试」：原样重跑本轮，不动 goal、不改会话模式。
+  // 历史 bug：把"重试"当成一句新需求喂给模型，rawQuery 被改写成「重试」，
+  // 整个会话的搜索结果被 start_new_goal 清空。
+  if (optionId === CLARIFICATION_OPTION.RETRY_TURN) {
+    return { kind: 'rerun_current_goal', goal: previousGoal };
+  }
+
+  // 「换个类型」没有 effect：它的语义就是"等用户说新的需求"。
+  if (optionId === CLARIFICATION_OPTION.CHANGE_TARGET) {
+    return {
+      kind: 'ask',
+      goal: previousGoal,
+      question: {
+        reason: '用户选择更换搜索目标。',
+        question: '想换成什么？直接说菜品或菜系，例如「牛排」「川菜」。',
+        allowFreeText: true,
+      },
+    };
+  }
+
+  const patchedGoal = applyClarificationOptionToGoal(previousGoal, pendingQuestion, optionId);
+  if (patchedGoal) {
+    return { kind: 'apply_effect', goal: patchedGoal, conversationMode: 'patch_current_goal' };
+  }
+
+  // 没有 effect 的选项：模型写的「火锅」「日料」这类，本质是替用户预填的
+  // 一句回答。把 label 当自由文本交给子 Agent——语义判断仍归模型。
+  const label = clarificationOptionLabel(pendingQuestion, optionId);
+  return label
+    ? { kind: 'understand', message: label }
+    : { kind: 'invalid_option', optionId, reason: 'no_label' };
+}
+
+// ---------------------------------------------------------------------------
+// 上下文重置
+// ---------------------------------------------------------------------------
+
+export interface SearchStateResetPlan {
+  clearAttempts: boolean;
+  clearCandidates: boolean;
+  clearActionHistory: boolean;
+  clearObservations: boolean;
+  reason?: string;
+}
+
+/**
+ * 会话模式与上下文变化 → 该清空哪些搜索状态。
+ *
+ * "这句话与上文是什么关系"是语义判断，归 GoalUnderstandingAgent；
+ * "因此要不要作废已经搜到的东西"是策略判断，归这里。
+ */
+export function decideContextReset(
+  conversationMode: ConversationMode,
+  invalidationPlan: ContextInvalidationPlan
+): SearchStateResetPlan {
+  if (conversationMode === 'start_new_goal') {
+    return {
+      clearAttempts: true,
+      clearCandidates: true,
+      clearActionHistory: true,
+      clearObservations: true,
+      reason: 'start_new_goal',
+    };
+  }
+
+  if (invalidationPlan.primaryTargetChanged) {
+    return {
+      clearAttempts: true,
+      clearCandidates: true,
+      clearActionHistory: true,
+      clearObservations: true,
+      reason: 'primary_target_changed',
+    };
+  }
+
+  if (
+    invalidationPlan.hardConstraintsChanged
+    || invalidationPlan.exclusionsChanged
+    || invalidationPlan.locationChanged
+  ) {
+    return {
+      clearAttempts: true,
+      clearCandidates: false,
+      clearActionHistory: true,
+      clearObservations: true,
+      reason: invalidationPlan.reasons[0] ?? 'context_changed',
+    };
+  }
+
+  return {
+    clearAttempts: false,
+    clearCandidates: false,
+    clearActionHistory: false,
+    clearObservations: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 追问前探路
+// ---------------------------------------------------------------------------
+
+/** 追问前探路用的通用词：只为看清附近有哪些品类，不产生推荐。 */
+const SCOUTING_KEYWORD = '餐厅';
+
+export type ScoutDecision =
+  | { kind: 'skip' }
+  | { kind: 'scout'; plan: SearchPlan };
+
+/**
+ * 追问之前要不要先探一次路。
+ *
+ * 追问发生在搜索之前，模型对"这一带有什么"一无所知，只能复述自己 prompt 里的
+ * 例子（线上实测三次都是「火锅/日料/川菜/西餐」）。用户已经说了想吃什么就不必
+ * 探——那时问的不是品类。
+ */
+export function decideScouting(ctx: PolicyContext): ScoutDecision {
+  if (hasPositiveFoodTarget(ctx.goal)) {
+    return { kind: 'skip' };
+  }
+
+  return {
+    kind: 'scout',
+    plan: buildSearchPlan(
+      ctx,
+      { keyword: SCOUTING_KEYWORD },
+      'fallback',
+      false,
+      '追问前探路：了解附近实际的餐厅品类分布。'
+    ),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 追问 / 收敛
+// ---------------------------------------------------------------------------
+
+/** 连续追问上限：到顶就收敛，不再把同一类问题继续抛给用户。 */
+export const MAX_CONSECUTIVE_ASK_TURNS = 3;
+
+/** 追问计数的持久化状态。 */
+export interface AskState {
+  lastQuestionFingerprint?: string;
+  consecutiveAskTurns?: number;
+}
+
+export type AskDecision =
+  | { kind: 'ask'; question: PendingQuestion; nextState: Required<AskState> }
+  | { kind: 'converge'; reason: Extract<FinishReason, 'CLARIFICATION_STALLED'>; repeated: boolean; consecutiveAskTurns: number };
+
+/**
+ * 抛出这个问题，还是就地收敛。
+ *
+ * Agent loop 的基本要求是每一轮可度量地前进。同一个问题连问两次说明这一轮
+ * 什么都没推进——线上就是这样把用户锁死的：降级追问反复重发，前端到达追问
+ * 上限后又只留下一个后端消费不了的按钮。
+ */
+export function decideAskOrConverge(state: AskState, question: PendingQuestion): AskDecision {
+  const fingerprint = buildQuestionFingerprint(question);
+  const askTurns = state.consecutiveAskTurns ?? 0;
+  const repeated = state.lastQuestionFingerprint === fingerprint;
+
+  if (repeated || askTurns >= MAX_CONSECUTIVE_ASK_TURNS) {
+    return {
+      kind: 'converge',
+      reason: 'CLARIFICATION_STALLED',
+      repeated,
+      consecutiveAskTurns: askTurns,
+    };
+  }
+
+  return {
+    kind: 'ask',
+    question,
+    nextState: {
+      lastQuestionFingerprint: fingerprint,
+      consecutiveAskTurns: askTurns + 1,
+    },
+  };
 }

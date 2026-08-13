@@ -1,4 +1,3 @@
-import { logger } from '@/lib/logger';
 import {
   callJsonFunctionAgent,
   JSON_FUNCTION_MAX_TOKENS,
@@ -19,26 +18,11 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL_KEYWORD
   || process.env.OPENAI_MODEL
-  || 'gpt-4o';
+  || 'deepseek-v4-flash-0731';
 const KEYWORD_EXPANSION_TIMEOUT = 60000;
 const KEYWORD_EXPANSION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const KEYWORD_EXPANSION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 const KEYWORD_EXPANSION_LIMIT = 3;
-const OPEN_EXPLORATION_FALLBACK_TARGETS: SearchKeywordTarget[] = [
-  { keyword: '小吃', poiTypes: ['050310'], confidence: 0.7 },
-  { keyword: '中餐', poiTypes: ['050100'], confidence: 0.65 },
-  { keyword: '快餐', poiTypes: ['050300'], confidence: 0.62 },
-];
-const OPEN_EXPLORATION_DEMOTED_KEYWORDS = new Set([
-  '日料',
-  '日本料理',
-  '日本菜',
-  '寿司',
-  '刺身',
-  '拉面',
-  '日式拉面',
-  '居酒屋',
-]);
 
 export interface KeywordExpansionAgentInput {
   metricsSink?: MetricsSink;
@@ -55,24 +39,29 @@ export interface KeywordExpansionOutput {
   rationale: string;
 }
 
-const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你负责为已结构化的 UserGoal 生成高德 POI keyword，并为每个 keyword 建议匹配的官方餐饮 POI typecode；不调用外部工具。
+const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你为一个已结构化的搜索目标生成高德 POI keyword，并为每个 keyword 建议匹配的官方餐饮 POI typecode；不调用外部工具，也不决定搜索流程。
 
-规则：
-1. primarySearchTargets 有值时，只能从其中的正向餐饮目标生成联想词。
-1a. primarySearchTargets 为空且 openExplorationAllowed=false 时，relatedTargets 和 broadenedTargets 必须都为空。
-1b. primarySearchTargets 为空且 openExplorationAllowed=true 时，表示用户明确授权开放推荐；relatedTargets 必须为空，broadenedTargets 可生成 1-3 个多样、具体、可单独用于高德 keywords 的餐饮探索词。
-2. relatedKeywords 是同一用户目标下的同义词、常见叫法、代表菜品或更容易命中 POI 的单个餐饮意图词。
-3. broadenedKeywords 是结果不足时才尝试的相邻大类或兼容品类。
-4. primarySearchTargets 有值时，rawQuery、hardConstraints、softPreferences、exclusions、allowBroaden 只能作为边界和排除依据，不能作为生成关键词的来源；openExplorationAllowed=true 时，可结合 rawQuery、softPreferences、preferenceSummary 生成开放探索词。
-5. 否定条件、口味限制、开放授权、体验偏好不能转写成搜索词；不要把“不辣/少辣/清淡/都可以/随便”等非餐饮目标当成高德 keywords。
-6. 如果用户只有排除项、约束或软偏好且没有开放推荐授权，不要猜测餐饮品类，输出空数组。
-7. 每个 target.keyword 必须能单独作为高德 keywords 使用，例如“寿司”“刺身”“居酒屋”；不要输出整句，不要用“|”“、”“或者”合并多个意图。
-8. 每个 target.poiTypes 必须只从 foodPoiTypes 输入表里选，且必须匹配当前 keyword；不确定时返回空数组，不要给不匹配窄类型。
-9. 多个 keyword 不共享 poiTypes；例如“日料、韩餐、东南亚菜”必须分别给 Japanese/Korean/Thai-Vietnamese 或 Other Asian 等对应 typecode。
-10. 不要重复 primaryKeywords、已尝试 keywords、排除项，也不要输出非餐饮词、体验偏好或无法用于 POI 搜索的形容词。
-11. 用户没有 allowBroaden 时仍可输出 broadenedTargets，但它们只能作为候补搜索，不能自动进入主推荐。
-12. 每个数组最多输出 3 个 target；结合用户具体上下文生成，不要机械套用固定词表。
-13. 为兼容旧调用，同时填写 relatedKeywords/broadenedKeywords，值必须等于对应 targets 的 keyword 列表。`;
+trustedContext.mode 决定你这次要做什么，只有两种：
+
+【mode=expand_targets】targets 里是用户明确想吃的东西。
+- relatedTargets：同一目标下的同义词、常见叫法、代表菜品，或更容易命中 POI 的单个餐饮意图词。
+- broadenedTargets：结果不足时才尝试的相邻大类或兼容品类。
+- constraints 与 openContext 只能作为排除依据，不能作为生成关键词的来源。
+
+【mode=open_exploration】用户没有指定目标，希望你给方向。
+- relatedTargets 必须为空。
+- broadenedTargets 给 1-3 个多样、具体、可单独用于高德 keywords 的餐饮探索方向。
+- 可以结合 openContext 的 rawQuery、softPreferences、preferenceSummary 判断方向，但这些本身不是搜索词。
+- 方向之间要拉开差距，不要给三个同属一类的词。
+
+通用规则：
+1. 每个 target.keyword 必须能单独作为高德 keywords 使用，例如“寿司”“刺身”“居酒屋”；不要输出整句，不要用“|”“、”“或者”合并多个意图。
+2. 否定条件、口味限制、体验偏好不能转写成搜索词；不要把“不辣/少辣/清淡/都可以/随便”当成高德 keywords。
+3. 每个 target.poiTypes 必须只从 foodPoiTypes 输入表里选，且必须匹配当前 keyword；不确定时返回空数组，不要给不匹配的窄类型。
+4. 多个 keyword 不共享 poiTypes；例如“日料、韩餐、东南亚菜”必须分别给 Japanese/Korean/Thai-Vietnamese 或 Other Asian 等对应 typecode。
+5. 不要重复 targets、alreadyTried 里的词或 constraints.exclusions，也不要输出非餐饮词或无法用于 POI 搜索的形容词。
+6. 每个数组最多输出 3 个 target；结合当前上下文生成，不要机械套用固定词表。
+7. 为兼容旧调用，同时填写 relatedKeywords/broadenedKeywords，值必须等于对应 targets 的 keyword 列表。`;
 
 const KEYWORD_EXPANSION_FUNCTION = {
   name: 'expandRestaurantSearchKeywords',
@@ -126,18 +115,14 @@ export async function runKeywordExpansionAgent(
     };
   }
 
+  // 显式的确定性路径：测试开关或压根没配 key。这不是"降级"，是另一条明路。
   if (!OPENAI_API_KEY || process.env.AGENT_DETERMINISTIC === '1') {
     return deterministicKeywordExpansion(input.goal, input.attempts);
   }
 
-  try {
-    return sanitizeExpansion(await callKeywordExpansionModel(input), input.goal, input.attempts);
-  } catch (error) {
-    logger.warn('KeywordExpansionAgent unavailable, using taxonomy fallback', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return deterministicKeywordExpansion(input.goal, input.attempts);
-  }
+  // 模型挂了就报错，不静默换本地词表。静默降级会让"模型不可用"这个事实对
+  // 运维完全不可见——上一次线上事故正是这样被掩盖了两天。
+  return sanitizeExpansion(await callKeywordExpansionModel(input), input.goal, input.attempts);
 }
 
 export function deterministicKeywordExpansion(
@@ -148,7 +133,7 @@ export function deterministicKeywordExpansion(
   const expansion = expandPoiSearchKeywords(seeds);
   return {
     ...sanitizeExpansion(expansion, goal, attempts),
-    rationale: 'KeywordExpansionAgent 降级为本地餐饮 taxonomy 生成搜索联想词。',
+    rationale: 'KeywordExpansionAgent 走确定性 taxonomy 生成搜索联想词。',
   };
 }
 
@@ -196,32 +181,40 @@ async function callKeywordExpansionModel(
   }) as Promise<KeywordExpansionOutput>;
 }
 
+/**
+ * 只给联想词生成真正需要的东西。
+ *
+ * `mode` 由编排层算好后显式传入，取代此前"给模型 authorizations 和
+ * allowBroaden，让它自己推断当前处于哪个阶段"的做法——那是在请子 Agent
+ * 参与编排。软偏好只在开放探索时才有意义（那时它是唯一的方向线索），
+ * 有明确目标时传进去只会诱导模型把"清淡""便宜"当成搜索词。
+ */
 function buildModelInput(input: KeywordExpansionAgentInput) {
-  const primarySearchTargets = goalKeywords(input.goal);
+  const targets = goalKeywords(input.goal);
+  const openExploration = isOpenExplorationGoal(input.goal);
 
   return {
     trustedContext: {
-      primarySearchTargets,
-      openExplorationAllowed: isOpenExplorationGoal(input.goal),
-      goalContext: {
-        rawQuery: input.goal.rawQuery,
-        requestedItems: input.goal.requestedItems,
-        acceptableCategories: input.goal.acceptableCategories,
-        alternativeGroups: input.goal.alternativeGroups,
-        primaryKeywords: input.goal.primaryKeywords,
+      mode: openExploration ? 'open_exploration' : 'expand_targets',
+      targets,
+      openContext: openExploration
+        ? {
+            rawQuery: input.goal.rawQuery,
+            softPreferences: input.goal.softPreferences,
+            preferenceSummary: input.preferenceSummary,
+          }
+        : undefined,
+      constraints: {
         hardConstraints: input.goal.hardConstraints,
-        softPreferences: input.goal.softPreferences,
         exclusions: input.goal.exclusions,
-        allowBroaden: input.goal.allowBroaden,
-        authorizations: input.goal.authorizations,
       },
-      attemptedKeywords: input.attempts.flatMap((attempt) => attempt.keywords),
-      preferenceSummary: input.preferenceSummary,
+      alreadyTried: normalizeSearchKeywords(
+        input.attempts.flatMap((attempt) => attempt.keywords)
+      ),
     },
     policy: {
       foodPoiTypes: AMAP_FOOD_POI_TYPES,
       generatedKeywordsMustBeSingleSearchIntent: true,
-      broadTargetsRequireAuthorizationForPrimary: true,
     },
   };
 }
@@ -254,7 +247,7 @@ function sanitizeExpansion(
     ? broadenedTargets
     : broadenedKeywords.map((keyword) => buildTarget(keyword));
   const stableBroadenedTargets = isOpenExplorationGoal(goal)
-    ? stabilizeOpenExplorationTargets(normalizedBroadenedTargets, attempts)
+    ? dropAttemptedTargets(normalizedBroadenedTargets, attempts)
     : normalizedBroadenedTargets;
 
   return KeywordExpansionOutputSchema.parse({
@@ -266,7 +259,14 @@ function sanitizeExpansion(
   });
 }
 
-function stabilizeOpenExplorationTargets(
+/**
+ * 开放探索时去掉已经搜过的方向。
+ *
+ * 此前这里还会把 [小吃, 中餐, 快餐] 无条件补进模型输出，并把日料相关的 8 个词
+ * 强制降权。两者都是无语义依据地指定搜索方向——拿常量冒充判断，正是
+ * CLAUDE.md 明令禁止的那类兜底。方向该由模型给，给不出就报错。
+ */
+function dropAttemptedTargets(
   targets: SearchKeywordTarget[],
   attempts: SearchAttempt[]
 ): SearchKeywordTarget[] {
@@ -274,8 +274,7 @@ function stabilizeOpenExplorationTargets(
     attempts.flatMap((attempt) => normalizeSearchKeywords(attempt.keywords))
   );
   const seen = new Set<string>();
-  const preferred: SearchKeywordTarget[] = [];
-  const demoted: SearchKeywordTarget[] = [];
+  const kept: SearchKeywordTarget[] = [];
 
   for (const target of targets) {
     const [keyword] = normalizeSearchKeywords([target.keyword]);
@@ -284,31 +283,10 @@ function stabilizeOpenExplorationTargets(
     }
 
     seen.add(keyword);
-    const normalizedTarget = buildTarget(keyword, target);
-    if (isDemotedOpenExplorationKeyword(keyword)) {
-      demoted.push(normalizedTarget);
-    } else {
-      preferred.push(normalizedTarget);
-    }
+    kept.push(buildTarget(keyword, target));
   }
 
-  const fallbackTargets = OPEN_EXPLORATION_FALLBACK_TARGETS
-    .map((target) => buildTarget(target.keyword, target))
-    .filter((target) => !attemptedKeywords.has(target.keyword))
-    .filter((target) => !seen.has(target.keyword));
-
-  return [
-    ...preferred,
-    ...fallbackTargets,
-    ...demoted,
-  ].slice(0, KEYWORD_EXPANSION_LIMIT);
-}
-
-function isDemotedOpenExplorationKeyword(keyword: string): boolean {
-  const normalizedKeywords = normalizeSearchKeywords([keyword]);
-  return normalizedKeywords.some((normalizedKeyword) =>
-    OPEN_EXPLORATION_DEMOTED_KEYWORDS.has(normalizedKeyword)
-  );
+  return kept.slice(0, KEYWORD_EXPANSION_LIMIT);
 }
 
 function sanitizeTargets(

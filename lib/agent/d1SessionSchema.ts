@@ -1,3 +1,4 @@
+import { normalizeStoredPendingQuestion } from './schemas/clarification';
 import type { AgentRuntimeState, AgentSession } from './types';
 import type { Location } from '@/types';
 
@@ -26,6 +27,8 @@ export function agentSessionToD1Row(session: AgentSession): AgentSessionD1Row {
       actions: session.actions,
       observations: session.observations,
       trace: session.trace,
+      lastQuestionFingerprint: session.lastQuestionFingerprint,
+      consecutiveAskTurns: session.consecutiveAskTurns,
     } satisfies AgentRuntimeState),
     pending_question_json: session.pendingQuestion
       ? JSON.stringify(session.pendingQuestion)
@@ -41,7 +44,7 @@ export function agentSessionFromD1Row(row: AgentSessionD1Row): AgentSession {
 
   return {
     id: row.id,
-    version: 3,
+    version: 4,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,
@@ -53,8 +56,12 @@ export function agentSessionFromD1Row(row: AgentSessionD1Row): AgentSession {
     actions: runtimeState.actions ?? [],
     observations: runtimeState.observations ?? [],
     trace: runtimeState.trace ?? [],
+    // 旧会话（version 3）存的是 `options: string[]` 与以文案为 key 的
+    // optionEffects，读出来先升级成 id 协议再用。
     pendingQuestion: row.pending_question_json
-      ? JSON.parse(row.pending_question_json) as AgentSession['pendingQuestion']
+      ? normalizeStoredPendingQuestion(JSON.parse(row.pending_question_json)) as AgentSession['pendingQuestion']
       : undefined,
+    lastQuestionFingerprint: runtimeState.lastQuestionFingerprint,
+    consecutiveAskTurns: runtimeState.consecutiveAskTurns ?? 0,
   };
 }

@@ -1,8 +1,8 @@
-jest.mock('@/lib/agent/supervisorPlanner', () => {
-  const actual = jest.requireActual('@/lib/agent/supervisorPlanner');
+jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
+  const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
   return {
     ...actual,
-    runSupervisorPlanner: jest.fn(async (input: {
+    runGoalUnderstandingAgent: jest.fn(async (input: {
       message: string;
       previousGoal?: import('@/lib/agent/types').UserGoal;
       pendingQuestion?: import('@/lib/agent/types').PendingQuestion;
@@ -10,7 +10,7 @@ jest.mock('@/lib/agent/supervisorPlanner', () => {
       limits?: unknown;
     }, context?: import('@/lib/agent/types').AgentContext) => {
       if (input.goal && input.limits) {
-        return actual.runSupervisorPlanner(input, context);
+        return actual.runGoalUnderstandingAgent(input, context);
       }
 
       if (input.previousGoal && input.pendingQuestion) {
@@ -130,11 +130,11 @@ jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
   }),
 }));
 
-import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
-import { runSupervisorPlanner } from '@/lib/agent/supervisorPlanner';
+import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
+import { runGoalUnderstandingAgent } from '@/lib/agent/subagents/goalUnderstandingAgent';
 import { runEvaluationAgent } from '@/lib/agent/subagents/evaluationAgent';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
-import { AgentError } from '@/lib/agent/types';
+import { AgentError, AgentRunError } from '@/lib/agent/types';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 
@@ -262,7 +262,7 @@ describe('runSearchAgentV3', () => {
     );
     expect(first.paused).not.toBe(true);
 
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     supervisorMock.mockResolvedValueOnce({
       patch: {
         addConstraints: [{
@@ -590,10 +590,13 @@ describe('runSearchAgentV3', () => {
     expect(searchPlaces).not.toHaveBeenCalled();
     expect(result.paused).toBe(true);
     expect(result.question?.question).not.toContain('允许放宽');
-    expect(result.question?.options).toEqual(['随便推荐', '换个类型']);
-    expect(result.question?.optionEffects?.['随便推荐']).toEqual(expect.objectContaining({
-      allowBroaden: true,
-    }));
+    expect(result.question?.options?.map((option) => option.id)).toEqual([
+      'authorize_fallback_primary',
+      'change_target',
+    ]);
+    expect(result.question?.optionEffects?.authorize_fallback_primary).toEqual(
+      expect.objectContaining({ allowBroaden: true })
+    );
     expect(result.restaurants).toEqual([]);
   });
 
@@ -616,11 +619,124 @@ describe('runSearchAgentV3', () => {
 
     expect(result.paused).toBe(true);
     expect(result.question?.question).toContain('具体想吃什么');
-    expect(searchPlaces).not.toHaveBeenCalled();
+    // 追问前会探一次路（拿附近品类分布），但它只用于生成选项：
+    // 不记 attempts、不产生推荐。
+    expect(searchPlaces).toHaveBeenCalledTimes(1);
+    expect(searchPlaces.mock.calls[0][0].reason).toContain('探路');
+    expect(result.runtimeState?.attempts ?? []).toEqual([]);
+    expect(result.restaurants).toEqual([]);
+  });
+
+  // 模型生成的选项通常只有文案没有 effect。这条锁住"点这类选项要把 label
+  // 当用户回答交给模型"，而不是报 INVALID_OPTION——线上正是这么挂的。
+  it('delegates an effect-less option to the Supervisor as the user answer', async () => {
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    const defaultSupervisor = supervisorMock.getMockImplementation();
+    supervisorMock.mockClear();
+    supervisorMock.mockImplementationOnce(async (plannerInput: { message: string }) => ({
+      goal: goal({
+        rawQuery: plannerInput.message,
+        requestedItems: [{ name: plannerInput.message, required: true, aliases: [] }],
+        primaryKeywords: [plannerInput.message],
+      }),
+      conversationMode: 'patch_current_goal',
+      nextAction: 'plan',
+    }));
+
+    try {
+      const result = await runSearchAgentV3(
+        {
+          query: '',
+          optionId: 'opt_1',
+          location,
+          runtimeState: {
+            goal: goal({ primaryKeywords: [], requestedItems: [] }),
+            attempts: [],
+            candidates: [],
+            actions: [],
+            observations: [],
+            pendingQuestion: {
+              question: '你想吃点什么类型的呢？',
+              options: [
+                { id: 'opt_1', label: '火锅' },
+                { id: 'opt_2', label: '日料' },
+              ],
+              allowFreeText: true,
+            },
+          },
+        },
+        () => undefined,
+        async () => [restaurant('r1', '老灶火锅', '火锅', 300)]
+      );
+
+      // 选项文案作为用户回答送进了理解环节。
+      expect(supervisorMock.mock.calls[0][0].message).toBe('火锅');
+      expect(result.paused).not.toBe(true);
+    } finally {
+      supervisorMock.mockReset();
+      if (defaultSupervisor) {
+        supervisorMock.mockImplementation(defaultSupervisor);
+      }
+    }
+  });
+
+  // 死循环的直接不变量：同一个问题不能连问两次。线上就是靠这条缺失，
+  // 把用户锁在「想吃点什么？」上出不去的。
+  it('converges instead of asking the same question twice', async () => {
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    const defaultSupervisor = supervisorMock.getMockImplementation();
+    supervisorMock.mockClear();
+    const stuckQuestion = {
+      question: '你想找哪类餐厅，或具体想吃什么？',
+      allowFreeText: true,
+    };
+    supervisorMock.mockResolvedValue({
+      question: stuckQuestion,
+      conversationMode: 'continue_current_goal',
+      nextAction: 'ask_user',
+    });
+    const searchPlaces = jest.fn(async () => []);
+
+    try {
+      const first = await runSearchAgentV3(
+        {
+          query: '嗯',
+          location,
+          runtimeState: { attempts: [], candidates: [], actions: [], observations: [] },
+        },
+        () => undefined,
+        searchPlaces
+      );
+
+      expect(first.paused).toBe(true);
+      expect(first.runtimeState?.lastQuestionFingerprint).toBeTruthy();
+
+      const second = await runSearchAgentV3(
+        {
+          query: '嗯嗯',
+          location,
+          runtimeState: {
+            ...first.runtimeState!,
+            pendingQuestion: first.question,
+          },
+        },
+        () => undefined,
+        searchPlaces
+      ).catch((error) => error);
+
+      // 第二轮不再抛同一个问题：要么给结果，要么以 NO_RESULTS 收场，
+      // 但绝不能再 pause 在同一个问题上。
+      expect((second as { paused?: boolean }).paused).not.toBe(true);
+    } finally {
+      supervisorMock.mockReset();
+      if (defaultSupervisor) {
+        supervisorMock.mockImplementation(defaultSupervisor);
+      }
+    }
   });
 
   it('uses fallback search when the Supervisor returns an open recommendation goal', async () => {
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     supervisorMock.mockClear();
     supervisorMock.mockResolvedValueOnce({
       goal: goal({
@@ -628,6 +744,13 @@ describe('runSearchAgentV3', () => {
         requestedItems: [],
         acceptableCategories: [],
         primaryKeywords: [],
+        // 站位于 KeywordExpansionAgent 的产出：开放推荐的探索方向只能来自模型，
+        // 确定性模式下它不产出方向（那两张硬编码词表已随阶段 4 删除）。
+        broadenedTargets: [
+          { keyword: '火锅', poiTypes: ['050117'] },
+          { keyword: '烧烤', poiTypes: ['050118'] },
+        ],
+        broadenedKeywords: ['火锅', '烧烤'],
         softPreferences: [{ name: '默认多样性', weight: 1, verifiable: true }],
         allowBroaden: true,
         authorizations: [{
@@ -671,8 +794,10 @@ describe('runSearchAgentV3', () => {
       !(plannerInput.goal && plannerInput.limits)
     );
     expect(goalPlannerCalls).toHaveLength(1);
-    expect(searchedPlans.some((plan) => plan.searchIntent === 'fallback')).toBe(true);
-    expect(searchedPlans[0].keywords).toEqual(['餐厅']);
+    // 开放推荐铺开的是具体探索方向，不再是一个通用词「餐厅」——
+    // 只搜通用词等于把转盘的品类分布交给高德排序。
+    expect(searchedPlans.every((plan) => plan.searchIntent === 'fallback')).toBe(true);
+    expect(searchedPlans[0].keywords[0]).not.toBe('餐厅');
     expect(result.restaurants.length).toBeGreaterThan(0);
 
     // 单关键词约束已前移到 SearchPlanSchema，Runtime 不再靠 guard 事后拆词，
@@ -690,14 +815,14 @@ describe('runSearchAgentV3', () => {
     expect(searchedPlans.every((plan) => plan.keywords.length === 1)).toBe(true);
   });
 
-  it('pauses with a clarifying question instead of searching when the Supervisor truncates', async () => {
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+  it('fails the turn instead of guessing when the Supervisor is unavailable', async () => {
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     supervisorMock.mockRejectedValueOnce(
-      new Error('SupervisorPlannerAgent returned truncated function arguments')
+      new AgentError('Free quota exhausted', 'MODEL_QUOTA_EXHAUSTED', false)
     );
     const searchedPlans: SearchPlan[] = [];
 
-    const result = await runSearchAgentV3(
+    const error = await runSearchAgentV3(
       {
         query: '没有具体想吃的，你来选',
         location,
@@ -713,26 +838,24 @@ describe('runSearchAgentV3', () => {
         searchedPlans.push(plan);
         return [restaurant('r1', '社区餐厅', '餐饮', 300)];
       }
-    );
+    ).catch((caught) => caught);
 
-    // 关键不变量：截断的理解结果不能被当成搜索目标。
+    // 关键不变量：理解不了就报错，不拿词表抽出来的东西冒充用户目标。
+    expect(error).toBeInstanceOf(AgentRunError);
+    expect(error.code).toBe('MODEL_QUOTA_EXHAUSTED');
     expect(searchedPlans).toEqual([]);
-    expect(result.paused).toBe(true);
-    expect(result.question?.question).toContain('想吃点什么');
-    expect(result.runtimeState?.trace).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: 'error',
-        error: expect.objectContaining({ code: 'SUPERVISOR_UNAVAILABLE' }),
-      }),
-    ]));
+    // 目标还没解析出来，本轮不写任何会话状态，已有结果不会被抹掉。
+    expect(error.runtimeState).toBeUndefined();
   });
 
-  it('falls back to raw-query search when the Supervisor fails but the query names a dish', async () => {
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
-    supervisorMock.mockRejectedValueOnce(new Error('SupervisorPlannerAgent API failed: 500'));
+  it('does not fall back to raw-query search when the Supervisor fails', async () => {
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    supervisorMock.mockRejectedValueOnce(
+      new AgentError('GoalUnderstandingAgent API failed: 500', 'MODEL_UNAVAILABLE', true)
+    );
     const searchedPlans: SearchPlan[] = [];
 
-    await runSearchAgentV3(
+    const error = await runSearchAgentV3(
       {
         query: '想吃火锅',
         location,
@@ -748,9 +871,10 @@ describe('runSearchAgentV3', () => {
         searchedPlans.push(plan);
         return [restaurant('r1', '老灶火锅', '火锅', 300)];
       }
-    );
+    ).catch((caught) => caught);
 
-    expect(searchedPlans[0]?.keywords).toEqual(['火锅']);
+    expect(error).toBeInstanceOf(AgentRunError);
+    expect(searchedPlans).toEqual([]);
   });
 
   it('records the observed provider when search falls back to OSM results', async () => {
@@ -984,7 +1108,7 @@ describe('runSearchAgentV3', () => {
     )).toBe(false);
   });
 
-  it('keeps EvaluationAgent failures out of primary recommendations and records a structured trace', async () => {
+  it('fails the turn when candidate verification is unavailable and nothing passed', async () => {
     const evaluationMock = runEvaluationAgent as jest.Mock;
     const defaultImplementation = evaluationMock.getMockImplementation();
     // 真实链路上 429 由 modelClient 抛成带码的 AgentError；这里照同一个契约来。
@@ -993,32 +1117,22 @@ describe('runSearchAgentV3', () => {
     );
 
     try {
-      const result = await runSearchAgentV3(
+      const searchCalls: SearchPlan[] = [];
+      const error = await runSearchAgentV3(
         input(goal()),
         () => undefined,
-        async () => [restaurant('r1', '寿司店', '日本料理', 300)]
-      );
+        async (plan) => {
+          searchCalls.push(plan);
+          return [restaurant('r1', '寿司店', '日本料理', 300)];
+        }
+      ).catch((caught) => caught);
 
-      expect(result.paused).toBe(true);
-      expect(result.restaurants).toEqual([]);
-      expect(result.runtimeState?.candidates[0]).toEqual(expect.objectContaining({
-        restaurant: expect.objectContaining({ id: 'r1' }),
-        warnings: expect.arrayContaining([expect.stringContaining('未验证候补')]),
-        verification: expect.objectContaining({
-          status: 'unverified',
-          primaryEligible: false,
-        }),
-      }));
-      expect(result.runtimeState?.trace).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          type: 'evaluation',
-          output: expect.objectContaining({ source: 'error' }),
-          error: expect.objectContaining({
-            code: 'EVALUATION_RATE_LIMITED',
-            retryable: true,
-          }),
-        }),
-      ]));
+      // 验证不了就报错，不把"没验证过"的候选塞进结果。
+      expect(error).toBeInstanceOf(AgentRunError);
+      expect(error.code).toBe('RATE_LIMITED');
+      expect(error.runtimeState?.candidates ?? []).toEqual([]);
+      // 验证挂了之后不再扩搜：同一批 POI 不该被换个关键词再搜一遍。
+      expect(searchCalls).toHaveLength(1);
     } finally {
       if (defaultImplementation) {
         evaluationMock.mockImplementation(defaultImplementation);
@@ -1037,7 +1151,7 @@ describe('runSearchAgentV3', () => {
     );
 
     expect(first.paused).toBe(true);
-    expect(first.question?.optionEffects?.['扩大范围']).toEqual(expect.objectContaining({
+    expect(first.question?.optionEffects?.expand_distance).toEqual(expect.objectContaining({
       allowBroaden: true,
       setDistanceMaxMeters: 5000,
       addAuthorizations: [
@@ -1049,11 +1163,18 @@ describe('runSearchAgentV3', () => {
     }));
 
     const searchedRadii: number[] = [];
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    supervisorMock.mockClear();
     const second = await runSearchAgentV3(
       {
-        query: '扩大范围',
+        // 点选项只回传 id，不回传文案，也不经过模型。
+        query: '',
+        optionId: 'expand_distance',
         location,
-        runtimeState: first.runtimeState,
+        runtimeState: {
+          ...first.runtimeState!,
+          pendingQuestion: first.question,
+        },
       },
       () => undefined,
       async (plan) => {
@@ -1065,5 +1186,7 @@ describe('runSearchAgentV3', () => {
     expect(second.paused).not.toBe(true);
     expect(searchedRadii.some((radius) => radius > 500)).toBe(true);
     expect(second.restaurants.map((item) => item.name)).toEqual(['寿司店']);
+    // 确定性选项不该消耗一次理解调用。
+    expect(supervisorMock).not.toHaveBeenCalled();
   });
 });

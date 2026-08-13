@@ -8,6 +8,7 @@
  * 被 mock 的模块（会形成环）。
  */
 
+import { AgentError } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 import type {
   AmapFixture,
@@ -35,6 +36,7 @@ interface EvalCounters {
 interface EvalStubs {
   goal?: StubGoal;
   expansion?: StubExpansion;
+  evaluationError?: string;
   message: string;
 }
 
@@ -138,18 +140,23 @@ interface SupervisorStubInput {
 }
 
 /**
- * 路由 runSupervisorPlanner：
+ * 路由 runGoalUnderstandingAgent：
  * - action 规划输入交给真实实现（M3 之前是确定性 planner，M3 之后不再被调用）
  * - 目标理解输入用 case 声明的桩目标
  */
-export function routeSupervisorPlanner(
-  actual: { runSupervisorPlanner: (input: unknown, context?: unknown) => Promise<unknown> },
+export function routeGoalUnderstanding(
+  actual: { runGoalUnderstandingAgent: (input: unknown, context?: unknown) => Promise<unknown> },
   input: SupervisorStubInput,
   context?: unknown
 ): Promise<unknown> {
   if (input.goal && input.limits) {
     harnessState.counters.plannerModelCalls += 1;
-    return actual.runSupervisorPlanner(input, context);
+    return actual.runGoalUnderstandingAgent(input, context);
+  }
+
+  const failWithCode = harnessState.stubs.goal?.failWithCode;
+  if (failWithCode) {
+    return Promise.reject(createStubAgentError('GoalUnderstandingAgent 桩故障', failWithCode));
   }
 
   return Promise.resolve({
@@ -205,6 +212,21 @@ export function buildStubGoal(stub: StubGoal, rawQuery: string) {
 // KeywordExpansion 桩
 // ---------------------------------------------------------------------------
 
+/**
+ * 构造一个带错误码的桩错误。
+ *
+ * 必须是真的 AgentError：runtime 用 instanceof 取错误码，结构同形的对象
+ * 会被判成 UNKNOWN，评测就锁不住"错误码从抛出点传下来"这条契约。
+ * types 模块没有被 mock，可以安全 import。
+ */
+function createStubAgentError(message: string, code: string): Error {
+  return new AgentError(
+    message,
+    code as ConstructorParameters<typeof AgentError>[1],
+    code !== 'MODEL_QUOTA_EXHAUSTED' && code !== 'CONFIG_MISSING'
+  );
+}
+
 export function keywordExpansionStub() {
   const expansion = harnessState.stubs.expansion ?? {};
   const related = expansion.related ?? [];
@@ -243,6 +265,14 @@ interface EvaluationStubInput {
 export function evaluationStub(input: EvaluationStubInput) {
   const counters = harnessState.counters;
   counters.evaluationCalls += 1;
+
+  const evaluationError = harnessState.stubs.evaluationError;
+  if (evaluationError) {
+    counters.evaluatedSlots += input.restaurants.length;
+    counters.evaluatedIds.push(...input.restaurants.map((item) => item.id));
+    return Promise.reject(createStubAgentError('EvaluationAgent 桩故障', evaluationError));
+  }
+
   counters.evaluatedSlots += input.restaurants.length;
   counters.evaluatedIds.push(...input.restaurants.map((item) => item.id));
 
@@ -274,18 +304,12 @@ export function evaluationStub(input: EvaluationStubInput) {
     };
   });
 
-  const selectedIds = verdicts
-    .filter((verdict) => verdict.status === 'passed' && verdict.primaryEligible)
-    .slice(0, input.targetCount)
-    .map((verdict) => verdict.restaurantId);
-  const selectedIdSet = new Set(selectedIds);
-
+  // 只出逐家裁决：EvaluationAgent 不再做全局选择与排序（阶段 4）。
+  // 桩必须跟着契约变，否则 eval 会用旧行为掩盖新行为的差异。
   return Promise.resolve({
     verdicts,
-    selectedIds,
-    candidateIds: verdicts
-      .filter((verdict) => !selectedIdSet.has(verdict.restaurantId) && verdict.status !== 'failed')
-      .map((verdict) => verdict.restaurantId),
+    selectedIds: [],
+    candidateIds: [],
     explanation: 'eval stub evaluation',
     unmetConstraints: verdicts.flatMap((verdict) => verdict.conflicts),
     source: 'model' as const,

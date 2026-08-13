@@ -344,7 +344,7 @@ export const GoalPatchSchema = z.object({
   removeConstraints: OptionalStringArraySchema,
   addAuthorizations: optionalArray(AgentAuthorizationSchema),
   allowBroaden: OptionalBooleanSchema,
-  reason: stringWithDefault('SupervisorPlannerAgent 更新目标。'),
+  reason: stringWithDefault('GoalUnderstandingAgent 更新目标。'),
 });
 
 export const AgentGoalDraftSchema = z.object({

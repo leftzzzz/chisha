@@ -32,7 +32,7 @@ export class D1AgentSessionStore implements AgentSessionStore {
     const now = Date.now();
     const session: AgentSession = {
       id: createSessionId(),
-      version: 3,
+      version: 4,
       createdAt: now,
       updatedAt: now,
       expiresAt: now + SESSION_TTL_MS,

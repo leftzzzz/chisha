@@ -83,7 +83,7 @@ function createInMemoryAgentSession(message: string, location: Location): AgentS
   const now = Date.now();
   const session: AgentSession = {
     id: createSessionId(),
-    version: 3,
+    version: 4,
     createdAt: now,
     updatedAt: now,
     expiresAt: now + SESSION_TTL_MS,
@@ -159,6 +159,8 @@ export function applyRuntimeStateToSession(
   session.observations = state.observations ?? [];
   session.trace = persistableTrace(state.trace ?? session.trace);
   session.pendingQuestion = state.pendingQuestion;
+  session.lastQuestionFingerprint = state.lastQuestionFingerprint;
+  session.consecutiveAskTurns = state.consecutiveAskTurns ?? 0;
   return saveAgentSession(session);
 }
 
@@ -175,6 +177,8 @@ export async function applyRuntimeStateToSessionAsync(
   session.observations = state.observations ?? [];
   session.trace = persistableTrace(state.trace ?? session.trace);
   session.pendingQuestion = state.pendingQuestion;
+  session.lastQuestionFingerprint = state.lastQuestionFingerprint;
+  session.consecutiveAskTurns = state.consecutiveAskTurns ?? 0;
   return saveAgentSessionAsync(session);
 }
 

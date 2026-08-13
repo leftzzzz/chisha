@@ -3,11 +3,13 @@ import type {
   CandidateVerdict,
   EvaluationAgentOutput,
   GuardrailViolation,
+  PolicyContext,
   SearchPlan,
   UserGoal,
 } from './types';
 import { evaluateConstraint } from './constraintEvaluator';
-import { getStrictDistanceMaxMeters, hasTriedPlan, type PolicyContext } from './policy';
+import { getStrictDistanceMaxMeters } from './goal';
+import { hasTriedPlan } from './searchAttempts';
 import { SearchPlanSchema } from './schemas/plan';
 
 export interface HardConstraintGuardResult {

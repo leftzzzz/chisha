@@ -1,16 +1,16 @@
 {
   "updatedAt": "2026-08-13",
   "totals": {
-    "searchRounds": 20,
-    "searchSteps": 18,
-    "searchCalls": 20,
+    "searchRounds": 23,
+    "searchSteps": 20,
+    "searchCalls": 28,
     "plannerModelCalls": 0,
-    "evaluationCalls": 18,
-    "evaluatedSlots": 50,
-    "duplicateEvaluations": 1,
+    "evaluationCalls": 23,
+    "evaluatedSlots": 66,
+    "duplicateEvaluations": 6,
     "modelCalls": 0,
     "serialModelSteps": 0,
-    "askRate": 0.308
+    "askRate": 0.294
   },
   "cases": {
     "strict-distance-hotpot": {
@@ -33,6 +33,27 @@
       "searchRounds": 1,
       "duplicateEvaluations": 0,
       "primaryCount": 0
+    },
+    "model-unavailable": {
+      "passed": true,
+      "searchSteps": 0,
+      "searchRounds": 0,
+      "duplicateEvaluations": 0,
+      "primaryCount": 0
+    },
+    "evaluation-unavailable": {
+      "passed": true,
+      "searchSteps": 0,
+      "searchRounds": 0,
+      "duplicateEvaluations": 5,
+      "primaryCount": 0
+    },
+    "clarify-option-authorizes": {
+      "passed": true,
+      "searchSteps": 2,
+      "searchRounds": 2,
+      "duplicateEvaluations": 0,
+      "primaryCount": 7
     },
     "exact-hotpot": {
       "passed": true,
@@ -79,9 +100,9 @@
     "open-anything": {
       "passed": true,
       "searchSteps": 1,
-      "searchRounds": 1,
+      "searchRounds": 2,
       "duplicateEvaluations": 0,
-      "primaryCount": 5
+      "primaryCount": 4
     },
     "open-vague-browsing": {
       "passed": true,

@@ -19,6 +19,12 @@ export interface StubGoal {
   strictDistanceMeters?: number;
   /** 非空时 Supervisor 直接追问，不进入 loop */
   clarifyingQuestion?: string;
+  /**
+   * 非空时 Supervisor 桩直接抛错（模拟模型不可用）。
+   *
+   * 用于锁死"理解不了就报错、不猜"这条不变量：不能有任何降级搜索。
+   */
+  failWithCode?: string;
 }
 
 /** 桩 KeywordExpansion 要返回的联想词。 */
@@ -33,6 +39,10 @@ export interface EvalTurn {
   stubGoal?: StubGoal;
   /** offline 模式下 KeywordExpansion 桩的输出；live 模式忽略 */
   stubExpansion?: StubExpansion;
+  /** 非空时候选验证桩直接抛错（模拟验证服务不可用） */
+  stubEvaluationError?: string;
+  /** 点击追问选项而不是输入文本时的选项 id */
+  optionId?: string;
   expect?: EvalExpectation;
 }
 
@@ -51,6 +61,12 @@ export interface EvalExpectation {
   maxSearchRounds?: number;
   /** 同一餐厅是否允许被重复送评估 */
   allowDuplicateEvaluation?: boolean;
+  /** 该轮应当以错误结束，并带上这个错误码 */
+  failsWithCode?: string;
+  /** 该轮最多允许发起几次高德搜索 */
+  maxSearchCalls?: number;
+  /** 该轮最多允许调用几次候选验证 */
+  maxEvaluationCalls?: number;
 }
 
 export interface EvalCase {

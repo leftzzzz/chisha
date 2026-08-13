@@ -5,12 +5,12 @@
  */
 
 import React, { useState } from 'react';
-import type { SearchProgress } from '@/hooks/useRestaurantSearch';
+import type { QuestionAnswer, SearchProgress } from '@/hooks/useRestaurantSearch';
 import { Button } from './ui';
 
 export interface LoadingStepsProps {
   progress: SearchProgress;
-  onQuestionReply?: (answer: string) => Promise<void> | void;
+  onQuestionReply?: (answer: QuestionAnswer) => Promise<void> | void;
   isReplying?: boolean;
 }
 
@@ -154,17 +154,27 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({
   onQuestionReply,
   isReplying = false,
 }) => {
-  const { status, message, currentKeywords, round, total, foundRestaurants, question, maxRounds, targetCount, currentStage } = progress;
+  const { status, message, currentKeywords, round, total, foundRestaurants, question, questionRound, maxRounds, targetCount, currentStage } = progress;
   const [reply, setReply] = useState('');
 
-  const submitReply = async (answer: string) => {
+  const submitText = async (answer: string) => {
     const cleanedAnswer = answer.trim();
     if (!cleanedAnswer || isReplying) {
       return;
     }
 
     setReply('');
-    await onQuestionReply?.(cleanedAnswer);
+    await onQuestionReply?.({ text: cleanedAnswer });
+  };
+
+  /** 选项只回传 id，文案不参与任何语义判断。 */
+  const submitOption = async (optionId: string) => {
+    if (isReplying) {
+      return;
+    }
+
+    setReply('');
+    await onQuestionReply?.({ optionId });
   };
 
   return (
@@ -199,60 +209,57 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({
             {question.question}
           </p>
 
+          {/* 选项只来自后端。前端自造按钮会让 UI 文案与后端语义脱节， */}
+          {/* 这正是「你推荐」按钮把用户锁进死循环的原因。 */}
           {question.options && question.options.length > 0 && (
             <div className={`grid gap-2 ${getGridCols(question.options.length)}`}>
               {question.options.map((option) => (
                 <Button
-                  key={option}
+                  key={option.id}
                   variant="secondary"
                   size="md"
-                  onClick={() => submitReply(option)}
+                  onClick={() => submitOption(option.id)}
                   disabled={isReplying}
                   loading={isReplying}
                   className="w-full"
                 >
-                  {option}
+                  {option.label}
                 </Button>
               ))}
             </div>
           )}
 
           {question.allowFreeText && (
-            <div className="flex gap-2">
-              <form
-                className="flex gap-2 flex-1"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  submitReply(reply);
-                }}
-              >
-                <input
-                  value={reply}
-                  onChange={(event) => setReply(event.target.value)}
-                  disabled={isReplying}
-                  placeholder="输入其他想法..."
-                  className="min-w-0 flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
-                  maxLength={120}
-                />
-                <Button
-                  type="submit"
-                  size="md"
-                  disabled={!reply.trim() || isReplying}
-                  loading={isReplying}
-                >
-                  继续
-                </Button>
-              </form>
-              <Button
-                variant="secondary"
-                size="md"
-                onClick={() => submitReply('你推荐')}
+            <form
+              className="flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitText(reply);
+              }}
+            >
+              <input
+                value={reply}
+                onChange={(event) => setReply(event.target.value)}
                 disabled={isReplying}
+                placeholder="直接说菜品或菜系，也可以说「你推荐」"
+                className="min-w-0 flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+                maxLength={120}
+              />
+              <Button
+                type="submit"
+                size="md"
+                disabled={!reply.trim() || isReplying}
                 loading={isReplying}
               >
-                你推荐
+                继续
               </Button>
-            </div>
+            </form>
+          )}
+
+          {questionRound !== undefined && questionRound >= 3 && (
+            <p className="text-xs text-[#9a8d81]">
+              已经问了 {questionRound} 轮，换个说法可能更快，例如直接说一个菜名。
+            </p>
           )}
         </div>
       )}

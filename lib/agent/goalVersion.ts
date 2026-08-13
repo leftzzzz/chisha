@@ -42,7 +42,7 @@ export function deriveContextInvalidationPlan(
     ? deriveLocationSignature(previousLocation) !== deriveLocationSignature(nextLocation)
     : false;
   const primaryTargetChanged = previousGoal
-    ? primaryTargetSignature(previousGoal) !== primaryTargetSignature(nextGoal)
+    ? primaryTargetFieldSignature(previousGoal) !== primaryTargetFieldSignature(nextGoal)
     : false;
   const hardConstraintsChanged = previousGoal
     ? stableStringify(previousGoal.hardConstraints) !== stableStringify(nextGoal.hardConstraints)
@@ -198,7 +198,15 @@ function compareByStableStringify(left: unknown, right: unknown): number {
   return stableStringify(left).localeCompare(stableStringify(right));
 }
 
-function primaryTargetSignature(goal: UserGoal): string {
+/**
+ * 目标词的**分字段**签名，用于判断候选是否需要作废。
+ *
+ * 与 `goal.ts` 的 `primaryTargetSetSignature`（合并集合）刻意不同：
+ * 这里同一个词从 requestedItems 挪到 primaryKeywords 算"变了"，
+ * 因为候选的验证证据是按字段语义产生的，挪动字段后旧证据不再可信。
+ * 那边只关心"用户想吃的东西整体变没变"，用于会话模式判断。
+ */
+function primaryTargetFieldSignature(goal: UserGoal): string {
   return stableStringify({
     primaryKeywords: sortedStrings(goal.primaryKeywords),
     requestedItems: sortedStrings(goal.requestedItems.map((item) => item.name)),

@@ -53,30 +53,69 @@ Core state files:
 
 ### Agent Harness (`lib/agent/`)
 主链路：`/api/agent/chat` → `runSearchAgentV3`。职责边界见
-`docs/Agent-Loop-形态重构技术方案-2026-08.md`。
+`docs/Agent-职责边界重构-技术方案-2026-08.md`。
 
-**模型只在三处介入**：理解目标、联想搜索词、验证候选。常规轮次的"下一步做
-什么"完全由 `policy.ts` 决定——不要把动作决策重新交回模型。
+**编排者是代码，不是模型。** 没有"主 Agent 模型"这种东西——`orchestrator/`
+决定一切流程，四个子 Agent 各做一件独立任务。
 
-- `runtimeV3.ts` - 唯一 loop controller：预算、事件、状态提交，执行 policy 的决策
-- `policy.ts` - **唯一 planner**：`decideNextAction` / `planSearchBatch` 以及
-  计划构造、半径、poiType、追问、授权、关键词队列。阈值集中在 `POLICY_LIMITS`
-- `supervisor.ts` - 目标理解与 GoalPatch（模型）
-- `supervisorPlanner.ts` - 只剩两件事：转发目标理解、`runSearchReplan`
-  （确定性关键词全部试完仍无主推荐时重新构思方向，一轮最多一次）
-- `subagents/evaluationAgent.ts` - 候选语义验证（模型，调用量最大）
-- `subagents/keywordExpansionAgent.ts` - 搜索词联想（模型）
-- `evaluationCache.ts` - 一轮内的候选裁决缓存，避免重叠 POI 反复送评估。
-  只复用 passed 且镜头不更宽的裁决
+#### 分层判据（新代码放哪儿，用这条判）
+
+| 特征 | 归属 |
+|---|---|
+| 需要理解自然语言或语义 | `subagents/` |
+| 需要枚举状态做选择 | `orchestrator/policy.ts` |
+| 需要发请求、发事件、改状态 | `orchestrator/runtime.ts` |
+| 同样输入永远同样输出且不含语义 | 规则库（`lib/agent/*.ts`） |
+
+依赖方向只允许三条：编排层→子 Agent、编排层→规则库、子 Agent→规则库。
+**这条约束由 `__tests__/lib/agent/layering.test.ts` 强制**，违反即测试红。
+
+#### 编排层 `orchestrator/`
+- `policy.ts` - **唯一决策者**，纯函数、无 I/O、无模型。`decideTurnEntry` /
+  `decideContextReset` / `decideScouting` / `decideNextAction` /
+  `decideAskOrConverge` / `planSearchBatch` / `partitionPlansByValidity`。
+  阈值集中在 `POLICY_LIMITS`
+- `runtime.ts` - **只执行**：按决策发起调用、发 SSE、提交状态与 trace。
+  不要在这里写"下一步做什么"的 if
+
+#### 子 Agent `subagents/`（模型只在这四处介入）
+- `goalUnderstandingAgent.ts` - 口语 → UserGoal / GoalPatch / 追问
+- `keywordExpansionAgent.ts` - 目标 → 联想词与探索方向
+- `evaluationAgent.ts` - 餐厅事实 → **逐家**裁决（调用量最大）。它不选择、
+  不排序——那是 finalGuard 的事
+- `replanAgent.ts` - 确定性关键词试完仍无主推荐时重新构思方向，一轮最多一次
+
+子 Agent 的输入必须能用一句话描述**而不提到 loop**。`authorizations`、
+`attempts`、`allowBroaden`、`goalVersion` 这类编排状态一律不得传入——
+由 `__tests__/lib/agent/subagents/subagentContracts.test.ts` 强制。
+
+#### 规则库（确定性，两边复用）
+- `goal.ts` - 目标代数：合并、打补丁、追问选项应用
+- `searchAttempts.ts` - 搜索历史的只读查询
 - `guards.ts` - `validateSearchPlan` 只校验不改写（计划由 policy 生成，
   违规即 bug）+ 确定性硬约束过滤
-- `finalGuard.ts` - 主推荐准入
+- `finalGuard.ts` - 主推荐准入与候选排序
+- `evaluationCache.ts` - 一轮内的候选裁决缓存，避免重叠 POI 反复送评估。
+  只复用 passed 且镜头不更宽的裁决
 - `finishReason.ts` - 结束原因枚举与用户文案映射（不要用字符串匹配生成文案）
-- `degraded.ts` - Supervisor 不可用时的降级目标
+- `clarificationOptions.ts` - 追问选项的 id 协议（id 是契约，label 只是文案）
+- `nearbyCategories.ts` - 把真实 POI 聚成追问选项
 - `metrics.ts` / `turnLogger.ts` / `tracePersistence.ts` - 观测：模型指标
   （含 `serialModelSteps`）、带 sessionId/turnId 的日志、trace 持久化裁剪
 
 错误码在**抛出点**用 `AgentError` 指定，不要在消费端对 message 做正则匹配。
+
+**三条不可违反的约定**（见 `docs/模型不可用与追问契约-技术方案-2026-08.md`）：
+
+1. **模型不可用就报错，不降级**。不要新增任何"用关键词表从用户原话里抽词"
+   的兜底路径——那是拿硬编码语义冒充模型判断，也是历史上追问死循环的燃料。
+   验证失败同理：不合成 unverified 候选。
+   注意区分：同义词归一（火锅→涮锅）这类**无语义推断的确定性规则**可以留，
+   删的是"无依据地替模型选方向"的隐式替身。
+2. **用户意图只由 GoalUnderstandingAgent 判断**。「你推荐」「随便」这类说法
+   一个字都不该进代码常量；prompt 里写规则，代码里不做关键词匹配。
+3. **追问选项按 id 走协议**。`optionEffects` 的 key 只能是 option.id，前端回传
+   id、不回传文案，也不许自己造选项。
 
 ### Agent 评测 (`evals/`)
 `npm run eval` 用桩模型 + fixture 高德驱动真实 loop，度量的是**行为**：
@@ -106,7 +145,7 @@ AMAP_API_KEY=           # 高德地图 API key
 Optional:
 ```
 OPENAI_BASE_URL=        # Custom OpenAI endpoint
-OPENAI_MODEL=           # Model override (default: gpt-4o)
+OPENAI_MODEL=           # Model override (default: deepseek-v4-flash-0731)
 OPENAI_MODEL_SUPERVISOR= # 目标理解模型（默认继承 OPENAI_MODEL）
 OPENAI_MODEL_PLANNER=   # replan 模型（默认继承 OPENAI_MODEL）
 OPENAI_MODEL_EVALUATION= # 候选验证模型，调用量最大，可配便宜模型
@@ -134,7 +173,7 @@ Coverage threshold: 70% across all metrics.
 模型决策路径默认被 `AGENT_DETERMINISTIC=1`（`jest.setup.js`）关掉。要覆盖模型
 分支的用例，在用例内 `delete process.env.AGENT_DETERMINISTIC` 并 mock
 `@/lib/withTimeout` 的 `fetchWithTimeout`，参考
-`__tests__/lib/agent/supervisorPlanner.test.ts`。
+`__tests__/lib/agent/subagents/replanAgent.test.ts`。
 
 改动 agent loop 行为时，单测之外还要跑 `npm run eval`——单测锁的是分支，
 eval 锁的是"这一轮总共搜了几步、评了几次"。

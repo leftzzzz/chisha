@@ -1,52 +1,63 @@
+/**
+ * 编排层的执行器。
+ *
+ * 只做三件事：按 policy 的决策发起调用、发 SSE 事件、提交状态与 trace。
+ * "下一步做什么"一律来自 `./policy`——这里不再自行推导动作。
+ */
+
 import type { Restaurant } from '@/types';
 import {
   applyGoalPatch,
   clarificationNeedToPendingQuestion,
-  createActionRecord,
-  runSearchReplan,
-  runSupervisorPlanner,
-  summarizeAction,
-} from './supervisorPlanner';
-import { evaluateSearchResult, mergeCandidates } from './evaluator';
-import { applyHardConstraintGuard, applyVerdictGuard, validateSearchPlan } from './guards';
-import { isPrimaryRecommendationAllowed } from './finalGuard';
-import { createTurnLogger } from './turnLogger';
-import { summarizeTurnMetrics, type MetricsSink } from './metrics';
-import { describeFinish, internalFinishNote, type FinishReason } from './finishReason';
+} from '../goal';
+import { runGoalUnderstandingAgent } from '../subagents/goalUnderstandingAgent';
+import { runSearchReplan, summarizeExhaustedSearch } from '../subagents/replanAgent';
+import { evaluateSearchResult, mergeCandidates } from '../evaluator';
+import { applyHardConstraintGuard, applyVerdictGuard } from '../guards';
+import { isPrimaryRecommendationAllowed } from '../finalGuard';
+import { createTurnLogger } from '../turnLogger';
+import { summarizeTurnMetrics, type MetricsSink } from '../metrics';
+import { describeFinish, internalFinishNote, type FinishReason } from '../finishReason';
 import {
-  buildDegradedGoalFromQuery,
-  buildEmptyDegradedGoal,
-  DEGRADED_CLARIFYING_QUESTION,
-  DEGRADED_GOAL_NOTICE,
-} from './degraded';
-import {
+  buildFallbackPrimaryEffect,
   buildNoPrimaryQuestion,
+  decideAskOrConverge,
+  decideContextReset,
   decideNextAction,
+  decideScouting,
+  decideTurnEntry,
   hasPrimaryCandidates,
   inferPoiTypesForGoalKeyword,
+  isOpenExplorationContext,
+  partitionPlansByValidity,
   planSearchBatch,
   primaryCandidates,
   type PolicyDecision,
+  type RejectedPlan,
+  type SearchStateResetPlan,
 } from './policy';
+import {
+  buildNearbyCategoryQuestion,
+  summarizeNearbyCategories,
+} from '../nearbyCategories';
 import {
   hasPromotedBroadenedPrimaryCandidates,
   promoteAuthorizedBroadenedResults,
-} from './broadenAdmission';
-import { finalizeRecommendations } from './resultAssembler';
-import { isGenericSearchKeyword, normalizeSearchKeywords } from './poiTaxonomy';
-import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
-import { runEvaluationAgent, type EvaluationAgentInput } from './subagents/evaluationAgent';
+} from '../broadenAdmission';
+import { finalizeRecommendations } from '../resultAssembler';
+import { isGenericSearchKeyword, normalizeSearchKeywords } from '../poiTaxonomy';
+import { applyKeywordExpansion, runKeywordExpansionAgent } from '../subagents/keywordExpansionAgent';
+import { runEvaluationAgent, type EvaluationAgentInput } from '../subagents/evaluationAgent';
 import {
   deriveContextInvalidationPlan,
-  deriveGoalSignature,
   markStaleCandidatesForContext,
   withUpdatedGoalVersion,
-} from './goalVersion';
-import type { ContextInvalidationPlan } from './goalVersion';
-import { createVerdictCache, type VerdictCache } from './evaluationCache';
-import { AgentError, AgentRunError, isAgentError } from './types';
+} from '../goalVersion';
+import { createVerdictCache, type VerdictCache } from '../evaluationCache';
+import { AgentError, AgentRunError, isAgentError } from '../types';
 import type {
   AgentAction,
+  AgentActionRecord,
   AgentContext,
   AgentErrorCode,
   AgentFinalResult,
@@ -64,7 +75,7 @@ import type {
   SearchKeywordTarget,
   SearchPlan,
   UserGoal,
-} from './types';
+} from '../types';
 
 interface AgentV3Context extends AgentContext {
   actions: NonNullable<AgentRuntimeState['actions']>;
@@ -76,14 +87,10 @@ interface AgentV3Context extends AgentContext {
   verdictCache: VerdictCache;
   /** 本轮是否已经用掉那次 replan 机会 */
   replanUsed?: boolean;
-}
-
-interface SearchStateResetPlan {
-  clearAttempts: boolean;
-  clearCandidates: boolean;
-  clearActionHistory: boolean;
-  clearObservations: boolean;
-  reason?: string;
+  /** 上一轮追问的指纹，用于阻止同一个问题连问两次。 */
+  lastQuestionFingerprint?: string;
+  /** 连续追问轮数，任何一次产出结果的轮次都会清零。 */
+  consecutiveAskTurns?: number;
 }
 
 const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 4);
@@ -148,23 +155,16 @@ async function runAgentTurn(
     conversationMode === 'start_new_goal' ? undefined : input.runtimeState?.goal
   );
 
-  if (resolution.degraded) {
-    emit({ type: 'status', message: DEGRADED_GOAL_NOTICE });
-  }
-
   const invalidationPlan = deriveContextInvalidationPlan(
     input.runtimeState?.goal,
     baseGoal,
     input.previousLocation,
     input.location
   );
-  const resetPlan = deriveSearchStateResetPlan(invalidationPlan, conversationMode);
+  const resetPlan = decideContextReset(conversationMode, invalidationPlan);
   const context = createInitialContext(input, baseGoal, resetPlan);
   context.modelCallMetrics = turnMetrics.modelCallMetrics ?? [];
   contextRef.current = context;
-  if (resolution.degraded) {
-    appendTrace(context, 'error', { error: resolution.degraded });
-  }
   appendTrace(context, 'user_message', {
     input: {
       message: input.query,
@@ -185,13 +185,16 @@ async function runAgentTurn(
     },
   });
   const clarifyingQuestion = resolution.clarifyingQuestion
-    ?? supervisorOutput?.question
     ?? getInitialClarifyingQuestion(context.goal);
 
   if (clarifyingQuestion) {
-    const action: AgentAction = { type: 'ask_user', question: clarifyingQuestion };
-    appendAction(context, action, emit);
-    return buildPausedResult(context, clarifyingQuestion);
+    const groundedQuestion = await groundQuestionInNearbyCategories(
+      context,
+      clarifyingQuestion,
+      searchPlaces,
+      emit
+    );
+    return askOrConverge(context, groundedQuestion, emit);
   }
 
   const promotion = promoteAuthorizedBroadenedResults(context);
@@ -209,10 +212,13 @@ async function runAgentTurn(
   while (context.actions.length < context.maxActions) {
     const decision = await nextExecutableDecision(context, emit);
 
+    if (decision.kind === 'abort') {
+      throw context.evaluationError
+        ?? new AgentError('Candidate evaluation failed', decision.reason, true);
+    }
+
     if (decision.kind === 'ask') {
-      const action: AgentAction = { type: 'ask_user', question: decision.question };
-      appendAction(context, action, emit);
-      return buildPausedResult(context, decision.question);
+      return askOrConverge(context, decision.question, emit);
     }
 
     if (decision.kind === 'finish') {
@@ -234,6 +240,52 @@ async function runAgentTurn(
     },
   });
   return finish(context, forcedFinish, emit);
+}
+
+/**
+ * 用附近实际的品类分布替换追问选项。
+ *
+ * 追问发生在搜索之前，模型对"这一带有什么"一无所知，只能复述自己 prompt
+ * 里的例子（线上实测三次都是「火锅/日料/川菜/西餐」）。这里先花一次搜索
+ * 探路，把选项换成真实存在的品类——顺序反过来：先观察，再提问。
+ *
+ * 探路失败不影响追问：拿不到数据就用模型原来的问题，绝不让追问因此报错。
+ */
+async function groundQuestionInNearbyCategories(
+  context: AgentV3Context,
+  question: PendingQuestion,
+  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
+  emit: EmitAgentEvent
+): Promise<PendingQuestion> {
+  const scouting = decideScouting(context);
+  if (scouting.kind === 'skip') {
+    return question;
+  }
+
+  emit({ type: 'status', message: '正在看看附近都有什么...' });
+
+  try {
+    const restaurants = await searchPlaces(scouting.plan);
+    const categories = summarizeNearbyCategories(restaurants);
+    const grounded = buildNearbyCategoryQuestion(categories, buildFallbackPrimaryEffect());
+
+    appendTrace(context, 'runtime_decision', {
+      output: {
+        kind: 'scout_nearby_categories',
+        found: restaurants.length,
+        categories,
+        grounded: Boolean(grounded),
+      },
+    });
+
+    return grounded ?? question;
+  } catch (error) {
+    createTurnLogger(context.sessionId, context.turnId).warn(
+      'Nearby category scouting failed; keeping the model question',
+      { error: error instanceof Error ? error.message : String(error) }
+    );
+    return question;
+  }
 }
 
 /**
@@ -263,9 +315,14 @@ async function expandKeywordsAlongsideFirstSearch(
     preferenceSummary: context.preferenceSummary,
   });
 
-  const firstBatch = concurrentFirstSearchEnabled()
-    ? keepValidPlans(planSearchBatch(context), context, emit)
-    : [];
+  // 开放推荐要等联想词：它的首批计划本来就应该是模型给的多样化探索词
+  // （火锅/日料/烧烤），并发跑会让首批退化成一个通用词「餐厅」，
+  // 转盘的品类分布就只剩高德排序的运气。
+  const firstBatchPartition = concurrentFirstSearchEnabled() && !isOpenExplorationContext(context)
+    ? partitionPlansByValidity(context, planSearchBatch(context))
+    : { plans: [], rejectedPlans: [] };
+  reportRejectedPlans(context, firstBatchPartition.rejectedPlans, emit);
+  const firstBatch = firstBatchPartition.plans;
   if (firstBatch.length > 0) {
     appendTrace(context, 'runtime_decision', {
       output: {
@@ -318,17 +375,22 @@ async function runSearchStep(
   }
 }
 
-/** 策略决策在 Runtime 侧的可执行形态：replan 已经被消解掉。 */
-type ExecutableDecision = Exclude<PolicyDecision, { kind: 'replan' }>;
+/** 策略决策在 Runtime 侧的可执行形态：replan 与 invalid_plans 已被消解掉。 */
+type ExecutableDecision = Exclude<PolicyDecision, { kind: 'replan' | 'invalid_plans' }>;
 
+/**
+ * 需要 Runtime 做点事情之后再问一次策略的分支数量上限。
+ *
+ * 只有两个分支会要求重问：replan（补上新关键词）与 invalid_plans（把被拒的
+ * 计划记为已尝试）。两者一轮各最多一次，所以 3 次决策足够收敛。
+ */
 const MAX_DECISION_ROUNDS = 3;
 
 /**
  * 取下一个可执行决策。
  *
- * 策略给出的 search 计划要先过 guard；全部非法时把它们记为已尝试再重新决策，
- * 否则同一批词会被反复选中。replan 在这里被消解成"补充关键词后重新决策"
- * 或"用模型给的问题追问"，Runtime 主循环不需要知道它存在。
+ * "下一步做什么"完全来自 `decideNextAction`——这里不再自行判断计划合不合法、
+ * 该不该重试。剩下的循环只服务于两个"先做点事再重问"的分支。
  */
 async function nextExecutableDecision(
   context: AgentV3Context,
@@ -349,13 +411,16 @@ async function nextExecutableDecision(
     });
 
     if (decision.kind === 'search') {
-      const validPlans = keepValidPlans(decision.plans, context, emit);
-      if (validPlans.length > 0) {
-        return { kind: 'search', plans: validPlans };
-      }
+      reportRejectedPlans(context, decision.rejectedPlans, emit);
+      return decision;
+    }
 
-      // 计划全被拒：记为已尝试，避免下一轮又挑中同一批词。
-      decision.plans.forEach((plan) => recordFailedAttempt(context, plan, '计划未通过校验，未执行搜索。'));
+    if (decision.kind === 'invalid_plans') {
+      reportRejectedPlans(context, decision.rejectedPlans, emit);
+      // 记为已尝试，避免下一次决策又挑中同一批词。
+      decision.rejectedPlans.forEach(({ plan }) =>
+        recordFailedAttempt(context, plan, '计划未通过校验，未执行搜索。')
+      );
       continue;
     }
 
@@ -383,25 +448,17 @@ async function nextExecutableDecision(
 }
 
 /**
- * 过滤掉不合法的搜索计划。
+ * 上报被 guard 拒绝的计划。
  *
  * 计划由 policy 生成，因此违规意味着策略有 bug——除了重复计划（可能来自并发
  * 批次的竞态）之外都按 error 级别记录，让 eval 与日志抓得到。
  */
-function keepValidPlans(
-  plans: SearchPlan[],
+function reportRejectedPlans(
   context: AgentV3Context,
+  rejectedPlans: RejectedPlan[],
   emit: EmitAgentEvent
-): SearchPlan[] {
-  const valid: SearchPlan[] = [];
-
-  for (const plan of plans) {
-    const violations = validateSearchPlan(plan, context);
-    if (violations.length === 0) {
-      valid.push(plan);
-      continue;
-    }
-
+): void {
+  for (const { plan, violations } of rejectedPlans) {
     const trace = appendTrace(context, 'guard_decision', {
       guardDecision: { type: 'reject', violations },
       output: { plan },
@@ -422,8 +479,6 @@ function keepValidPlans(
       });
     }
   }
-
-  return valid;
 }
 
 /**
@@ -443,12 +498,7 @@ async function applyReplan(
     message: context.query,
     goal: context.goal,
     messages: context.messages ?? [],
-    attempts: context.attempts,
-    observations: context.observations,
-    exhausted: {
-      triedKeywords: Array.from(new Set(context.attempts.flatMap((attempt) => attempt.keywords))),
-      triedIntents: Array.from(new Set(context.attempts.map((attempt) => attempt.searchIntent))),
-    },
+    exhausted: summarizeExhaustedSearch(context.attempts, context.observations),
     preferenceSummary: context.preferenceSummary,
   });
 
@@ -512,59 +562,114 @@ function buildFinishAction(
 interface TurnGoalResolution {
   goal: UserGoal;
   conversationMode: ConversationMode;
-  supervisorOutput: Awaited<ReturnType<typeof runSupervisorPlanner>> | null;
-  degraded?: { code: AgentErrorCode; message: string; retryable: boolean };
+  supervisorOutput: Awaited<ReturnType<typeof runGoalUnderstandingAgent>> | null;
   clarifyingQuestion?: PendingQuestion;
 }
 
 /**
  * 解析本轮目标。
  *
- * Supervisor 不可用时降级为"按原文关键词搜索"，抽不出关键词则转为追问，
- * 而不是让整轮请求失败——这是入口唯一没有降级路径的历史缺口。
+ * 两条互斥的入口：
+ * 1. 用户点了追问选项（optionId）——按 id 查 effect，确定性应用，不调模型；
+ * 2. 用户输入了自由文本——交给 Supervisor 理解，代码不猜语义。
+ *
+ * 模型不可用时**直接抛错**，不再降级成"按原文词表抽菜名继续搜"。用硬编码
+ * 语义冒充模型判断，既给不出可信结果，又制造了追问死循环。
  */
 async function resolveTurnGoal(
   input: AgentInput,
   metricsSink: MetricsSink
 ): Promise<TurnGoalResolution> {
-  try {
-    const supervisorOutput = await getSupervisorPlannerOutput(input, metricsSink);
-    return {
-      goal: resolveSupervisorGoal(input, supervisorOutput),
-      conversationMode: inferRuntimeConversationMode(input, supervisorOutput),
-      supervisorOutput,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    createTurnLogger(input.sessionId).warn(
-      'SupervisorPlannerAgent unavailable, falling back to raw query search',
-      { error: message }
+  const entry = decideTurnEntry(input);
+
+  if (entry.kind === 'invalid_option') {
+    throw new AgentError(
+      entry.reason === 'no_label'
+        ? `Clarification option has no label: ${entry.optionId}`
+        : `Clarification option is no longer available: ${entry.optionId}`,
+      'INVALID_OPTION',
+      false
     );
+  }
 
-    const degraded = {
-      code: 'SUPERVISOR_UNAVAILABLE' as const,
-      message,
-      retryable: true,
-    };
-    const degradedGoal = buildDegradedGoalFromQuery(input.query);
-
-    if (degradedGoal) {
-      return {
-        goal: degradedGoal,
-        conversationMode: 'start_new_goal',
-        supervisorOutput: null,
-        degraded,
-      };
-    }
-
+  if (entry.kind === 'rerun_current_goal') {
     return {
-      goal: buildEmptyDegradedGoal(input.query),
-      conversationMode: 'start_new_goal',
+      goal: entry.goal,
+      conversationMode: 'continue_current_goal',
       supervisorOutput: null,
-      degraded,
-      clarifyingQuestion: { ...DEGRADED_CLARIFYING_QUESTION },
     };
   }
+
+  if (entry.kind === 'ask') {
+    return {
+      goal: entry.goal,
+      conversationMode: 'continue_current_goal',
+      supervisorOutput: null,
+      clarifyingQuestion: entry.question,
+    };
+  }
+
+  if (entry.kind === 'apply_effect') {
+    return {
+      goal: entry.goal,
+      conversationMode: entry.conversationMode,
+      supervisorOutput: null,
+    };
+  }
+
+  // entry.kind === 'understand'：交给子 Agent。带 effect 的选项走不到这里；
+  // 模型自己写的选项没有 effect，它的 label 就是一句预填的用户回答。
+  const effectiveInput = entry.message === input.query
+    ? input
+    : { ...input, query: entry.message, optionId: undefined };
+
+  const supervisorOutput = await getGoalUnderstandingOutput(effectiveInput, metricsSink);
+
+  // 模型只提问、不给目标是合法输出（"这句话还不够，我得先问清楚"）。
+  // 此时用一个空目标承载本轮上下文——不做任何关键词猜测。
+  if (!supervisorOutput.goal && !supervisorOutput.patch && supervisorOutput.question) {
+    return {
+      goal: input.runtimeState?.goal ?? buildPlaceholderGoal(input.query),
+      conversationMode: input.runtimeState?.goal ? 'continue_current_goal' : 'start_new_goal',
+      supervisorOutput,
+      clarifyingQuestion: supervisorOutput.question,
+    };
+  }
+
+  return {
+    goal: resolveSupervisorGoal(input, supervisorOutput),
+    conversationMode: resolveConversationMode(input, supervisorOutput),
+    supervisorOutput,
+    clarifyingQuestion: supervisorOutput.question,
+  };
+}
+
+/**
+ * 仅用于"模型要求先追问"时承载上下文的空目标。
+ *
+ * 刻意不从 query 里抽任何词：抽词就是用硬编码语义冒充理解，
+ * 那正是被删掉的降级路径干的事。
+ */
+function buildPlaceholderGoal(query: string): UserGoal {
+  return withUpdatedGoalVersion({
+    intent: 'find_restaurants',
+    rawQuery: query.trim(),
+    requestedItems: [],
+    acceptableCategories: [],
+    alternativeGroups: [],
+    primaryKeywords: [],
+    relatedKeywords: [],
+    broadenedKeywords: [],
+    relatedTargets: [],
+    broadenedTargets: [],
+    hardConstraints: [],
+    softPreferences: [],
+    exclusions: [],
+    ambiguity: [],
+    clarificationNeeded: [],
+    authorizations: [],
+    allowBroaden: false,
+  });
 }
 
 /**
@@ -587,7 +692,7 @@ function isRetryableAgentError(error: unknown, code: AgentErrorCode): boolean {
 
 function resolveSupervisorGoal(
   input: AgentInput,
-  output: Awaited<ReturnType<typeof runSupervisorPlanner>>
+  output: Awaited<ReturnType<typeof runGoalUnderstandingAgent>>
 ): UserGoal {
   if (output.goal) {
     return output.goal;
@@ -601,97 +706,21 @@ function resolveSupervisorGoal(
     );
   }
 
-  throw new AgentError('SupervisorPlannerAgent returned no goal or patch', 'SUPERVISOR_UNAVAILABLE', true);
+  throw new AgentError('GoalUnderstandingAgent returned no goal or patch', 'SUPERVISOR_UNAVAILABLE', true);
 }
 
-async function getSupervisorPlannerOutput(
+async function getGoalUnderstandingOutput(
   input: AgentInput,
   metricsSink: MetricsSink
-): Promise<Awaited<ReturnType<typeof runSupervisorPlanner>>> {
-  return runSupervisorPlanner({
+): Promise<Awaited<ReturnType<typeof runGoalUnderstandingAgent>>> {
+  return runGoalUnderstandingAgent({
     metricsSink,
     message: input.query,
     previousGoal: input.runtimeState?.goal,
     pendingQuestion: input.runtimeState?.pendingQuestion,
     messages: input.messages,
     preferenceSummary: input.preferenceSummary,
-    attempts: input.runtimeState?.attempts,
   });
-}
-
-function inferRuntimeConversationMode(
-  input: AgentInput,
-  output: Awaited<ReturnType<typeof runSupervisorPlanner>>
-): ConversationMode {
-  if (!input.runtimeState?.goal) {
-    return 'start_new_goal';
-  }
-
-  if (output.patch) {
-    return 'patch_current_goal';
-  }
-
-  if (output.conversationMode) {
-    return output.conversationMode;
-  }
-
-  if (!output.goal) {
-    return 'continue_current_goal';
-  }
-
-  if (primaryTargetSignature(input.runtimeState.goal) !== primaryTargetSignature(output.goal)) {
-    return 'start_new_goal';
-  }
-
-  return deriveGoalSignature(input.runtimeState.goal) === deriveGoalSignature(output.goal)
-    ? 'continue_current_goal'
-    : 'patch_current_goal';
-}
-
-function deriveSearchStateResetPlan(
-  invalidationPlan: ContextInvalidationPlan,
-  conversationMode: ConversationMode
-): SearchStateResetPlan {
-  if (conversationMode === 'start_new_goal') {
-    return {
-      clearAttempts: true,
-      clearCandidates: true,
-      clearActionHistory: true,
-      clearObservations: true,
-      reason: 'start_new_goal',
-    };
-  }
-
-  if (invalidationPlan.primaryTargetChanged) {
-    return {
-      clearAttempts: true,
-      clearCandidates: true,
-      clearActionHistory: true,
-      clearObservations: true,
-      reason: 'primary_target_changed',
-    };
-  }
-
-  if (
-    invalidationPlan.hardConstraintsChanged
-    || invalidationPlan.exclusionsChanged
-    || invalidationPlan.locationChanged
-  ) {
-    return {
-      clearAttempts: true,
-      clearCandidates: false,
-      clearActionHistory: true,
-      clearObservations: true,
-      reason: invalidationPlan.reasons[0] ?? 'context_changed',
-    };
-  }
-
-  return {
-    clearAttempts: false,
-    clearCandidates: false,
-    clearActionHistory: false,
-    clearObservations: false,
-  };
 }
 
 function createInitialContext(input: AgentInput, goal: UserGoal, resetPlan: SearchStateResetPlan): AgentV3Context {
@@ -716,6 +745,8 @@ function createInitialContext(input: AgentInput, goal: UserGoal, resetPlan: Sear
     maxActions: (resetPlan.clearActionHistory ? 0 : (input.runtimeState?.actions?.length ?? 0)) + 8,
     maxSearchCalls: previousAttempts.length + DEFAULT_AGENT_MAX_SEARCH_CALLS,
     targetCount: 8,
+    lastQuestionFingerprint: input.runtimeState?.lastQuestionFingerprint,
+    consecutiveAskTurns: input.runtimeState?.consecutiveAskTurns ?? 0,
   };
 }
 
@@ -782,12 +813,29 @@ function replacementTargetsComeFromMessage(patch: GoalPatch, message: string): b
   return replacementTargets.every((target) => messageTargetSet.has(target));
 }
 
-function primaryTargetSignature(goal: UserGoal): string {
-  return Array.from(new Set([
-    ...goal.primaryKeywords,
-    ...goal.requestedItems.map((item) => item.name),
-    ...goal.acceptableCategories.map((category) => category.name),
-  ].map((item) => item.trim()).filter(Boolean))).sort().join('|');
+/**
+ * 取本轮的会话模式。
+ *
+ * "这句话与上文什么关系"是语义判断，归 GoalUnderstandingAgent——它的
+ * normalize 恒会填这个字段。这里只处理它够不到的两种情况：没有历史目标
+ * （必然是新会话），以及给了 patch（按定义就是在改当前目标）。
+ *
+ * 此前这里还有一份完整的签名比较推导，与子 Agent 那份逻辑重复且不等价，
+ * 且因为上面两个分支永远先命中而从未执行过。
+ */
+function resolveConversationMode(
+  input: AgentInput,
+  output: Awaited<ReturnType<typeof runGoalUnderstandingAgent>>
+): ConversationMode {
+  if (!input.runtimeState?.goal) {
+    return 'start_new_goal';
+  }
+
+  if (output.patch) {
+    return 'patch_current_goal';
+  }
+
+  return output.conversationMode ?? 'continue_current_goal';
 }
 
 function getInitialClarifyingQuestion(goal: UserGoal): PendingQuestion | null {
@@ -1062,9 +1110,17 @@ async function evaluatePlanCandidates(
         outputs.push(output);
       } catch (evaluationError) {
         error = evaluationFailureFromError(evaluationError);
-        context.evaluationDegraded = true;
-        // 失败裁决不入缓存：别的计划应当重试，而不是继承一次抖动的结果。
-        outputs.push(buildUnverifiedEvaluationFallback(toEvaluate, context.targetCount, error));
+        context.evaluationFailed = true;
+        context.evaluationError = isAgentError(evaluationError)
+          ? evaluationError
+          : new AgentError(
+              evaluationError instanceof Error ? evaluationError.message : String(evaluationError),
+              'EVALUATION_FAILED',
+              true,
+              { cause: evaluationError }
+            );
+        // 验证失败不再合成 unverified 候选：那是拿"没验证过"冒充验证结果。
+        // 失败裁决同样不入缓存，别的计划不该继承一次抖动的结论。
       } finally {
         claim.done();
       }
@@ -1326,34 +1382,6 @@ function evaluationFailureFromError(error: unknown): NonNullable<EvaluationAgent
   };
 }
 
-function buildUnverifiedEvaluationFallback(
-  restaurants: Restaurant[],
-  targetCount: number,
-  error: NonNullable<EvaluationAgentOutput['error']>
-): EvaluationAgentOutput {
-  const warning = 'EvaluationAgent 验证失败，候选仅作为未验证候补，不进入主推荐。';
-
-  return {
-    verdicts: restaurants.map((restaurant) => ({
-      restaurantId: restaurant.id,
-      status: 'unverified',
-      primaryEligible: false,
-      confidence: 0,
-      matchedItems: [],
-      matchedCategories: [],
-      conflicts: [],
-      evidence: [],
-      warnings: [warning],
-    })),
-    selectedIds: [],
-    candidateIds: restaurants.slice(0, targetCount).map((restaurant) => restaurant.id),
-    explanation: warning,
-    unmetConstraints: [`${warning} ${error.message}`],
-    source: 'error',
-    error,
-  };
-}
-
 async function runBatchedEvaluationAgent(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
   const batchSize = Math.max(1, DEFAULT_AGENT_EVALUATION_BATCH_SIZE);
   if (input.restaurants.length <= batchSize) {
@@ -1507,10 +1535,46 @@ function recordTurnMetrics(context: AgentV3Context, outcome: 'final' | 'paused')
   });
 }
 
+/**
+ * 执行 policy 的追问/收敛决策。
+ *
+ * 收敛时给结果而不是报错：报错会让会话卡在待答状态，用户依然出不去。
+ */
+function askOrConverge(
+  context: AgentV3Context,
+  question: PendingQuestion,
+  emit: EmitAgentEvent
+): AgentFinalResult {
+  const decision = decideAskOrConverge(context, question);
+
+  if (decision.kind === 'converge') {
+    appendTrace(context, 'runtime_decision', {
+      output: {
+        kind: 'clarification_stalled',
+        repeated: decision.repeated,
+        consecutiveAskTurns: decision.consecutiveAskTurns,
+        question: question.question,
+      },
+    });
+    context.lastQuestionFingerprint = undefined;
+    context.consecutiveAskTurns = 0;
+
+    const action = buildFinishAction(context, decision.reason, 0.5);
+    appendAction(context, action, emit);
+    return finish(context, action, emit, { allowClarification: false });
+  }
+
+  context.lastQuestionFingerprint = decision.nextState.lastQuestionFingerprint;
+  context.consecutiveAskTurns = decision.nextState.consecutiveAskTurns;
+  appendAction(context, { type: 'ask_user', question: decision.question }, emit);
+  return buildPausedResult(context, decision.question);
+}
+
 function finish(
   context: AgentV3Context,
   action: Extract<AgentAction, { type: 'finish' }>,
-  emit: EmitAgentEvent
+  emit: EmitAgentEvent,
+  options: { allowClarification?: boolean } = {}
 ): AgentFinalResult {
   emit({
     type: 'filtering',
@@ -1525,27 +1589,45 @@ function finish(
     confidence: action.confidence,
   });
 
-  if (finalResult.restaurants.length === 0) {
-    const question = buildNoPrimaryQuestion(context);
-    appendAction(context, { type: 'ask_user', question }, emit);
-    return buildPausedResult(context, question);
+  if (finalResult.restaurants.length === 0 && options.allowClarification !== false) {
+    return askOrConverge(context, buildNoPrimaryQuestion(context), emit);
   }
 
+  // 产出结果的轮次把追问计数清零：下一次遇到同样的问题应当被视为新的一次追问。
+  context.lastQuestionFingerprint = undefined;
+  context.consecutiveAskTurns = 0;
+
+  const warnings = buildFinalWarnings(context);
   const finalTrace = appendTrace(context, 'final', {
     output: {
       restaurantIds: finalResult.restaurants.map((restaurant) => restaurant.id),
       candidateIds: finalResult.candidates.map((restaurant) => restaurant.id),
       explanation: finalResult.explanation,
       unmetConstraints: finalResult.unmetConstraints,
+      warnings,
     },
   });
-  emit({ type: 'final', traceId: finalTrace.id, sessionId: context.sessionId, ...finalResult });
+  emit({
+    type: 'final',
+    traceId: finalTrace.id,
+    sessionId: context.sessionId,
+    ...finalResult,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  });
   recordTurnMetrics(context, 'final');
 
   return {
     ...finalResult,
+    ...(warnings.length > 0 ? { warnings } : {}),
     runtimeState: snapshotRuntimeState(context),
   };
+}
+
+/** 结果可用但有瑕疵时的提示。 */
+function buildFinalWarnings(context: AgentV3Context): string[] {
+  return context.evaluationFailed
+    ? ['部分候选餐厅没能完成验证，已只保留通过验证的结果。']
+    : [];
 }
 
 function buildPausedResult(context: AgentV3Context, question: PendingQuestion): AgentFinalResult {
@@ -1597,5 +1679,43 @@ function snapshotRuntimeState(context: AgentV3Context): AgentRuntimeState {
     actions: [...context.actions],
     observations: [...context.observations],
     trace: [...context.trace],
+    lastQuestionFingerprint: context.lastQuestionFingerprint,
+    consecutiveAskTurns: context.consecutiveAskTurns ?? 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 动作记录
+//
+// 原先住在 supervisorPlanner.ts——但"把一个动作记成一条 record"本就是执行层的事，
+// 与目标理解无关。随该文件拆分一并迁入。
+// ---------------------------------------------------------------------------
+
+export function summarizeAction(action: AgentAction): string {
+  if (action.type === 'search') {
+    return `搜索「${action.plan.keywords.join('、')}」：${action.plan.reason}`;
+  }
+
+  if (action.type === 'ask_user') {
+    return action.question.reason ?? action.question.question;
+  }
+
+  return action.explanation;
+}
+
+export function createActionRecord(action: AgentAction): AgentActionRecord {
+  return {
+    id: createActionId(),
+    action,
+    createdAt: Date.now(),
+    summary: summarizeAction(action),
+  };
+}
+
+function createActionId(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `action_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

@@ -1,11 +1,11 @@
 /**
- * 常规轮次的动作决策已经从 SupervisorPlanner 移到 policy.decideNextAction，
+ * 常规轮次的动作决策由 orchestrator/policy.decideNextAction 负责，
  * 这里只覆盖模型侧仅存的入口：策略枯竭后的 replan。
  *
  * 开放探索的兜底顺序等确定性行为的用例见 __tests__/lib/agent/policy.test.ts。
  */
 
-import type { SearchReplanInput } from '@/lib/agent/supervisorPlanner';
+import type { SearchReplanInput } from '@/lib/agent/subagents/replanAgent';
 import type { UserGoal } from '@/lib/agent/types';
 
 function goal(overrides: Partial<UserGoal> = {}): UserGoal {
@@ -42,7 +42,7 @@ function replanInput(overrides: Partial<SearchReplanInput> = {}): SearchReplanIn
 
 async function withModel(
   respond: (body: unknown) => unknown,
-  run: (module: typeof import('@/lib/agent/supervisorPlanner')) => Promise<void>
+  run: (module: typeof import('@/lib/agent/subagents/replanAgent')) => Promise<void>
 ): Promise<void> {
   const originalDeterministic = process.env.AGENT_DETERMINISTIC;
   const originalApiKey = process.env.OPENAI_API_KEY;
@@ -57,7 +57,7 @@ async function withModel(
   jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
   try {
-    await run(await import('@/lib/agent/supervisorPlanner'));
+    await run(await import('@/lib/agent/subagents/replanAgent'));
   } finally {
     if (originalDeterministic === undefined) {
       delete process.env.AGENT_DETERMINISTIC;
@@ -93,7 +93,7 @@ function toolCallResponse(args: unknown) {
 
 describe('SearchReplanAgent', () => {
   it('never calls the model in deterministic mode', async () => {
-    const { runSearchReplan } = await import('@/lib/agent/supervisorPlanner');
+    const { runSearchReplan } = await import('@/lib/agent/subagents/replanAgent');
     process.env.AGENT_DETERMINISTIC = '1';
 
     await expect(runSearchReplan(replanInput())).resolves.toBeNull();
@@ -166,7 +166,7 @@ describe('SearchReplanAgent', () => {
     }));
 
     try {
-      const { runSearchReplan } = await import('@/lib/agent/supervisorPlanner');
+      const { runSearchReplan } = await import('@/lib/agent/subagents/replanAgent');
       await expect(runSearchReplan(replanInput())).resolves.toBeNull();
     } finally {
       if (originalDeterministic === undefined) {

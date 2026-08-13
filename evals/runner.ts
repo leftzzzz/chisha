@@ -7,7 +7,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
+import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
 import type { TurnMetrics } from '@/lib/agent/metrics';
 import type {
   AgentEvent,
@@ -74,12 +74,14 @@ async function runCase(
       message: turn.message,
       goal: turn.stubGoal,
       expansion: turn.stubExpansion,
+      evaluationError: turn.stubEvaluationError,
     });
 
     messages.push({ role: 'user', content: turn.message, createdAt: Date.now() });
 
     const input: AgentInput = {
       query: turn.message,
+      optionId: turn.optionId,
       location,
       sessionId: `eval_${evalCase.id}`,
       messages: [...messages],
@@ -88,10 +90,18 @@ async function runCase(
 
     const startedAt = Date.now();
     const events: AgentEvent[] = [];
-    const result = await runSearchAgentV3(input, (event) => events.push(event), searchPlaces);
+    // 失败也是一种被评测的行为：模型不可用时应当报错而不是降级瞎搜，
+    // 所以这里捕获而不是让整个 suite 崩掉。
+    const outcome = await runSearchAgentV3(input, (event) => events.push(event), searchPlaces)
+      .then((value) => ({ result: value, error: undefined }))
+      .catch((caught: unknown) => ({ result: emptyTurnResult(), error: caught }));
     const wallMs = Date.now() - startedAt;
+    const result = outcome.result;
 
-    runtimeState = result.runtimeState;
+    // 失败轮不写回 runtimeState：会话状态必须保持失败前的样子。
+    if (!outcome.error) {
+      runtimeState = result.runtimeState;
+    }
     messages.push({
       role: 'assistant',
       content: result.question?.question ?? result.explanation,
@@ -99,7 +109,7 @@ async function runCase(
     });
 
     const metrics = snapshotMetrics(result, wallMs);
-    const failures = checkExpectations(turn.expect, result, metrics);
+    const failures = checkExpectations(turn.expect, result, metrics, outcome.error);
 
     turns.push({
       message: turn.message,
@@ -120,6 +130,15 @@ async function runCase(
 }
 
 type AgentTurnResult = Awaited<ReturnType<typeof runSearchAgentV3>>;
+
+function emptyTurnResult(): AgentTurnResult {
+  return {
+    restaurants: [],
+    candidates: [],
+    explanation: '',
+    unmetConstraints: [],
+  };
+}
 
 function snapshotMetrics(result: AgentTurnResult, wallMs: number): TurnMetricsSnapshot {
   const counters = readCounters();
@@ -163,13 +182,34 @@ function latestTurnMetrics(result: AgentTurnResult): TurnMetrics | undefined {
 function checkExpectations(
   expectation: EvalExpectation | undefined,
   result: AgentTurnResult,
-  metrics: TurnMetricsSnapshot
+  metrics: TurnMetricsSnapshot,
+  error?: unknown
 ): string[] {
   if (!expectation) {
-    return [];
+    return error ? [`本轮意外失败：${errorCodeOf(error)}`] : [];
   }
 
   const failures: string[] = [];
+
+  if (expectation.failsWithCode) {
+    const code = errorCodeOf(error);
+    if (code !== expectation.failsWithCode) {
+      failures.push(`应当以 ${expectation.failsWithCode} 失败，实际为 ${code ?? '成功返回'}`);
+    }
+  } else if (error) {
+    failures.push(`本轮意外失败：${errorCodeOf(error)}`);
+  }
+
+  if (expectation.maxSearchCalls !== undefined && metrics.searchCalls > expectation.maxSearchCalls) {
+    failures.push(`高德搜索 ${metrics.searchCalls} 次，超过上限 ${expectation.maxSearchCalls}`);
+  }
+
+  if (
+    expectation.maxEvaluationCalls !== undefined
+    && metrics.evaluationCalls > expectation.maxEvaluationCalls
+  ) {
+    failures.push(`候选验证 ${metrics.evaluationCalls} 次，超过上限 ${expectation.maxEvaluationCalls}`);
+  }
   const cuisines = result.restaurants.map((restaurant) => restaurant.cuisineType);
 
   if (expectation.shouldAsk !== undefined && metrics.askedUser !== expectation.shouldAsk) {
@@ -214,6 +254,14 @@ function checkExpectations(
   }
 
   return failures;
+}
+
+function errorCodeOf(error: unknown): string | undefined {
+  if (!error) {
+    return undefined;
+  }
+
+  return (error as { code?: string }).code ?? 'UNKNOWN';
 }
 
 function aggregate(cases: EvalCaseResult[]): EvalSuiteResult['totals'] {
