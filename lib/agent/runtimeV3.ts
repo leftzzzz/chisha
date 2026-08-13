@@ -204,7 +204,7 @@ async function runAgentTurn(
     return finish(context, action, emit);
   }
 
-  await expandKeywordsAlongsideFirstSearch(context, turnMetrics, searchPlaces, emit);
+  await expandKeywordsAlongsideFirstSearch(context, searchPlaces, emit);
 
   while (context.actions.length < context.maxActions) {
     const decision = await nextExecutableDecision(context, emit);
@@ -249,14 +249,15 @@ async function runAgentTurn(
  */
 async function expandKeywordsAlongsideFirstSearch(
   context: AgentV3Context,
-  turnMetrics: MetricsSink,
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
   emit: EmitAgentEvent
 ): Promise<void> {
   emit({ type: 'status', message: '正在联想相关搜索词...' });
 
+  // 指标直接记到 context：它此刻已经存在，再走 turnMetrics 转一手会和
+  // 并发首批里评估 agent 的记录互相覆盖。
   const expansion = runKeywordExpansionAgent({
-    metricsSink: turnMetrics,
+    metricsSink: context,
     goal: context.goal,
     attempts: context.attempts,
     preferenceSummary: context.preferenceSummary,
@@ -282,8 +283,6 @@ async function expandKeywordsAlongsideFirstSearch(
 
   const [expanded] = await Promise.all([expansion, searching]);
   context.goal = applyKeywordExpansion(context.goal, expanded);
-  // metrics 容器与 context 是两个对象，联想词的调用指标要并回来。
-  context.modelCallMetrics = turnMetrics.modelCallMetrics ?? context.modelCallMetrics;
 }
 
 function concurrentFirstSearchEnabled(): boolean {
