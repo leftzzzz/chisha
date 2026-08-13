@@ -6,6 +6,7 @@ import {
   nextSearchRadius,
   nextUntriedTarget,
   planSearchBatch,
+  primaryTargetLabel,
   resolvePlanPoiType,
   untriedTargets,
   type PolicyContext,
@@ -439,5 +440,40 @@ describe('policy 决策', () => {
       expect(decision.plans.map((plan) => plan.keywords[0])).toEqual(['餐厅']);
       expect(decision.plans[0].allowedForPrimary).toBe(true);
     }
+  });
+});
+
+describe('policy 目标文案', () => {
+  // requestedItems / primaryKeywords / acceptableCategories 本来就会指向同一个
+  // 东西，直接拼接会得到「柠檬茶、柠檬茶」。
+  it('collapses the same term repeated across goal fields', () => {
+    expect(primaryTargetLabel(goal({
+      rawQuery: '我想喝柠檬茶',
+      requestedItems: [{ name: '柠檬茶', required: true, aliases: [] }],
+      primaryKeywords: ['柠檬茶'],
+    }))).toBe('柠檬茶');
+  });
+
+  // 去重键走 canonicalizePoiTerm：词表认为同一的才合并。
+  it('collapses taxonomy synonyms but keeps the wording the user used', () => {
+    expect(primaryTargetLabel(goal({
+      requestedItems: [{ name: '柠檬茶', required: true, aliases: [] }],
+      primaryKeywords: ['果茶'],
+      acceptableCategories: [{ name: '奶茶', confidence: 0.9 }],
+    }))).toBe('柠檬茶');
+  });
+
+  // 刻意不做「柠檬茶≈柠檬水」这种近义合并——那是语义推断，不属于规则库。
+  it('keeps terms the taxonomy treats as distinct', () => {
+    expect(primaryTargetLabel(goal({
+      requestedItems: [{ name: '柠檬茶', required: true, aliases: [] }],
+      primaryKeywords: ['柠檬水'],
+    }))).toBe('柠檬茶、柠檬水');
+  });
+
+  it('caps the label at three terms', () => {
+    expect(primaryTargetLabel(goal({
+      primaryKeywords: ['火锅', '日料', '西餐', '烧烤'],
+    }))).toBe('火锅、日料、西餐');
   });
 });

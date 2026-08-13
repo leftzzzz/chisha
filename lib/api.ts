@@ -735,7 +735,13 @@ async function requestAgentStream(
       result = { ...result, sessionId: currentSessionId };
     }
 
-    if (result.restaurants.length === 0 && !pausedQuestion) {
+    // 只有主推荐和候补都空才算"没找到"。此前只看 restaurants，主推荐 0、
+    // 候补 20 的情况会把 20 家整包丢掉并报错——用户看到"没找到"，其实有结果。
+    if (
+      result.restaurants.length === 0
+      && result.candidates.length === 0
+      && !pausedQuestion
+    ) {
       throw new APIError(
         '未找到符合条件的餐厅，试试调整搜索条件?',
         'NO_RESULTS'

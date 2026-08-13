@@ -94,7 +94,13 @@ Core state files:
 - `searchAttempts.ts` - 搜索历史的只读查询
 - `guards.ts` - `validateSearchPlan` 只校验不改写（计划由 policy 生成，
   违规即 bug）+ 确定性硬约束过滤
-- `finalGuard.ts` - 主推荐准入与候选排序
+- `finalGuard.ts` - 主推荐准入与候选排序。严格准入要求 `passed`；凑不满
+  `targetCount` 时用 `isCategoryCompatiblePrimaryAllowed` 把**品类兼容但菜单
+  未验证**的 `unverified` 候选补位（POI 事实字段里没有菜单，菜品级目标除非
+  店名写着否则永远验证不出来，严格线在这类目标上构造性不可达）。补位只放宽
+  "菜品有没有验证到"，排除项/停业/距离/搜索授权一条都不放。
+  **`policy.hasPrimaryCandidates` 必须与这里同口径**（`isPrimaryRecommendationEligible`），
+  否则策略层判定无结果去追问、装配层其实能给出结果
 - `evaluationCache.ts` - 一轮内的候选裁决缓存，避免重叠 POI 反复送评估。
   只复用 passed 且镜头不更宽的裁决
 - `finishReason.ts` - 结束原因枚举与用户文案映射（不要用字符串匹配生成文案）
@@ -112,6 +118,8 @@ Core state files:
    验证失败同理：不合成 unverified 候选。
    注意区分：同义词归一（火锅→涮锅）这类**无语义推断的确定性规则**可以留，
    删的是"无依据地替模型选方向"的隐式替身。
+   也要区分"**合成**裁决"与"**怎么用**模型给出的裁决"：`finalGuard` 的品类
+   兼容补位用的是模型自己判的 `unverified`，不凭空造裁决，因此不违反本条。
 2. **用户意图只由 GoalUnderstandingAgent 判断**。「你推荐」「随便」这类说法
    一个字都不该进代码常量；prompt 里写规则，代码里不做关键词匹配。
 3. **追问选项按 id 走协议**。`optionEffects` 的 key 只能是 option.id，前端回传

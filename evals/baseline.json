@@ -1,16 +1,16 @@
 {
   "updatedAt": "2026-08-13",
   "totals": {
-    "searchRounds": 23,
-    "searchSteps": 20,
-    "searchCalls": 28,
+    "searchRounds": 25,
+    "searchSteps": 22,
+    "searchCalls": 30,
     "plannerModelCalls": 0,
-    "evaluationCalls": 23,
-    "evaluatedSlots": 66,
-    "duplicateEvaluations": 6,
+    "evaluationCalls": 25,
+    "evaluatedSlots": 76,
+    "duplicateEvaluations": 11,
     "modelCalls": 0,
     "serialModelSteps": 0,
-    "askRate": 0.294
+    "askRate": 0.278
   },
   "cases": {
     "strict-distance-hotpot": {
@@ -82,6 +82,13 @@
       "searchRounds": 2,
       "duplicateEvaluations": 1,
       "primaryCount": 7
+    },
+    "exact-dish-unverifiable": {
+      "passed": true,
+      "searchSteps": 2,
+      "searchRounds": 2,
+      "duplicateEvaluations": 5,
+      "primaryCount": 5
     },
     "clarify-then-answer": {
       "passed": true,

@@ -12,7 +12,7 @@
 import { countDistinctBrands } from '@/lib/restaurantIdentity';
 import { getAmapFoodPoiType } from '../amapPoiTypeCatalog';
 import { isOpenExplorationAuthorized, isSearchIntentAuthorizedForPrimary } from '../authorization';
-import { isPrimaryRecommendationAllowed } from '../finalGuard';
+import { isPrimaryRecommendationEligible } from '../finalGuard';
 import type { FinishReason } from '../finishReason';
 import {
   applyClarificationOptionToGoal,
@@ -29,6 +29,7 @@ import {
   searchPlanKey,
 } from '../searchAttempts';
 import {
+  canonicalizePoiTerm,
   DEFAULT_POI_TYPE,
   lookupFoodPoiTypes,
   normalizeSearchKeywords,
@@ -527,15 +528,44 @@ export function hasPositiveFoodTarget(goal: UserGoal): boolean {
   return goalPrimaryTargets(goal).length > 0;
 }
 
+/**
+ * 追问文案里的目标描述。
+ *
+ * requestedItems / primaryKeywords / acceptableCategories 三个字段本来就会
+ * 指向同一个东西（说「柠檬茶」时三处都填柠檬茶），直接拼接会得到
+ * 「柠檬茶、柠檬茶」。
+ *
+ * 去重键用 canonicalizePoiTerm——那是规则库里已有的确定性同义词归一，
+ * 不是新造的相似度判断。刻意**不**做「柠檬茶≈柠檬水」这种近义合并：那属于
+ * 语义推断，只能由子 Agent 做；在这里写等于给"词是否同一"造第二个真理源。
+ * 词表认为不同的词就分别显示——它确实分别搜过。
+ *
+ * 显示的是首次出现的原词而非 canonical，用户说「柠檬茶」就不该被回显成「奶茶」。
+ */
 export function primaryTargetLabel(goal: UserGoal): string {
-  return [
+  const seen = new Set<string>();
+  const labels: string[] = [];
+
+  for (const term of [
     ...goal.requestedItems.map((item) => item.name),
     ...goal.primaryKeywords,
     ...goal.acceptableCategories.map((category) => category.name),
-  ]
-    .filter(Boolean)
-    .slice(0, 3)
-    .join('、');
+  ]) {
+    const trimmed = term.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const key = canonicalizePoiTerm(trimmed);
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    labels.push(trimmed);
+  }
+
+  return labels.slice(0, 3).join('、');
 }
 
 /** 返回某一类目标中尚未尝试过的关键词。 */
@@ -579,12 +609,14 @@ function toTarget(goal: UserGoal, keyword: string): SearchKeywordTarget {
 // 候选与授权
 // ---------------------------------------------------------------------------
 
+// 口径与 finalGuard 装配一致（含品类兼容补位），否则会出现"策略判定无结果
+// 去追问、装配其实能给出 3 家"的分裂。见 isPrimaryRecommendationEligible。
 export function primaryCandidates(ctx: PolicyContext): RestaurantCandidate[] {
-  return ctx.candidates.filter((candidate) => isPrimaryRecommendationAllowed(candidate, ctx));
+  return ctx.candidates.filter((candidate) => isPrimaryRecommendationEligible(candidate, ctx));
 }
 
 export function hasPrimaryCandidates(ctx: PolicyContext): boolean {
-  return ctx.candidates.some((candidate) => isPrimaryRecommendationAllowed(candidate, ctx));
+  return ctx.candidates.some((candidate) => isPrimaryRecommendationEligible(candidate, ctx));
 }
 
 export function distinctPrimaryBrandCount(ctx: PolicyContext): number {
@@ -671,13 +703,7 @@ export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
     return exhaustedQuestion;
   }
 
-  const target = [
-    ...ctx.goal.requestedItems.map((item) => item.name),
-    ...ctx.goal.primaryKeywords,
-  ]
-    .filter(Boolean)
-    .slice(0, 3)
-    .join('、');
+  const target = primaryTargetLabel(ctx.goal);
 
   return {
     reason: '没有找到通过主推荐准入的餐厅。',

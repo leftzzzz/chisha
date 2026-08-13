@@ -5,6 +5,7 @@
  */
 
 import { appReducer, initialState } from '@/context/AppReducer';
+import { MIN_TURNTABLE_OPTIONS } from '@/lib/turntableOptions';
 import type { AppState, Restaurant, CustomOption, Location } from '@/types';
 
 describe('AppReducer', () => {
@@ -142,7 +143,8 @@ describe('AppReducer', () => {
 
   describe('SET_RESTAURANTS_WITH_CANDIDATES', () => {
     it('should set turntable and candidate restaurants', () => {
-      const turntable = [mockRestaurant];
+      // 主推荐已达最低可转数量，候补不应被提上转盘。
+      const turntable = createRestaurants(3, 'primary');
       const candidates = [{ ...mockRestaurant, id: 'r2', name: '候补餐厅' }];
       const action = {
         type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
@@ -156,6 +158,31 @@ describe('AppReducer', () => {
       expect(newState.removedRestaurants).toEqual([]);
       expect(newState.customOptions).toEqual([]);
       expect(newState.selectedIndex).toBe(-1);
+    });
+
+    it('should backfill turntable from candidates when primaries cannot fill a spin', () => {
+      // 主推荐只有 1 家时转盘转不动，必须从候补补到 MIN_TURNTABLE_OPTIONS。
+      const turntable = [mockRestaurant];
+      const candidates = createRestaurants(5, 'candidate');
+      const action = {
+        type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
+        payload: { turntable, candidates },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.restaurants).toHaveLength(MIN_TURNTABLE_OPTIONS);
+      expect(newState.restaurants[0]).toEqual(mockRestaurant);
+      expect(newState.restaurants.slice(1).map((restaurant) => restaurant.id)).toEqual([
+        'candidate0',
+        'candidate1',
+      ]);
+      // 补上去的不能同时留在候补池里。
+      expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual([
+        'candidate2',
+        'candidate3',
+        'candidate4',
+      ]);
     });
 
     it('should keep Agent explanation and unmet constraints', () => {
@@ -191,17 +218,23 @@ describe('AppReducer', () => {
         id: 'r2',
         name: '另一家餐厅',
       };
+      // 主推荐凑满 MIN_TURNTABLE_OPTIONS，把补位逻辑排除在外，这里只测去重。
+      const filler = createRestaurants(2, 'filler');
       const action = {
         type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
         payload: {
-          turntable: [mockRestaurant, duplicate],
+          turntable: [mockRestaurant, duplicate, ...filler],
           candidates: [duplicate, uniqueCandidate],
         },
       };
 
       const newState = appReducer(initialState, action);
 
-      expect(newState.restaurants.map((restaurant) => restaurant.id)).toEqual(['r1']);
+      expect(newState.restaurants.map((restaurant) => restaurant.id)).toEqual([
+        'r1',
+        'filler0',
+        'filler1',
+      ]);
       expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual(['r2']);
     });
 

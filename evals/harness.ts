@@ -9,6 +9,7 @@
  */
 
 import { AgentError } from '@/lib/agent/types';
+import { lookupFoodPoiTypes } from '@/lib/agent/poiTaxonomy';
 import type { Location, Restaurant } from '@/types';
 import type {
   AmapFixture,
@@ -285,11 +286,35 @@ export function evaluationStub(input: EvaluationStubInput) {
   const broadIntent = input.plan.searchIntent === 'fallback'
     || input.plan.searchIntent === 'broadened';
 
+  // 目标词对应的高德品类码。名字没命中但品类能供应该菜品时要出 unverified，
+  // 而不是 failed —— 真实 POI 字段里没有菜单，"店名没写"只是缺证据。
+  // 桩以前只会 passed/failed，于是"品类兼容但菜单未验证"这条分支在 eval 里
+  // 根本不可达，线上柠檬茶全军覆没才没有被任何用例挡住。
+  const targetPoiTypes = new Set(
+    targets.flatMap((target) => (lookupFoodPoiTypes(target) ?? '').split('|')).filter(Boolean)
+  );
+
   const verdicts = input.restaurants.map((item) => {
     const matched = targets.filter(
       (target) => item.name.includes(target) || item.cuisineType.includes(target)
     );
     const accepted = matched.length > 0 || broadIntent;
+    const categoryCompatible = !accepted
+      && (item.poiTypeCode ?? '').split('|').some((code) => code && targetPoiTypes.has(code));
+
+    if (categoryCompatible) {
+      return {
+        restaurantId: item.id,
+        status: 'unverified' as const,
+        primaryEligible: false,
+        confidence: 0.5,
+        matchedItems: [],
+        matchedCategories: [item.cuisineType],
+        conflicts: [],
+        evidence: [`「${item.name}」品类为${item.cuisineType}，可能供应目标菜品。`],
+        warnings: ['菜单中是否有目标菜品未在事实字段中确认'],
+      };
+    }
 
     return {
       restaurantId: item.id,

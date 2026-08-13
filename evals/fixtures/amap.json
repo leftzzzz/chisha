@@ -1,4 +1,18 @@
 {
+  "柠檬茶": [
+    { "id": "amap-lt-1", "name": "喜茶", "cuisineType": "冷饮店", "distance": 320, "rating": 4.5, "averagePrice": 22, "poiTypeCode": "050700" },
+    { "id": "amap-lt-2", "name": "蜜雪冰城", "cuisineType": "冷饮店", "distance": 450, "rating": 4.7, "averagePrice": 7, "poiTypeCode": "050700" },
+    { "id": "amap-lt-3", "name": "CoCo都可", "cuisineType": "冷饮店", "distance": 610, "rating": 4.4, "averagePrice": 13, "poiTypeCode": "050700" },
+    { "id": "amap-lt-4", "name": "茶百道", "cuisineType": "冷饮店", "distance": 880, "rating": 4.3, "averagePrice": 16, "poiTypeCode": "050700" },
+    { "id": "amap-lt-5", "name": "爷爷不泡茶", "cuisineType": "冷饮店", "distance": 1150, "rating": 4.6, "averagePrice": 13, "poiTypeCode": "050700" }
+  ],
+  "奶茶": [
+    { "id": "amap-lt-1", "name": "喜茶", "cuisineType": "冷饮店", "distance": 320, "rating": 4.5, "averagePrice": 22, "poiTypeCode": "050700" },
+    { "id": "amap-lt-2", "name": "蜜雪冰城", "cuisineType": "冷饮店", "distance": 450, "rating": 4.7, "averagePrice": 7, "poiTypeCode": "050700" },
+    { "id": "amap-lt-3", "name": "CoCo都可", "cuisineType": "冷饮店", "distance": 610, "rating": 4.4, "averagePrice": 13, "poiTypeCode": "050700" },
+    { "id": "amap-lt-4", "name": "茶百道", "cuisineType": "冷饮店", "distance": 880, "rating": 4.3, "averagePrice": 16, "poiTypeCode": "050700" },
+    { "id": "amap-lt-5", "name": "爷爷不泡茶", "cuisineType": "冷饮店", "distance": 1150, "rating": 4.6, "averagePrice": 13, "poiTypeCode": "050700" }
+  ],
   "火锅": [
     { "id": "amap-hg-1", "name": "海底捞火锅(黄浦店)", "cuisineType": "火锅", "distance": 420, "rating": 4.6, "averagePrice": 128, "poiTypeCode": "050117" },
     { "id": "amap-hg-2", "name": "小龙坎老火锅", "cuisineType": "火锅", "distance": 680, "rating": 4.4, "averagePrice": 110, "poiTypeCode": "050117" },
