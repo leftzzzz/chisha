@@ -965,7 +965,33 @@ npm run deploy
 
 生产环境如果使用 Cloudflare，需要配置 D1 binding：`CHISHA_DB`。如果缺少 D1 binding，代码会回退到内存 session store，不适合生产长期运行。
 
+Fork 之后需要把 `wrangler.jsonc` 里的 `d1_databases[].database_id` 换成你自己的——
+仓库里那个是原作者账号下的资源，你访问不了。用 `npx wrangler d1 create chisha` 生成。
+
 详细部署说明见 [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)。
+
+### 部署到公网之前请先读 [SECURITY.md](./SECURITY.md)
+
+本仓库不附带任何 API Key，你自建一份之后账单归你。有两件事直接决定你会不会被刷：
+
+1. **限流在 Serverless 上基本无效。** `lib/rateLimit.ts` 用的是进程内存，
+   Cloudflare Workers / Vercel Edge 上每个请求可能落在不同实例，限流约等于没有。
+   要挂公开站点就得先换成 KV / Durable Objects / Redis，否则 `/api/agent/chat`
+   会用你的 `OPENAI_API_KEY` 无限跑模型。
+2. **`/_AMapService` 是公开路径**，服务端会给转发出去的请求注入
+   `AMAP_SECURITY_CODE`。它只放行 JS API 实际需要的几条路径，
+   不要改回通配转发。
+
+### 数据与隐私
+
+多轮会话会把这些内容明文存进 D1 的 `agent_sessions` 表（带 `expires_at` 过期清理）：
+
+- 用户的经纬度与地址
+- 完整的多轮对话原文
+- 搜索历史与候选裁决
+
+对外提供服务时这些属于个人信息，合规义务由部署者自行承担。高德 POI 数据仅可作为
+运行时缓存，不得导出或再分发。
 
 ## 常见问题
 
@@ -995,10 +1021,26 @@ Agent 会尝试同义词、相邻品类或 fallback 搜索。Amap 失败时 API 
 
 不能。Agent 问题通常同时涉及 prompt、schema、上下文、工具结果、guard、session 和前端状态。先看 trace 和测试，再决定改哪一层。
 
+## 参与贡献
+
+见 [CONTRIBUTING.md](./CONTRIBUTING.md)。提 PR 前请跑：
+
+```bash
+npm run type-check && npm run lint && npm test
+```
+
+改动 `lib/agent/` 下的 policy / runtime / 缓存时，还要跑 `npm run eval` 并在 PR
+里附上与基线的 diff——单测锁的是分支，eval 锁的是"这一轮总共搜了几步、评了几次"。
+
+安全问题请走 [SECURITY.md](./SECURITY.md) 里的私密通道，不要开公开 issue。
+
 ## 相关文档
 
+- [SECURITY.md](./SECURITY.md) — 漏洞报告与自建部署的安全注意事项
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — 贡献流程与代码规范
 - [docs/Agent优化技术方案.md](./docs/Agent优化技术方案.md)
 - [docs/agent-architecture-review.md](./docs/agent-architecture-review.md)
 - [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)
 - [docs/TESTING.md](./docs/TESTING.md)
 - [docs/QUICKSTART.md](./docs/QUICKSTART.md)
+- [docs/archive/](./docs/archive/) — 各阶段完成报告，历史存档，不再维护

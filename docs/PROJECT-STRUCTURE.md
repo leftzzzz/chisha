@@ -33,12 +33,11 @@ chisha/
 │
 ├── 📁 docs/                         # 文档
 │   ├── 📄 Phase2-API-Documentation.md        # API 详细文档
-│   ├── 📄 Phase2-Technical-Summary.md        # 技术实现总结
-│   ├── 📄 Phase2-Files-Checklist.md          # 文件清单
-│   ├── 📄 Phase2-Completion-Report.md        # 完成报告
 │   ├── 📄 QUICKSTART.md                      # 快速启动指南
+│   ├── 📄 DEPLOYMENT.md                      # 部署指南
 │   ├── 📄 实现方案.md                         # 实现方案
 │   ├── 📄 执行计划.md                         # 执行计划
+│   ├── 📁 archive/                           # 历史阶段性文档，只作存档
 │   └── 📁 立项文档/                           # 初始规划文档
 │       ├── 📄 PRD.md                         # 产品需求文档
 │       ├── 📄 技术架构设计.md                 # 架构设计
@@ -112,11 +111,12 @@ chisha/
 | 文件 | 内容 |
 |------|------|
 | `README.md` | 项目概述、快速开始 |
+| `CONTRIBUTING.md` | 贡献流程与代码规范 |
+| `SECURITY.md` | 漏洞报告方式、自建部署的安全注意事项 |
 | `docs/Phase2-API-Documentation.md` | API 详细文档 |
-| `docs/Phase2-Technical-Summary.md` | 技术实现总结 |
-| `docs/Phase2-Files-Checklist.md` | 文件清单 |
-| `docs/Phase2-Completion-Report.md` | 完成报告 |
 | `docs/QUICKSTART.md` | 快速启动指南 |
+| `docs/DEPLOYMENT.md` | 部署指南（Vercel / Cloudflare Workers / D1） |
+| `docs/archive/` | 各阶段的完成报告与清单，历史存档，不再维护 |
 | `docs/实现方案.md` | 实现方案 |
 | `docs/执行计划.md` | 执行计划 |
 | `docs/立项文档/PRD.md` | 产品需求文档 |

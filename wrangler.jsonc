@@ -27,6 +27,10 @@
 	"build": {
 		"command": "npm run wrangler:build"
 	},
+	// Fork 之后必须换成你自己账号下的 database_id，下面这个你访问不了：
+	//   npx wrangler d1 create chisha
+	// 这个文件必须留在仓库里——Cloudflare Workers Builds 从仓库克隆代码构建，
+	// 读不到它就没法部署。
 	"d1_databases": [
 		{
 			"binding": "CHISHA_DB",

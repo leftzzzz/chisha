@@ -1,0 +1,60 @@
+name: Bug 报告
+description: 报告一个可复现的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请**不要**在 issue 里粘贴任何 API Key。日志里的 key、jscode、坐标请自行打码。
+        安全问题不要开 issue，见 [SECURITY.md](../blob/main/SECURITY.md)。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 现象
+      description: 实际发生了什么，你期望发生什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 包括你输入的自然语言查询原文——Agent 的行为高度依赖具体措辞
+      placeholder: |
+        1. 输入「附近有什么不辣的川菜」
+        2. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 出问题的部分
+      options:
+        - Agent 行为（搜索/追问/推荐结果不对）
+        - 前端交互（转盘、地图、输入）
+        - 部署（Vercel / Cloudflare Workers / D1）
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: 使用的模型
+      description: OPENAI_MODEL 及各子 Agent 的模型覆盖（不要贴 key 和 base_url 里的凭证）
+      placeholder: deepseek-v4-flash-0731
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / trace
+      description: 相关的服务端日志或 agent trace，打码后粘贴
+      render: text
+
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      placeholder: Node 20.11 / macOS 15 / Chrome 130
