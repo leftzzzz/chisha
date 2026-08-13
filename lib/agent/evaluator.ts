@@ -8,7 +8,11 @@ import type {
   SearchPlan,
 } from './types';
 import { deriveGoalSignature, deriveLocationSignature } from './goalVersion';
+import { isPrimaryRecommendationAllowed } from './finalGuard';
 import { getRestaurantIdentityKeys, getRestaurantInfoScore } from '@/lib/restaurantIdentity';
+
+/** 判断某个候选按其来源 attempt 能否进入主推荐。 */
+type CandidateAdmissionPredicate = (candidate: RestaurantCandidate) => boolean;
 
 export function evaluateSearchResult(
   restaurants: Restaurant[],
@@ -46,13 +50,15 @@ export function mergeCandidates(
 ): void {
   const candidateMap = new Map<string, RestaurantCandidate>();
   const candidates: RestaurantCandidate[] = [];
+  const admissible = (candidate: RestaurantCandidate) =>
+    isPrimaryRecommendationAllowed(candidate, context);
 
   for (const candidate of context.candidates) {
-    mergeCandidateInto(candidates, candidateMap, candidate);
+    mergeCandidateInto(candidates, candidateMap, candidate, admissible);
   }
 
   for (const incoming of incomingCandidates) {
-    mergeCandidateInto(candidates, candidateMap, incoming);
+    mergeCandidateInto(candidates, candidateMap, incoming, admissible);
   }
 
   context.candidates = candidates.sort((a, b) => b.score - a.score);
@@ -177,7 +183,8 @@ function buildObservationReason(found: number, accepted: number, plan: SearchPla
 function mergeCandidateInto(
   candidates: RestaurantCandidate[],
   candidateMap: Map<string, RestaurantCandidate>,
-  incoming: RestaurantCandidate
+  incoming: RestaurantCandidate,
+  admissible: CandidateAdmissionPredicate
 ): void {
   const incomingKeys = getRestaurantIdentityKeys(incoming.restaurant);
   const existing = incomingKeys
@@ -190,7 +197,7 @@ function mergeCandidateInto(
     return;
   }
 
-  const merged = mergeCandidate(existing, incoming);
+  const merged = mergeCandidate(existing, incoming, admissible);
   const existingIndex = candidates.indexOf(existing);
 
   if (existingIndex >= 0) {
@@ -207,9 +214,10 @@ function mergeCandidateInto(
 
 function mergeCandidate(
   existing: RestaurantCandidate,
-  incoming: RestaurantCandidate
+  incoming: RestaurantCandidate,
+  admissible: CandidateAdmissionPredicate
 ): RestaurantCandidate {
-  const preferred = shouldReplaceCandidate(existing, incoming) ? incoming : existing;
+  const preferred = shouldReplaceCandidate(existing, incoming, admissible) ? incoming : existing;
   const other = preferred === incoming ? existing : incoming;
 
   return {
@@ -230,13 +238,26 @@ function mergeCandidate(
   };
 }
 
-function shouldReplaceCandidate(existing: RestaurantCandidate, incoming: RestaurantCandidate): boolean {
-  if (existing.stale && !incoming.stale) {
-    return true;
+/**
+ * 同一家餐厅被多个计划召回时，保留哪一份。
+ *
+ * 来源 attempt 的准入能力排在 score 之前：同一家店先被未授权的放宽搜索命中、
+ * 后被 exact 搜索命中时，必须换成 exact 那份，否则它会因为 sourceAttempt
+ * 指着不能进主推荐的 attempt 而永远停在候补。
+ */
+function shouldReplaceCandidate(
+  existing: RestaurantCandidate,
+  incoming: RestaurantCandidate,
+  admissible: CandidateAdmissionPredicate
+): boolean {
+  if (Boolean(existing.stale) !== Boolean(incoming.stale)) {
+    return Boolean(existing.stale);
   }
 
-  if (!existing.stale && incoming.stale) {
-    return false;
+  const existingAdmissible = admissible(existing);
+  const incomingAdmissible = admissible(incoming);
+  if (existingAdmissible !== incomingAdmissible) {
+    return incomingAdmissible;
   }
 
   if (incoming.score !== existing.score) {

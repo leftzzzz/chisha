@@ -9,6 +9,8 @@
 export interface ModelCallMetrics {
   agentName: string;
   model: string;
+  /** 调用发起时刻；用于把并发调用合并成"串行步数" */
+  startedAt: number;
   durationMs: number;
   promptTokens?: number;
   completionTokens?: number;
@@ -22,6 +24,13 @@ export interface ModelCallMetrics {
 
 export interface TurnMetrics {
   modelCalls: number;
+  /**
+   * 串行模型步数：把重叠的调用区间合并后剩下的段数。
+   *
+   * 并发发起的多次调用只算一步——用户感知的是墙钟时间，不是调用次数。
+   * 这是衡量 loop 形态的核心指标：调用总数可以增加，串行步数必须下降。
+   */
+  serialModelSteps: number;
   modelMs: number;
   promptTokens: number;
   completionTokens: number;
@@ -67,6 +76,7 @@ export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics
 
   return {
     modelCalls: calls.length,
+    serialModelSteps: countSerialSteps(calls),
     modelMs: sum(calls.map((call) => call.durationMs)),
     promptTokens,
     completionTokens,
@@ -81,4 +91,33 @@ export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics
 
 function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
+}
+
+/**
+ * 把调用区间按重叠合并，返回剩余段数。
+ *
+ * 同一批并发发起的调用区间互相重叠，合并成一段；串行链上的调用不重叠，
+ * 各算一段。缺少 startedAt 的历史记录按各自独立一段处理。
+ */
+function countSerialSteps(calls: ModelCallMetrics[]): number {
+  const intervals = calls
+    .map((call) => ({
+      start: call.startedAt ?? 0,
+      end: (call.startedAt ?? 0) + Math.max(0, call.durationMs),
+    }))
+    .sort((left, right) => left.start - right.start);
+
+  let steps = 0;
+  let currentEnd = -Infinity;
+
+  for (const interval of intervals) {
+    if (interval.start >= currentEnd) {
+      steps += 1;
+      currentEnd = interval.end;
+    } else {
+      currentEnd = Math.max(currentEnd, interval.end);
+    }
+  }
+
+  return steps;
 }

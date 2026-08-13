@@ -3,11 +3,12 @@ import {
   applyGoalPatch,
   clarificationNeedToPendingQuestion,
   createActionRecord,
+  runSearchReplan,
   runSupervisorPlanner,
   summarizeAction,
 } from './supervisorPlanner';
 import { evaluateSearchResult, mergeCandidates } from './evaluator';
-import { applyHardConstraintGuard, applyVerdictGuard } from './guards';
+import { applyHardConstraintGuard, applyVerdictGuard, validateSearchPlan } from './guards';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
 import { createTurnLogger } from './turnLogger';
 import { summarizeTurnMetrics, type MetricsSink } from './metrics';
@@ -18,30 +19,21 @@ import {
   DEGRADED_CLARIFYING_QUESTION,
   DEGRADED_GOAL_NOTICE,
 } from './degraded';
-import { isSearchIntentAuthorizedForPrimary } from './authorization';
 import {
   buildNoPrimaryQuestion,
-  buildPostAuthorizationNoPrimaryQuestion,
-  inferPoiTypesForGoalKeyword,
-  buildSearchPlan,
-  createPlanId,
-  distinctPrimaryBrandCount,
-  getStrictDistanceMaxMeters,
+  decideNextAction,
   hasPrimaryCandidates,
-  hasTriedIntent,
-  hasTriedPlan,
-  nextUntriedTarget,
-  questionAsksForBroadenAuthorization,
-  resolveSearchActionPoiType,
-  untriedTargets,
+  inferPoiTypesForGoalKeyword,
+  planSearchBatch,
+  primaryCandidates,
+  type PolicyDecision,
 } from './policy';
 import {
   hasPromotedBroadenedPrimaryCandidates,
   promoteAuthorizedBroadenedResults,
 } from './broadenAdmission';
-import { SearchPlanSchema } from './schemas/plan';
 import { finalizeRecommendations } from './resultAssembler';
-import { DEFAULT_POI_TYPE, isGenericSearchKeyword, normalizeSearchKeywords } from './poiTaxonomy';
+import { isGenericSearchKeyword, normalizeSearchKeywords } from './poiTaxonomy';
 import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
 import { runEvaluationAgent, type EvaluationAgentInput } from './subagents/evaluationAgent';
 import {
@@ -51,7 +43,8 @@ import {
   withUpdatedGoalVersion,
 } from './goalVersion';
 import type { ContextInvalidationPlan } from './goalVersion';
-import { AgentRunError } from './types';
+import { createVerdictCache, type VerdictCache } from './evaluationCache';
+import { AgentError, AgentRunError, isAgentError } from './types';
 import type {
   AgentAction,
   AgentContext,
@@ -66,8 +59,6 @@ import type {
   EmitAgentEvent,
   EvaluationAgentOutput,
   GoalPatch,
-  GuardrailDecision,
-  GuardrailViolation,
   PendingQuestion,
   RestaurantCandidate,
   SearchKeywordTarget,
@@ -81,6 +72,10 @@ interface AgentV3Context extends AgentContext {
   trace: AgentTraceItem[];
   turnId: string;
   maxActions: number;
+  /** 本轮候选裁决缓存；跨计划复用，避免重叠 POI 被反复送评估。 */
+  verdictCache: VerdictCache;
+  /** 本轮是否已经用掉那次 replan 机会 */
+  replanUsed?: boolean;
 }
 
 interface SearchStateResetPlan {
@@ -98,9 +93,6 @@ const DEFAULT_AGENT_EVALUATION_CONCURRENCY = parsePositiveInt(process.env.AGENT_
 const CONFIGURED_AGENT_EVALUATION_LIMIT = parseOptionalPositiveInt(process.env.AGENT_EVALUATION_LIMIT);
 const MAX_HARD_REJECTED_REASON_DETAILS = 6;
 const MAX_HARD_REJECTED_OBSERVATIONS = 20;
-/** 并行搜索开关：关闭时一次 action 只执行一个计划，行为与串行完全一致。 */
-const AGENT_PARALLEL_SEARCH = process.env.AGENT_PARALLEL_SEARCH === 'true';
-const AGENT_SEARCH_CONCURRENCY = parsePositiveInt(process.env.AGENT_SEARCH_CONCURRENCY, 3);
 
 /**
  * 执行一轮 Agent 搜索。
@@ -128,7 +120,7 @@ export async function runSearchAgentV3(
 
     if (context) {
       appendTrace(context, 'error', {
-        error: { code, message, retryable: isRetryableAgentError(code) },
+        error: { code, message, retryable: isRetryableAgentError(error, code) },
       });
       throw new AgentRunError(message, code, snapshotRuntimeState(context), error);
     }
@@ -167,20 +159,7 @@ async function runAgentTurn(
     input.location
   );
   const resetPlan = deriveSearchStateResetPlan(invalidationPlan, conversationMode);
-  let goal = baseGoal;
-  if (!supervisorOutput?.question && baseGoal.clarificationNeeded.length === 0) {
-    emit({ type: 'status', message: '正在联想相关搜索词...' });
-    goal = applyKeywordExpansion(
-      baseGoal,
-      await runKeywordExpansionAgent({
-        metricsSink: turnMetrics,
-        goal: baseGoal,
-        attempts: resetPlan.clearAttempts ? [] : (input.runtimeState?.attempts ?? []),
-        preferenceSummary: input.preferenceSummary,
-      })
-    );
-  }
-  const context = createInitialContext(input, goal, resetPlan);
+  const context = createInitialContext(input, baseGoal, resetPlan);
   context.modelCallMetrics = turnMetrics.modelCallMetrics ?? [];
   contextRef.current = context;
   if (resolution.degraded) {
@@ -207,7 +186,7 @@ async function runAgentTurn(
   });
   const clarifyingQuestion = resolution.clarifyingQuestion
     ?? supervisorOutput?.question
-    ?? getInitialClarifyingQuestion(goal);
+    ?? getInitialClarifyingQuestion(context.goal);
 
   if (clarifyingQuestion) {
     const action: AgentAction = { type: 'ask_user', question: clarifyingQuestion };
@@ -225,67 +204,24 @@ async function runAgentTurn(
     return finish(context, action, emit);
   }
 
+  await expandKeywordsAlongsideFirstSearch(context, turnMetrics, searchPlaces, emit);
+
   while (context.actions.length < context.maxActions) {
-    const guarded = await resolveGuardedAction(input, context);
-    const actionRecord = appendAction(context, guarded.action, emit);
+    const decision = await nextExecutableDecision(context, emit);
 
-    emitGuardrailMessages(guarded.messages, actionRecord.id, emit);
-
-    if (guarded.action.type === 'ask_user') {
-      return buildPausedResult(context, guarded.action.question);
+    if (decision.kind === 'ask') {
+      const action: AgentAction = { type: 'ask_user', question: decision.question };
+      appendAction(context, action, emit);
+      return buildPausedResult(context, decision.question);
     }
 
-    if (guarded.action.type === 'finish') {
-      return finish(context, guarded.action, emit);
+    if (decision.kind === 'finish') {
+      const action = finishActionFromDecision(decision);
+      appendAction(context, action, emit);
+      return finish(context, action, emit);
     }
 
-    const observations = await executeSearchBatch(
-      actionRecord.id,
-      planParallelBatch(context, guarded.action.plan),
-      context,
-      searchPlaces,
-      emit
-    );
-
-    for (const observation of observations) {
-      context.observations.push(observation);
-      emit({
-        type: 'observation',
-        actionId: observation.actionId,
-        traceId: observation.traceId,
-        found: observation.rawCount,
-        accepted: observation.acceptedPrimaryIds.length,
-        rejected: observation.hardRejected.length,
-      });
-    }
-
-    if (context.attempts.length >= context.maxSearchCalls) {
-      const fallback: AgentAction = hasPrimaryCandidates(context)
-        ? buildFinishAction(context, 'SEARCH_BUDGET_EXHAUSTED', 0.62)
-        : { type: 'ask_user', question: buildNoPrimaryQuestion(context) };
-      const decisionTrace = appendTrace(context, 'runtime_decision', {
-        output: {
-          reason: 'search_budget_exhausted',
-          action: fallback,
-          attempts: context.attempts.length,
-          maxSearchCalls: context.maxSearchCalls,
-        },
-      });
-      const fallbackRecord = appendAction(context, fallback, emit);
-      emit({
-        type: 'guardrail',
-        actionId: fallbackRecord.id,
-        traceId: decisionTrace.id,
-        message: '已达到本轮搜索动作上限，Runtime 强制进入结束或追问。',
-        severity: 'warn',
-      });
-
-      if (fallback.type === 'ask_user') {
-        return buildPausedResult(context, fallback.question);
-      }
-
-      return finish(context, fallback, emit);
-    }
+    await runSearchStep(context, decision.plans, searchPlaces, emit);
   }
 
   const forcedFinish = buildFinishAction(context, 'ACTION_BUDGET_EXHAUSTED', 0.6, false);
@@ -298,6 +234,256 @@ async function runAgentTurn(
     },
   });
   return finish(context, forcedFinish, emit);
+}
+
+/**
+ * 联想搜索词，并把不依赖它的首批搜索并发跑掉。
+ *
+ * 首批计划来自用户明确表达的目标（或开放授权下的通用兜底），完全不依赖联想词——
+ * 联想词要到第二批才用得上。所以没有理由让每一个查询都先等一次
+ * KeywordExpansion 往返再开始搜。
+ *
+ * 前提：applyKeywordExpansion 只写 related/broadened 字段，不参与
+ * deriveGoalSignature，因此首批产出的候选不会因为目标"变了"而失效。
+ * 该前提由 __tests__/lib/agent/goalVersion.test.ts 锁死。
+ */
+async function expandKeywordsAlongsideFirstSearch(
+  context: AgentV3Context,
+  turnMetrics: MetricsSink,
+  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
+  emit: EmitAgentEvent
+): Promise<void> {
+  emit({ type: 'status', message: '正在联想相关搜索词...' });
+
+  const expansion = runKeywordExpansionAgent({
+    metricsSink: turnMetrics,
+    goal: context.goal,
+    attempts: context.attempts,
+    preferenceSummary: context.preferenceSummary,
+  });
+
+  const firstBatch = concurrentFirstSearchEnabled()
+    ? keepValidPlans(planSearchBatch(context), context, emit)
+    : [];
+  if (firstBatch.length > 0) {
+    appendTrace(context, 'runtime_decision', {
+      output: {
+        kind: 'search',
+        stage: 'first_batch',
+        plans: firstBatch.map((plan) => plan.keywords[0]),
+        attempts: context.attempts.length,
+        maxSearchCalls: context.maxSearchCalls,
+      },
+    });
+  }
+  const searching = firstBatch.length > 0
+    ? runSearchStep(context, firstBatch, searchPlaces, emit)
+    : Promise.resolve();
+
+  const [expanded] = await Promise.all([expansion, searching]);
+  context.goal = applyKeywordExpansion(context.goal, expanded);
+  // metrics 容器与 context 是两个对象，联想词的调用指标要并回来。
+  context.modelCallMetrics = turnMetrics.modelCallMetrics ?? context.modelCallMetrics;
+}
+
+function concurrentFirstSearchEnabled(): boolean {
+  return process.env.AGENT_CONCURRENT_FIRST_SEARCH !== 'false';
+}
+
+/** 执行一批搜索计划：记动作、并行跑、提交观察。 */
+async function runSearchStep(
+  context: AgentV3Context,
+  plans: SearchPlan[],
+  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
+  emit: EmitAgentEvent
+): Promise<void> {
+  const actionRecord = appendAction(context, { type: 'search', plan: plans[0] }, emit);
+  const observations = await executeSearchBatch(
+    actionRecord.id,
+    plans,
+    context,
+    searchPlaces,
+    emit
+  );
+
+  for (const observation of observations) {
+    context.observations.push(observation);
+    emit({
+      type: 'observation',
+      actionId: observation.actionId,
+      traceId: observation.traceId,
+      found: observation.rawCount,
+      accepted: observation.acceptedPrimaryIds.length,
+      rejected: observation.hardRejected.length,
+    });
+  }
+}
+
+/** 策略决策在 Runtime 侧的可执行形态：replan 已经被消解掉。 */
+type ExecutableDecision = Exclude<PolicyDecision, { kind: 'replan' }>;
+
+const MAX_DECISION_ROUNDS = 3;
+
+/**
+ * 取下一个可执行决策。
+ *
+ * 策略给出的 search 计划要先过 guard；全部非法时把它们记为已尝试再重新决策，
+ * 否则同一批词会被反复选中。replan 在这里被消解成"补充关键词后重新决策"
+ * 或"用模型给的问题追问"，Runtime 主循环不需要知道它存在。
+ */
+async function nextExecutableDecision(
+  context: AgentV3Context,
+  emit: EmitAgentEvent
+): Promise<ExecutableDecision> {
+  for (let round = 0; round < MAX_DECISION_ROUNDS; round += 1) {
+    const decision = decideNextAction(context, { replanUsed: context.replanUsed });
+    appendTrace(context, 'runtime_decision', {
+      output: {
+        kind: decision.kind,
+        attempts: context.attempts.length,
+        maxSearchCalls: context.maxSearchCalls,
+        ...(decision.kind === 'search'
+          ? { plans: decision.plans.map((plan) => plan.keywords[0]) }
+          : {}),
+        ...(decision.kind === 'finish' ? { reason: decision.reason } : {}),
+      },
+    });
+
+    if (decision.kind === 'search') {
+      const validPlans = keepValidPlans(decision.plans, context, emit);
+      if (validPlans.length > 0) {
+        return { kind: 'search', plans: validPlans };
+      }
+
+      // 计划全被拒：记为已尝试，避免下一轮又挑中同一批词。
+      decision.plans.forEach((plan) => recordFailedAttempt(context, plan, '计划未通过校验，未执行搜索。'));
+      continue;
+    }
+
+    if (decision.kind === 'replan') {
+      context.replanUsed = true;
+      const question = await applyReplan(context, emit);
+      if (question) {
+        return { kind: 'ask', question };
+      }
+      continue;
+    }
+
+    return decision;
+  }
+
+  return hasPrimaryCandidates(context)
+    ? {
+        kind: 'finish',
+        reason: 'NO_MORE_STRATEGY',
+        selectedIds: primaryCandidates(context).map((candidate) => candidate.restaurant.id),
+        candidateIds: [],
+        confidence: 0.6,
+      }
+    : { kind: 'ask', question: buildNoPrimaryQuestion(context) };
+}
+
+/**
+ * 过滤掉不合法的搜索计划。
+ *
+ * 计划由 policy 生成，因此违规意味着策略有 bug——除了重复计划（可能来自并发
+ * 批次的竞态）之外都按 error 级别记录，让 eval 与日志抓得到。
+ */
+function keepValidPlans(
+  plans: SearchPlan[],
+  context: AgentV3Context,
+  emit: EmitAgentEvent
+): SearchPlan[] {
+  const valid: SearchPlan[] = [];
+
+  for (const plan of plans) {
+    const violations = validateSearchPlan(plan, context);
+    if (violations.length === 0) {
+      valid.push(plan);
+      continue;
+    }
+
+    const trace = appendTrace(context, 'guard_decision', {
+      guardDecision: { type: 'reject', violations },
+      output: { plan },
+    });
+    for (const violation of violations) {
+      if (violation.severity === 'error') {
+        createTurnLogger(context.sessionId, context.turnId).error(
+          'policy produced an invalid search plan',
+          { code: violation.code, message: violation.message, plan }
+        );
+      }
+      emit({
+        type: 'guardrail',
+        actionId: context.actions.at(-1)?.id ?? 'pending',
+        traceId: trace.id,
+        message: violation.message,
+        severity: violation.severity === 'info' ? 'info' : 'warn',
+      });
+    }
+  }
+
+  return valid;
+}
+
+/**
+ * 策略枯竭时向模型要一个新方向。
+ *
+ * 返回 PendingQuestion 表示模型建议改为追问；返回 undefined 表示要么补上了
+ * 新关键词（调用方重新决策），要么模型也没有方向（调用方回落模板追问）。
+ */
+async function applyReplan(
+  context: AgentV3Context,
+  emit: EmitAgentEvent
+): Promise<PendingQuestion | undefined> {
+  emit({ type: 'status', message: '正在换个思路继续找...' });
+
+  const replan = await runSearchReplan({
+    metricsSink: context,
+    message: context.query,
+    goal: context.goal,
+    messages: context.messages ?? [],
+    attempts: context.attempts,
+    observations: context.observations,
+    exhausted: {
+      triedKeywords: Array.from(new Set(context.attempts.flatMap((attempt) => attempt.keywords))),
+      triedIntents: Array.from(new Set(context.attempts.map((attempt) => attempt.searchIntent))),
+    },
+    preferenceSummary: context.preferenceSummary,
+  });
+
+  appendTrace(context, 'model_action', {
+    input: { kind: 'replan' },
+    output: replan ?? { targets: [], question: undefined },
+  });
+
+  if (replan?.targets?.length) {
+    context.goal = {
+      ...context.goal,
+      relatedKeywords: uniqueStrings([
+        ...context.goal.relatedKeywords,
+        ...replan.targets.map((target) => target.keyword),
+      ]),
+      relatedTargets: [...(context.goal.relatedTargets ?? []), ...replan.targets],
+    };
+    return undefined;
+  }
+
+  return replan?.question;
+}
+
+function finishActionFromDecision(
+  decision: Extract<PolicyDecision, { kind: 'finish' }>
+): Extract<AgentAction, { type: 'finish' }> {
+  return {
+    type: 'finish',
+    reason: decision.reason,
+    selectedIds: decision.selectedIds,
+    candidateIds: decision.candidateIds,
+    explanation: internalFinishNote(decision.reason),
+    confidence: decision.confidence,
+  };
 }
 
 /**
@@ -382,33 +568,21 @@ async function resolveTurnGoal(
   }
 }
 
+/**
+ * 取错误码。
+ *
+ * 抛出点带了码就用它——不再对 message 做正则猜测，那会把任何碰巧包含
+ * "poi" 的错误判成数据源故障，而这个码直接决定前端让不让用户重试。
+ */
 function toAgentErrorCode(error: unknown): AgentErrorCode {
-  const message = error instanceof Error ? error.message : String(error);
-
-  if (/OPENAI_API_KEY|AMAP_API_KEY|is required/i.test(message)) {
-    return 'CONFIG_MISSING';
-  }
-
-  if (/429|rate\s*limit|too many requests/i.test(message)) {
-    return 'RATE_LIMITED';
-  }
-
-  if (/SupervisorPlannerAgent/i.test(message)) {
-    return 'SUPERVISOR_UNAVAILABLE';
-  }
-
-  if (/EvaluationAgent/i.test(message)) {
-    return 'EVALUATION_FAILED';
-  }
-
-  if (/amap|osm|搜索超时|poi/i.test(message)) {
-    return 'SEARCH_PROVIDER_FAILED';
-  }
-
-  return 'UNKNOWN';
+  return isAgentError(error) ? error.code : 'UNKNOWN';
 }
 
-function isRetryableAgentError(code: AgentErrorCode): boolean {
+function isRetryableAgentError(error: unknown, code: AgentErrorCode): boolean {
+  if (isAgentError(error)) {
+    return error.retryable;
+  }
+
   return code !== 'CONFIG_MISSING' && code !== 'SESSION_EXPIRED';
 }
 
@@ -428,7 +602,7 @@ function resolveSupervisorGoal(
     );
   }
 
-  throw new Error('SupervisorPlannerAgent returned no goal or patch');
+  throw new AgentError('SupervisorPlannerAgent returned no goal or patch', 'SUPERVISOR_UNAVAILABLE', true);
 }
 
 async function getSupervisorPlannerOutput(
@@ -537,46 +711,13 @@ function createInitialContext(input: AgentInput, goal: UserGoal, resetPlan: Sear
     observations: resetPlan.clearObservations ? [] : [...(input.runtimeState?.observations ?? [])],
     trace: [...(input.runtimeState?.trace ?? [])],
     turnId: createTraceId('turn'),
+    verdictCache: createVerdictCache(),
     unmetConstraints: [],
     maxSteps: 8,
     maxActions: (resetPlan.clearActionHistory ? 0 : (input.runtimeState?.actions?.length ?? 0)) + 8,
     maxSearchCalls: previousAttempts.length + DEFAULT_AGENT_MAX_SEARCH_CALLS,
     targetCount: 8,
   };
-}
-
-function buildSupervisorPlannerActionInput(
-  input: AgentInput,
-  context: AgentV3Context,
-  rewriteInstruction?: string
-) {
-  return {
-    message: input.query,
-    goal: context.goal,
-    messages: input.messages ?? [],
-    attempts: context.attempts,
-    observations: context.observations,
-    candidates: context.candidates,
-    preferenceSummary: context.preferenceSummary,
-    rewriteInstruction,
-    limits: {
-      maxSearchCalls: context.maxSearchCalls,
-      remainingSearchCalls: Math.max(0, context.maxSearchCalls - context.attempts.length),
-      targetCount: context.targetCount,
-    },
-  };
-}
-
-async function getSupervisorPlannerAction(
-  plannerInput: ReturnType<typeof buildSupervisorPlannerActionInput>,
-  context: AgentV3Context
-): Promise<AgentAction> {
-  const output = await runSupervisorPlanner(plannerInput, context);
-  if (!output.action) {
-    throw new Error('SupervisorPlannerAgent returned no action');
-  }
-
-  return output.action;
 }
 
 function hydrateGoalSearchTargets(goal: UserGoal): UserGoal {
@@ -655,500 +796,11 @@ function getInitialClarifyingQuestion(goal: UserGoal): PendingQuestion | null {
   return clarificationNeed ? clarificationNeedToPendingQuestion(clarificationNeed) : null;
 }
 
-interface GuardedActionResolution {
-  action: AgentAction;
-  messages: GuardrailMessage[];
-}
-
-interface GuardrailMessage {
-  message: string;
-  severity: 'info' | 'warn';
-  traceId?: string;
-}
-
-async function resolveGuardedAction(
-  input: AgentInput,
-  context: AgentV3Context
-): Promise<GuardedActionResolution> {
-  const rawAction = await getSupervisorPlannerAction(
-    buildSupervisorPlannerActionInput(input, context),
-    context
-  );
-  appendTrace(context, 'model_action', { rawAction });
-
-  const decision = await guardAction(rawAction, context);
-  const decisionTrace = appendTrace(context, 'guard_decision', {
-    rawAction,
-    guardedAction: actionFromGuardDecision(decision),
-    guardDecision: decision,
-  });
-
-  if (decision.type === 'allow') {
-    return {
-      action: decision.action,
-      messages: messagesFromGuardDecision(decision, decisionTrace.id),
-    };
-  }
-
-  if (decision.type === 'reject') {
-    const fallback = fallbackActionForGuardDecision(decision, context)
-      ?? buildNoPrimaryQuestionAction(context);
-    appendTrace(context, 'runtime_decision', {
-      rawAction,
-      guardDecision: decision,
-      output: {
-        reason: 'guard_reject_fallback',
-        action: fallback,
-      },
-    });
-    return {
-      action: fallback,
-      messages: messagesFromGuardDecision(decision, decisionTrace.id),
-    };
-  }
-
-  const rewrittenRawAction = await getSupervisorPlannerAction(
-    buildSupervisorPlannerActionInput(input, context, decision.instruction),
-    context
-  );
-  appendTrace(context, 'model_action', {
-    input: { rewriteInstruction: decision.instruction },
-    rawAction: rewrittenRawAction,
-  });
-
-  const rewrittenDecision = await guardAction(rewrittenRawAction, context);
-  const rewrittenDecisionTrace = appendTrace(context, 'guard_decision', {
-    rawAction: rewrittenRawAction,
-    guardedAction: actionFromGuardDecision(rewrittenDecision),
-    guardDecision: rewrittenDecision,
-  });
-
-  const messages = [
-    ...messagesFromGuardDecision(decision, decisionTrace.id),
-    ...messagesFromGuardDecision(rewrittenDecision, rewrittenDecisionTrace.id),
-  ];
-
-  if (rewrittenDecision.type === 'allow') {
-    return {
-      action: rewrittenDecision.action,
-      messages,
-    };
-  }
-
-  const fallback = fallbackActionForGuardDecision(rewrittenDecision, context)
-    ?? decision.suggestedAction
-    ?? buildNoPrimaryQuestionAction(context);
-  appendTrace(context, 'runtime_decision', {
-    rawAction: rewrittenRawAction,
-    guardDecision: rewrittenDecision,
-    output: {
-      reason: 'guard_rewrite_exhausted',
-      action: fallback,
-    },
-  });
-  return {
-    action: fallback,
-    messages,
-  };
-}
-
-function actionFromGuardDecision(decision: GuardrailDecision): AgentAction | undefined {
-  if (decision.type === 'allow') {
-    return decision.action;
-  }
-
-  return decision.type === 'request_rewrite' ? decision.suggestedAction : undefined;
-}
-
-function fallbackActionForGuardDecision(
-  decision: Exclude<GuardrailDecision, { type: 'allow' }>,
-  context: AgentV3Context
-): AgentAction | undefined {
-  if (decision.type === 'request_rewrite') {
-    return decision.suggestedAction;
-  }
-
-  if (decision.fallback === 'finish' && hasPrimaryCandidates(context)) {
-    return {
-      type: 'finish',
-      selectedIds: context.candidates
-        .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
-        .map((candidate) => candidate.restaurant.id),
-      explanation: 'Guard 拒绝继续执行该动作，返回当前通过验证的推荐。',
-      confidence: 0.62,
-    };
-  }
-
-  if (decision.fallback === 'ask_user' || decision.fallback === 'error') {
-    return buildNoPrimaryQuestionAction(context);
-  }
-
-  return hasPrimaryCandidates(context)
-    ? {
-        type: 'finish',
-        selectedIds: context.candidates
-          .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
-          .map((candidate) => candidate.restaurant.id),
-        explanation: 'Guard 拒绝继续执行该动作，返回当前通过验证的推荐。',
-        confidence: 0.62,
-      }
-    : buildNoPrimaryQuestionAction(context);
-}
-
-function buildNoPrimaryQuestionAction(context: AgentV3Context): AgentAction {
-  return { type: 'ask_user', question: buildNoPrimaryQuestion(context) };
-}
-
-function messagesFromGuardDecision(
-  decision: GuardrailDecision,
-  traceId?: string
-): GuardrailMessage[] {
-  if (decision.type === 'allow') {
-    return (decision.notes ?? []).map((message) => ({ message, severity: 'warn', traceId }));
-  }
-
-  const messages = decision.violations.map((violation) => ({
-    message: violation.message,
-    severity: violation.severity === 'info' ? 'info' as const : 'warn' as const,
-    traceId,
-  }));
-
-  if (decision.type === 'request_rewrite') {
-    messages.push({
-      message: `已要求 Supervisor 重写动作：${decision.instruction}`,
-      severity: 'warn',
-      traceId,
-    });
-  }
-
-  return messages;
-}
-
-function emitGuardrailMessages(
-  messages: GuardrailMessage[],
-  actionId: string,
-  emit: EmitAgentEvent
-): void {
-  for (const item of messages) {
-    emit({
-      type: 'guardrail',
-      actionId,
-      traceId: item.traceId,
-      message: item.message,
-      severity: item.severity,
-    });
-  }
-}
-
-function violation(
-  code: GuardrailViolation['code'],
-  message: string,
-  severity: GuardrailViolation['severity'] = 'warn',
-  details?: unknown
-): GuardrailViolation {
-  return { code, message, severity, details };
-}
-
-async function guardAction(action: AgentAction, context: AgentV3Context): Promise<GuardrailDecision> {
-  if (action.type === 'search') {
-    return guardSearchAction(action, context);
-  }
-
-  if (action.type === 'finish') {
-    return guardFinishAction(action, context);
-  }
-
-  if (action.type === 'ask_user') {
-    return guardAskUserAction(action, context);
-  }
-
-  return { type: 'allow', action };
-}
-
-function guardAskUserAction(
-  action: Extract<AgentAction, { type: 'ask_user' }>,
-  context: AgentV3Context
-): GuardrailDecision {
-  const exhaustedQuestion = buildPostAuthorizationNoPrimaryQuestion(context);
-  if (!exhaustedQuestion || !questionAsksForBroadenAuthorization(action.question)) {
-    return { type: 'allow', action };
-  }
-
-  return {
-    type: 'allow',
-    action: {
-      type: 'ask_user',
-      question: exhaustedQuestion,
-    },
-    notes: ['已避免重复询问“允许放宽”，改为请求用户更换类型或授权开放推荐。'],
-  };
-}
-
-async function guardSearchAction(
-  action: Extract<AgentAction, { type: 'search' }>,
-  context: AgentV3Context
-): Promise<GuardrailDecision> {
-  const notes: string[] = [];
-
-  if (context.attempts.length >= context.maxSearchCalls) {
-    return {
-      type: 'reject',
-      violations: [
-        violation('SEARCH_BUDGET_EXCEEDED', '模型请求继续搜索，但本轮已达到搜索上限。'),
-      ],
-      fallback: hasPrimaryCandidates(context) ? 'finish' : 'ask_user',
-    };
-  }
-
-  // SearchPlanSchema 已经把"一次搜索一个意图词"约束在类型层，
-  // 这里只负责剔除命中排除项的关键词。
-  const guardedKeywords = normalizeSearchKeywords(action.plan.keywords)
-    .filter((keyword) => !context.goal.exclusions.some((exclusion) => keyword.includes(exclusion)))
-    .slice(0, 1);
-  if (guardedKeywords.length !== action.plan.keywords.length) {
-    notes.push('已移除命中明确排除项的搜索关键词。');
-  }
-
-  if (guardedKeywords.length === 0) {
-    return {
-      type: 'reject',
-      violations: [
-        violation('INVALID_PLAN_SCHEMA', '搜索关键词全部命中排除项，无法执行搜索计划。', 'error', {
-          originalKeywords: action.plan.keywords,
-        }),
-      ],
-      fallback: 'ask_user',
-    };
-  }
-
-  const strictMax = getStrictDistanceMaxMeters(context.goal);
-  const requestedRadius = Number.isFinite(action.plan.radiusMeters)
-    ? action.plan.radiusMeters
-    : 1800;
-  const radiusMeters = strictMax !== undefined
-    ? Math.min(requestedRadius, strictMax)
-    : requestedRadius;
-  if (strictMax !== undefined && requestedRadius > strictMax) {
-    notes.push(`已将搜索半径限制在严格距离 ${strictMax}m 内。`);
-  }
-
-  const broadIntent = action.plan.searchIntent === 'broadened'
-    || action.plan.searchIntent === 'fallback';
-  const allowedForPrimary = action.plan.allowedForPrimary
-    && (!broadIntent || isSearchIntentAuthorizedForPrimary(
-      context.goal,
-      action.plan.searchIntent,
-      action.plan.keywords
-    ));
-  if (action.plan.allowedForPrimary && !allowedForPrimary) {
-    notes.push('未获得用户放宽授权，放宽/兜底搜索结果只能进入候补。');
-  }
-
-  const planBeforePoiType = SearchPlanSchema.safeParse({
-    ...action.plan,
-    keywords: guardedKeywords,
-    poiType: undefined,
-    radiusMeters: Math.max(300, Math.min(5000, Math.round(radiusMeters))),
-    allowedForPrimary,
-  });
-
-  if (!planBeforePoiType.success) {
-    return {
-      type: 'reject',
-      violations: [
-        violation('INVALID_PLAN_SCHEMA', `搜索计划结构无效：${planBeforePoiType.error.message}`, 'error'),
-      ],
-      fallback: 'ask_user',
-    };
-  }
-
-  const selectedPoiType = resolveSearchActionPoiType(
-    context.goal,
-    planBeforePoiType.data.keywords[0],
-    action.plan.poiType
-  );
-
-  const parsed = SearchPlanSchema.safeParse({
-    ...planBeforePoiType.data,
-    poiType: selectedPoiType === DEFAULT_POI_TYPE ? undefined : selectedPoiType,
-  });
-
-  if (!parsed.success) {
-    return {
-      type: 'reject',
-      violations: [
-        violation('INVALID_POI_TYPE', `POI type 选择后搜索计划无效：${parsed.error.message}`, 'error'),
-      ],
-      fallback: 'ask_user',
-    };
-  }
-
-  if (hasTriedPlan(context, parsed.data)) {
-    return {
-      type: 'reject',
-      violations: [
-        violation('DUPLICATE_PLAN', '模型输出了重复搜索计划，已阻止重复调用。', 'warn', {
-          plan: parsed.data,
-        }),
-      ],
-      fallback: hasPrimaryCandidates(context) ? 'finish' : 'ask_user',
-    };
-  }
-
-  return {
-    type: 'allow',
-    action: { type: 'search', plan: parsed.data },
-    notes,
-  };
-}
-
-function guardFinishAction(
-  action: Extract<AgentAction, { type: 'finish' }>,
-  context: AgentV3Context
-): GuardrailDecision {
-  const expansionSearch = buildExpansionSearchBeforeFinish(context);
-  if (expansionSearch) {
-    return {
-      type: 'request_rewrite',
-      violations: [
-        violation('PREMATURE_FINISH', '模型请求结束，但仍有未尝试的 Agent 联想关键词。', 'warn'),
-      ],
-      instruction: '当前主推荐数量不足且仍有未尝试的联想关键词，请输出 search action 继续探索，而不是 finish。',
-      suggestedAction: expansionSearch,
-    };
-  }
-
-  const observedIds = new Set(context.candidates.map((candidate) => candidate.restaurant.id));
-  const selectedIds = (action.selectedIds ?? []).filter((id) => observedIds.has(id));
-  const candidateIds = (action.candidateIds ?? []).filter((id) => observedIds.has(id));
-  const removed = (action.selectedIds ?? []).length - selectedIds.length
-    + (action.candidateIds ?? []).length - candidateIds.length;
-
-  return {
-    type: 'allow',
-    action: {
-      ...action,
-      selectedIds,
-      candidateIds,
-    },
-    notes: removed > 0
-      ? ['finish 动作包含未观察到的候选 id，已移除。']
-      : [],
-  };
-}
-
-function buildExpansionSearchBeforeFinish(context: AgentV3Context): AgentAction | null {
-  if (context.attempts.length >= context.maxSearchCalls) {
-    return null;
-  }
-
-  const distinctBrands = distinctPrimaryBrandCount(context);
-  if (distinctBrands >= context.targetCount) {
-    return null;
-  }
-
-  const relatedTarget = nextUntriedTarget(context, 'related');
-  if (relatedTarget && !hasTriedIntent(context, 'synonym')) {
-    return {
-      type: 'search',
-      plan: buildSearchPlan(context, relatedTarget, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
-    };
-  }
-
-  const broadenedTarget = distinctBrands === 0 ? nextUntriedTarget(context, 'broadened') : null;
-  if (broadenedTarget) {
-    const authorized = isSearchIntentAuthorizedForPrimary(context.goal, 'broadened', [
-      broadenedTarget.keyword,
-    ]);
-    return {
-      type: 'search',
-      plan: buildSearchPlan(
-        context,
-        broadenedTarget,
-        'broadened',
-        authorized,
-        authorized
-          ? '用户允许放宽，继续尝试 Agent 联想到的相邻品类。'
-          : '没有主推荐，搜索 Agent 联想到的相邻品类作为候补。'
-      ),
-    };
-  }
-
-  if (relatedTarget) {
-    return {
-      type: 'search',
-      plan: buildSearchPlan(context, relatedTarget, 'synonym', true, '主推荐未满目标数，继续尝试 Agent 联想关键词。'),
-    };
-  }
-
-  return null;
-}
-
-/**
- * 决定本轮可以并行铺开哪些搜索计划。
- *
- * 模型仍然只输出一个计划（"下一步做什么"由模型决定），
- * 能不能顺带把已知的未尝试关键词一起搜（"这一步铺多宽"）由策略决定。
- * 关闭开关时恒返回单计划，行为与串行完全一致。
- */
-function planParallelBatch(context: AgentV3Context, primaryPlan: SearchPlan): SearchPlan[] {
-  const plans = [withPlanId(primaryPlan)];
-  const remaining = context.maxSearchCalls - context.attempts.length;
-
-  if (!AGENT_PARALLEL_SEARCH || remaining <= 1 || primaryPlan.searchIntent === 'fallback') {
-    return plans;
-  }
-
-  const budget = Math.min(AGENT_SEARCH_CONCURRENCY, remaining) - 1;
-  if (budget <= 0) {
-    return plans;
-  }
-
-  const plannedKeywords = new Set(primaryPlan.keywords);
-  const companionKind = primaryPlan.searchIntent === 'broadened' ? 'broadened' : 'related';
-
-  for (const target of untriedTargetsForParallel(context, companionKind)) {
-    if (plans.length > budget) {
-      break;
-    }
-
-    const [keyword] = normalizeSearchKeywords([target.keyword]);
-    if (!keyword || plannedKeywords.has(keyword)) {
-      continue;
-    }
-
-    plannedKeywords.add(keyword);
-    plans.push(
-      buildSearchPlan(
-        context,
-        target,
-        primaryPlan.searchIntent,
-        primaryPlan.allowedForPrimary,
-        '与本轮主计划并行尝试的联想关键词。'
-      )
-    );
-  }
-
-  return plans;
-}
-
-function untriedTargetsForParallel(
-  context: AgentV3Context,
-  kind: 'related' | 'broadened'
-): SearchKeywordTarget[] {
-  const targets = untriedTargets(context, kind);
-  return kind === 'related' ? targets : targets.filter(() => hasPrimaryCandidates(context) === false);
-}
-
-function withPlanId(plan: SearchPlan): SearchPlan {
-  return plan.planId ? plan : { ...plan, planId: createPlanId() };
-}
-
 /**
  * 执行一批搜索计划。
  *
- * 批内计划并行发起（Amap 请求 + 候选验证），attempts 按 plans 顺序追加，
- * 保证 candidate.sourceAttempt 索引稳定；单个计划失败不影响同批其他计划。
+ * 批内计划并行发起（Amap 请求 + 候选验证），attempts 在串行提交阶段按 plans
+ * 顺序追加，保证 candidate.sourceAttempt 索引稳定；单个计划失败不影响同批其他计划。
  */
 async function executeSearchBatch(
   actionId: string,
@@ -1202,13 +854,27 @@ interface SearchPlanResult {
   agentEvaluation: EvaluationAgentOutput;
 }
 
+/** 一个搜索计划的候选验证结果，区分"这次真判了几家"与"复用了几家"。 */
+interface PlanEvaluation {
+  /** 拿到裁决的餐厅，顺序与后续 verdicts 一一对应 */
+  restaurants: Restaurant[];
+  output: EvaluationAgentOutput;
+  error?: EvaluationAgentOutput['error'];
+  modelEvaluated: number;
+  cacheHits: number;
+}
+
 /**
  * 搜索计划整体失败时记录一次空 attempt。
  *
  * searchPlaces 内部已经有 Amap → OSM 的回退，走到这里说明两个数据源都失败了。
  * 记录下来既能让策略换个关键词继续，也能让这一轮不会因为单个数据源抖动整体失败。
  */
-function recordFailedAttempt(context: AgentV3Context, plan: SearchPlan): void {
+function recordFailedAttempt(
+  context: AgentV3Context,
+  plan: SearchPlan,
+  note = `搜索「${plan.keywords.join('、')}」时数据源不可用，本轮未取到结果。`
+): void {
   context.attempts.push({
     keywords: plan.keywords,
     radius: plan.radiusMeters,
@@ -1219,9 +885,7 @@ function recordFailedAttempt(context: AgentV3Context, plan: SearchPlan): void {
     found: 0,
     accepted: 0,
   });
-  context.unmetConstraints.push(
-    `搜索「${plan.keywords.join('、')}」时数据源不可用，本轮未取到结果。`
-  );
+  context.unmetConstraints.push(note);
 }
 
 /**
@@ -1298,57 +962,23 @@ async function runSearchPlan(
   const hardGuard = applyHardConstraintGuard(restaurants, context.goal);
   const hardRejectedReasons = summarizeHardRejectedReasons(hardGuard.rejected);
 
-  const evaluationRestaurants = selectRestaurantsForEvaluation(hardGuard.passed, context.targetCount);
-  if (evaluationRestaurants.length > 0) {
-    emit({
-      type: 'status',
-      message: evaluationRestaurants.length < restaurants.length
-        ? `正在验证前 ${evaluationRestaurants.length} 家候选餐厅...`
-        : '正在验证候选餐厅...',
-    });
-  }
-
-  let evaluationError: EvaluationAgentOutput['error'];
-  const agentEvaluation = evaluationRestaurants.length > 0
-    ? await runBatchedEvaluationAgent({
-      metricsSink: context,
-      goal: context.goal,
-      plan,
-      restaurants: evaluationRestaurants,
-      existingCandidates: context.candidates.map((candidate) => ({
-        restaurant: candidate.restaurant,
-        verdict: candidateToVerdict(candidate),
-        sourceAttempt: candidate.sourceAttempt,
-      })),
-      targetCount: context.targetCount,
-      preferenceSummary: context.preferenceSummary,
-    }).catch((error) => {
-      evaluationError = evaluationFailureFromError(error);
-      context.evaluationDegraded = true;
-      return buildUnverifiedEvaluationFallback(evaluationRestaurants, context.targetCount, evaluationError);
-    })
-    : {
-      verdicts: [],
-      selectedIds: [],
-      candidateIds: [],
-      explanation: 'No candidates to evaluate after deterministic filtering.',
-      unmetConstraints: [],
-      source: 'model' as const,
-    };
+  const evaluation = await evaluatePlanCandidates(plan, context, hardGuard.passed, restaurants.length, emit);
   appendTrace(context, 'evaluation', {
     actionId,
     input: {
       plan,
-      restaurantIds: evaluationRestaurants.map((restaurant) => restaurant.id),
+      restaurantIds: evaluation.restaurants.map((restaurant) => restaurant.id),
+      modelEvaluated: evaluation.modelEvaluated,
+      cacheHits: evaluation.cacheHits,
     },
     output: {
-      verdictCount: agentEvaluation.verdicts.length,
-      selectedIds: agentEvaluation.selectedIds,
-      candidateIds: agentEvaluation.candidateIds,
-      unmetConstraints: agentEvaluation.unmetConstraints,
-      source: agentEvaluation.source,
+      verdictCount: evaluation.output.verdicts.length,
+      selectedIds: evaluation.output.selectedIds,
+      candidateIds: evaluation.output.candidateIds,
+      unmetConstraints: evaluation.output.unmetConstraints,
+      source: evaluation.output.source,
     },
-    error: evaluationError,
+    error: evaluation.error,
   });
 
   return {
@@ -1358,9 +988,171 @@ async function runSearchPlan(
     provider,
     hardGuard,
     hardRejectedReasons,
-    evaluationRestaurants,
-    agentEvaluation,
+    evaluationRestaurants: evaluation.restaurants,
+    agentEvaluation: evaluation.output,
   };
+}
+
+/**
+ * 验证一个计划的候选。
+ *
+ * 先向本轮裁决缓存申领：已经判过的直接复用，正在被同批其他计划判的等待其结果，
+ * 只有真正没人判过的才走模型。这样一轮之内同一家店最多进一次 EvaluationAgent，
+ * 无论它被几个关键词召回。
+ */
+async function evaluatePlanCandidates(
+  plan: SearchPlan,
+  context: AgentV3Context,
+  hardPassed: Restaurant[],
+  rawCount: number,
+  emit: EmitAgentEvent
+): Promise<PlanEvaluation> {
+  const shortlist = selectRestaurantsForEvaluation(hardPassed, context.targetCount);
+  if (shortlist.length === 0) {
+    return {
+      restaurants: [],
+      output: {
+        verdicts: [],
+        selectedIds: [],
+        candidateIds: [],
+        explanation: 'No candidates to evaluate after deterministic filtering.',
+        unmetConstraints: [],
+        source: 'model',
+      },
+      modelEvaluated: 0,
+      cacheHits: 0,
+    };
+  }
+
+  const cache = context.verdictCache;
+  let error: EvaluationAgentOutput['error'];
+  const outputs: EvaluationAgentOutput[] = [];
+  let pending = shortlist;
+
+  // 两轮：第一轮把同批其他计划正在判的餐厅让出去等结果；等完之后若某些餐厅
+  // 在当前镜头下仍然没有可复用裁决（例如它在别的关键词下判了失败），第二轮
+  // 自己判。没有这一轮，并发批次会把"换个关键词本该通过"的候选吃掉。
+  for (let round = 0; round < 2 && pending.length > 0; round += 1) {
+    const claim = cache.claim(pending.map((restaurant) => restaurant.id), plan);
+    const owned = new Set(claim.own);
+    const toEvaluate = pending.filter((restaurant) => owned.has(restaurant.id));
+
+    if (toEvaluate.length > 0) {
+      emit({
+        type: 'status',
+        message: toEvaluate.length < rawCount
+          ? `正在验证前 ${toEvaluate.length} 家候选餐厅...`
+          : '正在验证候选餐厅...',
+      });
+
+      try {
+        const output = await runBatchedEvaluationAgent({
+          metricsSink: context,
+          goal: context.goal,
+          plan,
+          restaurants: toEvaluate,
+          existingCandidates: context.candidates.map((candidate) => ({
+            restaurant: candidate.restaurant,
+            verdict: candidateToVerdict(candidate),
+            sourceAttempt: candidate.sourceAttempt,
+          })),
+          targetCount: context.targetCount,
+          preferenceSummary: context.preferenceSummary,
+        });
+        cache.settle(output.verdicts, plan);
+        outputs.push(output);
+      } catch (evaluationError) {
+        error = evaluationFailureFromError(evaluationError);
+        context.evaluationDegraded = true;
+        // 失败裁决不入缓存：别的计划应当重试，而不是继承一次抖动的结果。
+        outputs.push(buildUnverifiedEvaluationFallback(toEvaluate, context.targetCount, error));
+      } finally {
+        claim.done();
+      }
+    } else {
+      claim.done();
+    }
+
+    if (claim.waits.length > 0) {
+      await Promise.all(claim.waits);
+    }
+
+    const resolved = new Set(outputs.flatMap((output) => output.verdicts.map((v) => v.restaurantId)));
+    pending = shortlist.filter(
+      (restaurant) => !resolved.has(restaurant.id) && !cache.lookup(restaurant.id, plan)
+    );
+  }
+
+  return combinePlanVerdicts(
+    shortlist,
+    plan,
+    cache,
+    outputs.length > 0 ? mergeEvaluationOutputs(outputs, error) : undefined,
+    error
+  );
+}
+
+/**
+ * 把模型本次产出的裁决与缓存命中的裁决合成一份计划级输出。
+ *
+ * 复用的是**模型原始裁决**，`primaryEligible` 仍会在 applyVerdictGuard 里
+ * 与当前计划的 allowedForPrimary 相与，因此授权语义不会被缓存绕过。
+ */
+function combinePlanVerdicts(
+  shortlist: Restaurant[],
+  plan: SearchPlan,
+  cache: VerdictCache,
+  modelOutput: EvaluationAgentOutput | undefined,
+  error: EvaluationAgentOutput['error']
+): PlanEvaluation {
+  const verdictById = new Map<string, CandidateVerdict>(
+    (modelOutput?.verdicts ?? []).map((verdict) => [verdict.restaurantId, verdict])
+  );
+  const modelEvaluated = verdictById.size;
+  let cacheHits = 0;
+
+  for (const restaurant of shortlist) {
+    if (verdictById.has(restaurant.id)) {
+      continue;
+    }
+
+    const cached = cache.lookup(restaurant.id, plan);
+    if (cached) {
+      verdictById.set(restaurant.id, cached);
+      cacheHits += 1;
+    }
+  }
+
+  const restaurants = shortlist.filter((restaurant) => verdictById.has(restaurant.id));
+
+  return {
+    restaurants,
+    output: {
+      verdicts: restaurants.map((restaurant) => verdictById.get(restaurant.id)!),
+      selectedIds: modelOutput?.selectedIds ?? [],
+      candidateIds: modelOutput?.candidateIds ?? [],
+      explanation: modelOutput?.explanation
+        ?? `复用本轮已有裁决 ${cacheHits} 家，未重复调用候选验证。`,
+      unmetConstraints: modelOutput?.unmetConstraints ?? [],
+      source: resolveEvaluationSource(modelEvaluated, cacheHits, error),
+      error,
+    },
+    error,
+    modelEvaluated,
+    cacheHits,
+  };
+}
+
+function resolveEvaluationSource(
+  modelEvaluated: number,
+  cacheHits: number,
+  error: EvaluationAgentOutput['error']
+): NonNullable<EvaluationAgentOutput['source']> {
+  if (error) {
+    return 'error';
+  }
+
+  return modelEvaluated === 0 && cacheHits > 0 ? 'cache' : 'model';
 }
 
 /**
@@ -1396,7 +1188,8 @@ function commitSearchPlanResult(
     sourceAttempt,
     verdictGuard.output
   );
-  mergeCandidates(context, evaluated.acceptedCandidates);
+  // attempt 必须先入栈：候选的准入判定要按 sourceAttempt 反查 attempt，
+  // 先合并会让新候选查不到自己的 attempt，被当成不可进主推荐。
   context.attempts.push({
     keywords: plan.keywords,
     radius: plan.radiusMeters,
@@ -1407,6 +1200,7 @@ function commitSearchPlanResult(
     found: restaurants.length,
     accepted: evaluated.acceptedCandidates.length,
   });
+  mergeCandidates(context, evaluated.acceptedCandidates);
 
   const verdicts = verdictGuard.output.verdicts;
   const acceptedPrimaryIds = evaluated.acceptedCandidates
@@ -1514,18 +1308,22 @@ function summarizeHardRejectedReasons(
 
 function evaluationFailureFromError(error: unknown): NonNullable<EvaluationAgentOutput['error']> {
   const message = error instanceof Error ? error.message : String(error);
-  const retryable = /429|rate\s*limit|too many requests|timeout|timed out|5\d\d|temporar/i
-    .test(message);
-  const code = /429|rate\s*limit|too many requests/i.test(message)
-    ? 'EVALUATION_RATE_LIMITED'
-    : /schema|parse|invalid|truncated|function arguments/i.test(message)
-      ? 'EVALUATION_PARSE_ERROR'
-      : 'EVALUATION_AGENT_FAILED';
+
+  if (isAgentError(error)) {
+    return {
+      code: error.code === 'RATE_LIMITED' ? 'EVALUATION_RATE_LIMITED' : 'EVALUATION_AGENT_FAILED',
+      message,
+      retryable: error.retryable,
+    };
+  }
+
+  // schema / 截断类失败由 modelClient 以普通 Error 抛出，它们是结构问题不是配置问题。
+  const parseFailure = /schema|parse|invalid|truncated|function arguments/i.test(message);
 
   return {
-    code,
+    code: parseFailure ? 'EVALUATION_PARSE_ERROR' : 'EVALUATION_AGENT_FAILED',
     message,
-    retryable,
+    retryable: !parseFailure,
   };
 }
 
@@ -1614,7 +1412,10 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function mergeEvaluationOutputs(outputs: EvaluationAgentOutput[]): EvaluationAgentOutput {
+function mergeEvaluationOutputs(
+  outputs: EvaluationAgentOutput[],
+  error?: EvaluationAgentOutput['error']
+): EvaluationAgentOutput {
   return {
     verdicts: outputs.flatMap((output) => output.verdicts),
     selectedIds: uniqueStrings(outputs.flatMap((output) => output.selectedIds)),
@@ -1624,13 +1425,14 @@ function mergeEvaluationOutputs(outputs: EvaluationAgentOutput[]): EvaluationAge
       .filter(Boolean)
       .join(' '),
     unmetConstraints: uniqueStrings(outputs.flatMap((output) => output.unmetConstraints)),
-    source: outputs.some((output) => output.source === 'cache') ? 'cache' : 'model',
+    // 分批只发生在真正调模型的路径上；缓存命中在上一层就被摘走了。
+    source: error ? 'error' : 'model',
+    error,
   };
 }
 
 function isLikelyEvaluationRateLimit(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /429|rate\s*limit|too many requests/i.test(message);
+  return isAgentError(error) && error.code === 'RATE_LIMITED';
 }
 
 function uniqueStrings(values: string[]): string[] {

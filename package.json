@@ -22,6 +22,8 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:api": "node scripts/test-api.js",
+    "eval": "jest --config jest.eval.config.js --runInBand",
+    "eval:baseline": "EVAL_UPDATE_BASELINE=1 jest --config jest.eval.config.js --runInBand",
     "check": "node scripts/check-setup.js"
   },
   "dependencies": {

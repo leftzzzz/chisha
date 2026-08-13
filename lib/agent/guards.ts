@@ -2,10 +2,13 @@ import type { Restaurant } from '@/types';
 import type {
   CandidateVerdict,
   EvaluationAgentOutput,
+  GuardrailViolation,
   SearchPlan,
   UserGoal,
 } from './types';
 import { evaluateConstraint } from './constraintEvaluator';
+import { getStrictDistanceMaxMeters, hasTriedPlan, type PolicyContext } from './policy';
+import { SearchPlanSchema } from './schemas/plan';
 
 export interface HardConstraintGuardResult {
   passed: Restaurant[];
@@ -18,6 +21,61 @@ export interface HardConstraintGuardResult {
 export interface RuntimeVerdictGuardResult {
   output: EvaluationAgentOutput;
   rejectedVerdicts: CandidateVerdict[];
+}
+
+/**
+ * 校验一个搜索计划。
+ *
+ * 计划现在由 policy 生成，所以这里的任何一条违规都是编程错误，不是模型走偏。
+ * Guard 因此只做"校验并拒绝"，不再改写字段、也不再请求重写——那两件事以前
+ * 掩盖了策略侧的 bug（见 docs/agent-loop-shape-review-2026-08.md 3.1-B/D）。
+ */
+export function validateSearchPlan(plan: SearchPlan, ctx: PolicyContext): GuardrailViolation[] {
+  const violations: GuardrailViolation[] = [];
+  const parsed = SearchPlanSchema.safeParse(plan);
+
+  if (!parsed.success) {
+    violations.push({
+      code: 'INVALID_PLAN_SCHEMA',
+      message: `搜索计划结构无效：${parsed.error.message}`,
+      severity: 'error',
+      details: { plan },
+    });
+    return violations;
+  }
+
+  const excluded = plan.keywords.filter((keyword) =>
+    ctx.goal.exclusions.some((exclusion) => exclusion && keyword.includes(exclusion))
+  );
+  if (excluded.length > 0) {
+    violations.push({
+      code: 'INVALID_PLAN_SCHEMA',
+      message: `搜索关键词命中明确排除项：${excluded.join('、')}`,
+      severity: 'error',
+      details: { plan },
+    });
+  }
+
+  const strictMax = getStrictDistanceMaxMeters(ctx.goal);
+  if (strictMax !== undefined && plan.radiusMeters > strictMax) {
+    violations.push({
+      code: 'STRICT_DISTANCE_EXCEEDED',
+      message: `搜索半径 ${plan.radiusMeters}m 超出严格距离 ${strictMax}m。`,
+      severity: 'error',
+      details: { plan },
+    });
+  }
+
+  if (hasTriedPlan(ctx, plan)) {
+    violations.push({
+      code: 'DUPLICATE_PLAN',
+      message: '重复搜索计划已被阻止。',
+      severity: 'warn',
+      details: { plan },
+    });
+  }
+
+  return violations;
 }
 
 export function applyHardConstraintGuard(

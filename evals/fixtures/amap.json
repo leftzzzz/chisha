@@ -1,0 +1,69 @@
+{
+  "火锅": [
+    { "id": "amap-hg-1", "name": "海底捞火锅(黄浦店)", "cuisineType": "火锅", "distance": 420, "rating": 4.6, "averagePrice": 128, "poiTypeCode": "050117" },
+    { "id": "amap-hg-2", "name": "小龙坎老火锅", "cuisineType": "火锅", "distance": 680, "rating": 4.4, "averagePrice": 110, "poiTypeCode": "050117" },
+    { "id": "amap-hg-3", "name": "谭鸭血老火锅", "cuisineType": "火锅", "distance": 950, "rating": 4.3, "averagePrice": 105, "poiTypeCode": "050117" },
+    { "id": "amap-hg-4", "name": "呷哺呷哺", "cuisineType": "火锅", "distance": 1180, "rating": 4.1, "averagePrice": 68, "poiTypeCode": "050117" },
+    { "id": "amap-cc-1", "name": "蜀大侠火锅", "cuisineType": "川菜", "distance": 1320, "rating": 4.5, "averagePrice": 120, "poiTypeCode": "050101" }
+  ],
+  "川菜": [
+    { "id": "amap-cc-1", "name": "蜀大侠火锅", "cuisineType": "川菜", "distance": 1320, "rating": 4.5, "averagePrice": 120, "poiTypeCode": "050101" },
+    { "id": "amap-cc-2", "name": "眉州东坡", "cuisineType": "川菜", "distance": 760, "rating": 4.4, "averagePrice": 95, "poiTypeCode": "050101" },
+    { "id": "amap-hg-2", "name": "小龙坎老火锅", "cuisineType": "火锅", "distance": 680, "rating": 4.4, "averagePrice": 110, "poiTypeCode": "050117" },
+    { "id": "amap-cc-3", "name": "巴国布衣", "cuisineType": "川菜", "distance": 1490, "rating": 4.2, "averagePrice": 88, "poiTypeCode": "050101" }
+  ],
+  "麻辣烫": [
+    { "id": "amap-mlt-1", "name": "杨国福麻辣烫", "cuisineType": "小吃", "distance": 320, "rating": 4.0, "averagePrice": 32, "poiTypeCode": "050310" },
+    { "id": "amap-mlt-2", "name": "张亮麻辣烫", "cuisineType": "小吃", "distance": 540, "rating": 3.9, "averagePrice": 30, "poiTypeCode": "050310" }
+  ],
+  "烧烤": [
+    { "id": "amap-bbq-1", "name": "很久以前羊肉串", "cuisineType": "烧烤", "distance": 880, "rating": 4.3, "averagePrice": 95, "poiTypeCode": "050500" },
+    { "id": "amap-bbq-2", "name": "丰茂烤串", "cuisineType": "烧烤", "distance": 1240, "rating": 4.4, "averagePrice": 105, "poiTypeCode": "050500" }
+  ],
+  "牛排": [
+    { "id": "amap-st-1", "name": "王品牛排", "cuisineType": "西餐", "distance": 520, "rating": 4.5, "averagePrice": 320, "poiTypeCode": "050201" },
+    { "id": "amap-st-2", "name": "豪客来牛排", "cuisineType": "西餐", "distance": 910, "rating": 4.0, "averagePrice": 88, "poiTypeCode": "050201" }
+  ],
+  "西餐": [
+    { "id": "amap-st-1", "name": "王品牛排", "cuisineType": "西餐", "distance": 520, "rating": 4.5, "averagePrice": 320, "poiTypeCode": "050201" },
+    { "id": "amap-st-2", "name": "豪客来牛排", "cuisineType": "西餐", "distance": 910, "rating": 4.0, "averagePrice": 88, "poiTypeCode": "050201" },
+    { "id": "amap-we-1", "name": "萨莉亚意式餐厅", "cuisineType": "西餐", "distance": 640, "rating": 4.2, "averagePrice": 45, "poiTypeCode": "050201" },
+    { "id": "amap-we-2", "name": "必胜客", "cuisineType": "西餐", "distance": 1050, "rating": 4.0, "averagePrice": 75, "poiTypeCode": "050201" }
+  ],
+  "铁板烧": [
+    { "id": "amap-tb-1", "name": "牛角铁板烧", "cuisineType": "日料", "distance": 1380, "rating": 4.3, "averagePrice": 180, "poiTypeCode": "050202" }
+  ],
+  "日料": [
+    { "id": "amap-jp-1", "name": "村上一屋居酒屋", "cuisineType": "日料", "distance": 730, "rating": 4.5, "averagePrice": 150, "poiTypeCode": "050202" },
+    { "id": "amap-jp-2", "name": "争鲜回转寿司", "cuisineType": "日料", "distance": 460, "rating": 4.1, "averagePrice": 65, "poiTypeCode": "050202" },
+    { "id": "amap-tb-1", "name": "牛角铁板烧", "cuisineType": "日料", "distance": 1380, "rating": 4.3, "averagePrice": 180, "poiTypeCode": "050202" }
+  ],
+  "寿司": [
+    { "id": "amap-jp-2", "name": "争鲜回转寿司", "cuisineType": "日料", "distance": 460, "rating": 4.1, "averagePrice": 65, "poiTypeCode": "050202" },
+    { "id": "amap-jp-3", "name": "鮨一寿司", "cuisineType": "日料", "distance": 1620, "rating": 4.7, "averagePrice": 480, "poiTypeCode": "050202" }
+  ],
+  "素食": [],
+  "餐厅": [
+    { "id": "amap-hg-1", "name": "海底捞火锅(黄浦店)", "cuisineType": "火锅", "distance": 420, "rating": 4.6, "averagePrice": 128, "poiTypeCode": "050117" },
+    { "id": "amap-cc-2", "name": "眉州东坡", "cuisineType": "川菜", "distance": 760, "rating": 4.4, "averagePrice": 95, "poiTypeCode": "050101" },
+    { "id": "amap-we-1", "name": "萨莉亚意式餐厅", "cuisineType": "西餐", "distance": 640, "rating": 4.2, "averagePrice": 45, "poiTypeCode": "050201" },
+    { "id": "amap-jp-1", "name": "村上一屋居酒屋", "cuisineType": "日料", "distance": 730, "rating": 4.5, "averagePrice": 150, "poiTypeCode": "050202" },
+    { "id": "amap-gd-1", "name": "点都德", "cuisineType": "粤菜", "distance": 1120, "rating": 4.4, "averagePrice": 98, "poiTypeCode": "050102" }
+  ],
+  "美食": [
+    { "id": "amap-gd-1", "name": "点都德", "cuisineType": "粤菜", "distance": 1120, "rating": 4.4, "averagePrice": 98, "poiTypeCode": "050102" },
+    { "id": "amap-bbq-1", "name": "很久以前羊肉串", "cuisineType": "烧烤", "distance": 880, "rating": 4.3, "averagePrice": 95, "poiTypeCode": "050500" }
+  ],
+  "小吃": [
+    { "id": "amap-mlt-1", "name": "杨国福麻辣烫", "cuisineType": "小吃", "distance": 320, "rating": 4.0, "averagePrice": 32, "poiTypeCode": "050310" },
+    { "id": "amap-xc-1", "name": "沙县小吃", "cuisineType": "小吃", "distance": 260, "rating": 3.8, "averagePrice": 22, "poiTypeCode": "050310" }
+  ],
+  "中餐": [
+    { "id": "amap-cc-2", "name": "眉州东坡", "cuisineType": "川菜", "distance": 760, "rating": 4.4, "averagePrice": 95, "poiTypeCode": "050101" },
+    { "id": "amap-gd-1", "name": "点都德", "cuisineType": "粤菜", "distance": 1120, "rating": 4.4, "averagePrice": 98, "poiTypeCode": "050102" }
+  ],
+  "快餐": [
+    { "id": "amap-ff-1", "name": "老乡鸡", "cuisineType": "快餐", "distance": 380, "rating": 4.3, "averagePrice": 35, "poiTypeCode": "050300" },
+    { "id": "amap-ff-2", "name": "真功夫", "cuisineType": "快餐", "distance": 700, "rating": 3.9, "averagePrice": 32, "poiTypeCode": "050300" }
+  ]
+}

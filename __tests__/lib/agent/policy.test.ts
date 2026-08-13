@@ -1,15 +1,22 @@
 import {
   buildNoPrimaryQuestion,
   buildSearchPlan,
+  decideNextAction,
   hasTriedKeyword,
   nextSearchRadius,
   nextUntriedTarget,
+  planSearchBatch,
   resolvePlanPoiType,
   resolveSearchActionPoiType,
   untriedTargets,
   type PolicyContext,
 } from '@/lib/agent/policy';
-import type { Constraint, SearchAttempt, UserGoal } from '@/lib/agent/types';
+import type {
+  Constraint,
+  RestaurantCandidate,
+  SearchAttempt,
+  UserGoal,
+} from '@/lib/agent/types';
 
 const location = { lat: 31.2304, lng: 121.4737, address: '上海市黄浦区' };
 
@@ -177,5 +184,221 @@ describe('policy 追问', () => {
 
     expect(question.question).toContain('验证服务暂时不可用');
     expect(question.options).toContain('重试');
+  });
+});
+
+function candidate(id: string, brand: string, sourceAttempt = 1): RestaurantCandidate {
+  return {
+    restaurant: {
+      id,
+      name: brand,
+      cuisineType: '牛排',
+      address: '测试地址',
+      distance: 400,
+      location,
+      source: 'amap',
+    },
+    score: 90,
+    matched: [],
+    warnings: [],
+    sourceAttempt,
+    verification: {
+      restaurantId: id,
+      status: 'passed',
+      primaryEligible: true,
+      hardFailures: [],
+      itemMatches: [{ requestedItem: '牛排', matchedBy: 'llm_semantic', confidence: 0.9 }],
+      categoryMatches: ['牛排'],
+      warnings: [],
+      confidence: 0.9,
+    },
+  };
+}
+
+describe('policy 计划批次', () => {
+  it('searches every explicit target in one batch', () => {
+    const plans = planSearchBatch(context({
+      goal: goal({ primaryKeywords: ['牛排', '意面'] }),
+    }));
+
+    expect(plans.map((plan) => plan.keywords[0])).toEqual(['牛排', '意面']);
+    expect(plans.every((plan) => plan.searchIntent === 'exact')).toBe(true);
+  });
+
+  it('never exceeds the remaining search budget', () => {
+    const plans = planSearchBatch(
+      context({ goal: goal({ primaryKeywords: ['牛排', '意面', '披萨'] }) }),
+      1
+    );
+
+    expect(plans).toHaveLength(1);
+  });
+
+  it('collapses to a single plan when fan-out is disabled', () => {
+    const original = process.env.AGENT_PARALLEL_SEARCH;
+    process.env.AGENT_PARALLEL_SEARCH = 'false';
+
+    try {
+      const plans = planSearchBatch(context({
+        goal: goal({ primaryKeywords: ['牛排', '意面'] }),
+      }));
+
+      expect(plans).toHaveLength(1);
+    } finally {
+      if (original === undefined) {
+        delete process.env.AGENT_PARALLEL_SEARCH;
+      } else {
+        process.env.AGENT_PARALLEL_SEARCH = original;
+      }
+    }
+  });
+
+  it('mixes one synonym with adjacent categories when nothing was found', () => {
+    const plans = planSearchBatch(context({
+      goal: goal({
+        relatedTargets: [{ keyword: '西餐' }, { keyword: '铁板烧' }],
+        broadenedTargets: [{ keyword: '快餐' }],
+        allowBroaden: true,
+      }),
+      attempts: [attempt({ found: 0, accepted: 0 })],
+    }));
+
+    // 一个结果都没有时优先换镜头：不能把预算全花在同义词上
+    expect(plans.map((plan) => plan.keywords[0])).toEqual(['西餐', '快餐']);
+    expect(plans.map((plan) => plan.searchIntent)).toEqual(['synonym', 'broadened']);
+  });
+
+  it('goes deep on synonyms once there are candidates', () => {
+    const plans = planSearchBatch(context({
+      goal: goal({
+        relatedTargets: [{ keyword: '西餐' }, { keyword: '铁板烧' }],
+        broadenedTargets: [{ keyword: '快餐' }],
+      }),
+      attempts: [attempt()],
+      candidates: [candidate('r1', '王品牛排')],
+    }));
+
+    expect(plans.map((plan) => plan.keywords[0])).toEqual(['西餐', '铁板烧']);
+  });
+
+  it('marks unauthorized broadened plans as backup only', () => {
+    const plans = planSearchBatch(context({
+      goal: goal({ broadenedTargets: [{ keyword: '快餐' }], allowBroaden: false }),
+      attempts: [attempt({ found: 0, accepted: 0 })],
+    }));
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0].allowedForPrimary).toBe(false);
+  });
+
+  it('skips keywords that hit an exclusion', () => {
+    const plans = planSearchBatch(context({
+      goal: goal({ primaryKeywords: ['牛排', '川菜'], exclusions: ['川菜'] }),
+    }));
+
+    expect(plans.map((plan) => plan.keywords[0])).toEqual(['牛排']);
+  });
+});
+
+describe('policy 决策', () => {
+  it('finishes once enough distinct brands passed and nothing is left to try', () => {
+    const decision = decideNextAction(context({
+      attempts: [attempt()],
+      candidates: [
+        candidate('r1', '王品牛排'),
+        candidate('r2', '豪客来'),
+        candidate('r3', '牛排家'),
+      ],
+    }));
+
+    expect(decision.kind).toBe('finish');
+    if (decision.kind === 'finish') {
+      expect(decision.reason).toBe('ENOUGH_PRIMARY');
+      expect(decision.selectedIds).toEqual(['r1', 'r2', 'r3']);
+    }
+  });
+
+  it('keeps expanding for variety while related keywords remain', () => {
+    const decision = decideNextAction(context({
+      goal: goal({ relatedTargets: [{ keyword: '西餐' }] }),
+      attempts: [attempt()],
+      candidates: [
+        candidate('r1', '王品牛排'),
+        candidate('r2', '豪客来'),
+        candidate('r3', '牛排家'),
+      ],
+    }));
+
+    expect(decision.kind).toBe('search');
+  });
+
+  it('finishes on an exhausted search budget when there is something to show', () => {
+    const decision = decideNextAction(context({
+      goal: goal({ relatedTargets: [{ keyword: '西餐' }] }),
+      attempts: [attempt(), attempt(), attempt(), attempt()],
+      candidates: [candidate('r1', '王品牛排')],
+    }));
+
+    expect(decision.kind).toBe('finish');
+    if (decision.kind === 'finish') {
+      expect(decision.reason).toBe('SEARCH_BUDGET_EXHAUSTED');
+    }
+  });
+
+  it('asks on an exhausted search budget when nothing passed admission', () => {
+    const decision = decideNextAction(context({
+      attempts: [attempt(), attempt(), attempt(), attempt()],
+    }));
+
+    expect(decision.kind).toBe('ask');
+  });
+
+  it('asks for authorization instead of searching when verified backups are blocked', () => {
+    const decision = decideNextAction(context({
+      goal: goal({ broadenedTargets: [{ keyword: '快餐' }], allowBroaden: false }),
+      attempts: [attempt({ searchIntent: 'broadened', allowedForPrimary: false, keywords: ['快餐'] })],
+      candidates: [candidate('r1', '老乡鸡')],
+    }));
+
+    expect(decision.kind).toBe('ask');
+  });
+
+  it('requests a replan when every deterministic keyword is exhausted', () => {
+    const decision = decideNextAction(context({
+      attempts: [attempt({ found: 0, accepted: 0 })],
+    }));
+
+    expect(decision.kind).toBe('replan');
+    if (decision.kind === 'replan') {
+      expect(decision.exhausted.triedKeywords).toEqual(['牛排']);
+    }
+  });
+
+  it('falls back to a question after the replan chance is used', () => {
+    const decision = decideNextAction(
+      context({ attempts: [attempt({ found: 0, accepted: 0 })] }),
+      { replanUsed: true }
+    );
+
+    expect(decision.kind).toBe('ask');
+  });
+
+  it('starts an open-exploration goal with a generic fallback search', () => {
+    const decision = decideNextAction(context({
+      goal: goal({
+        rawQuery: '你看着办',
+        primaryKeywords: [],
+        broadenedTargets: [{ keyword: '日料' }],
+        allowBroaden: true,
+      }),
+    }));
+
+    expect(decision.kind).toBe('search');
+    if (decision.kind === 'search') {
+      // 通用兜底排在具体探索词之前
+      expect(decision.plans.map((plan) => plan.keywords[0])).toEqual(['餐厅']);
+      expect(decision.plans[0].searchIntent).toBe('fallback');
+      expect(decision.plans[0].allowedForPrimary).toBe(true);
+    }
   });
 });

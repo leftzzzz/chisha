@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
 import { recordModelCall, type MetricsSink, type ModelCallMetrics } from './metrics';
+import { AgentError } from './types';
 import {
   extractModelFunctionArguments,
   isModelFunctionOutputTruncated,
@@ -177,6 +178,7 @@ function createMetricsTracker<T>(options: JsonFunctionAgentOptions<T>): MetricsT
   const state: Omit<ModelCallMetrics, 'durationMs' | 'ok'> = {
     agentName: options.agentName,
     model: options.model,
+    startedAt,
     promptTokens: undefined,
     completionTokens: undefined,
     attempts: 0,
@@ -408,7 +410,12 @@ async function buildChatCompletionError(
     `tool_call_mode=${mode}`,
   ].filter(Boolean).join('; ');
 
-  return new Error(`${agentName} API failed: ${response.status}${details ? ` - ${details}` : ''}`);
+  // 错误码在这里定：HTTP 状态是最可靠的信号，比下游对文案做子串匹配准。
+  return new AgentError(
+    `${agentName} API failed: ${response.status}${details ? ` - ${details}` : ''}`,
+    response.status === 429 ? 'RATE_LIMITED' : 'UNKNOWN',
+    response.status === 429 || response.status >= 500
+  );
 }
 
 async function readResponseBody(response: Response): Promise<string | null> {

@@ -424,6 +424,32 @@ export interface AgentFinalResult {
 }
 
 /**
+ * 带结构化错误码的 Agent 错误。
+ *
+ * 在**抛出点**决定错误码，而不是在消费端对 message 做正则猜测——
+ * 后者会把任何碰巧包含 "poi" 的信息判成数据源故障，而 recoverable
+ * 直接决定前端让不让用户重试。
+ */
+export class AgentError extends Error {
+  readonly cause?: unknown;
+
+  constructor(
+    message: string,
+    readonly code: AgentErrorCode,
+    readonly retryable: boolean,
+    options?: { cause?: unknown }
+  ) {
+    super(message);
+    this.name = 'AgentError';
+    this.cause = options?.cause;
+  }
+}
+
+export function isAgentError(error: unknown): error is AgentError {
+  return error instanceof AgentError;
+}
+
+/**
  * Runtime 执行失败时抛出，携带失败前的运行状态，
  * 便于 route 层把失败 turn 的 trace 一并落库。
  */

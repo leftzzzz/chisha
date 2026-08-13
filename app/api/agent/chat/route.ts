@@ -7,7 +7,7 @@
  */
 
 import { z } from 'zod';
-import { AgentRunError } from '@/lib/agent/types';
+import { AgentError, AgentRunError } from '@/lib/agent/types';
 import type {
   AgentErrorCode,
   AgentEvent,
@@ -262,7 +262,19 @@ export async function POST(request: Request) {
                 error: error instanceof Error ? error.message : String(error),
                 plan,
               });
-              return osmSearch(plan.keywords, input.location, plan.radiusMeters);
+
+              try {
+                return await osmSearch(plan.keywords, input.location, plan.radiusMeters);
+              } catch (fallbackError) {
+                // 两个数据源都挂了才走到这里，在抛出点定错误码，
+                // 而不是让下游对 message 做子串匹配。
+                throw new AgentError(
+                  fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+                  'SEARCH_PROVIDER_FAILED',
+                  true,
+                  { cause: fallbackError }
+                );
+              }
             }
           }
         );

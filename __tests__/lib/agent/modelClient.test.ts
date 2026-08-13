@@ -4,6 +4,7 @@ import {
   parseJsonFunctionAgentResponse,
 } from '@/lib/agent/modelClient';
 import { fetchWithTimeout } from '@/lib/withTimeout';
+import { AgentError } from '@/lib/agent/types';
 
 jest.mock('@/lib/withTimeout', () => ({
   fetchWithTimeout: jest.fn(),
@@ -226,7 +227,64 @@ describe('modelClient', () => {
       "TestAgent API failed: 400 - Legacy function_call is also unsupported; type=invalid_request_error; code=unsupported_parameter"
     );
   });
+
+  /**
+   * 错误码在抛出点决定，不再靠下游对 message 做正则猜测。
+   */
+  describe('结构化错误码', () => {
+    it('marks a 429 as a retryable rate limit', async () => {
+      fetchWithTimeoutMock.mockResolvedValue(
+        errorResponse({ error: { message: 'Rate limit reached' } }, 429)
+      );
+
+      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(AgentError);
+      expect(error.code).toBe('RATE_LIMITED');
+      expect(error.retryable).toBe(true);
+    });
+
+    it('marks a 500 as retryable but not a rate limit', async () => {
+      fetchWithTimeoutMock.mockResolvedValue(
+        errorResponse({ error: { message: 'upstream exploded' } }, 500)
+      );
+
+      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(AgentError);
+      expect(error.code).toBe('UNKNOWN');
+      expect(error.retryable).toBe(true);
+    });
+
+    it('marks a 400 as not retryable', async () => {
+      fetchWithTimeoutMock.mockResolvedValue(
+        errorResponse({ error: { message: 'bad request' } }, 400)
+      );
+
+      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(AgentError);
+      expect(error.retryable).toBe(false);
+    });
+  });
 });
+
+function agentOptions() {
+  return {
+    agentName: 'TestAgent',
+    apiKey: 'test-key',
+    baseUrl: 'https://example.test/v1',
+    model: 'test-model',
+    systemPrompt: 'Return JSON.',
+    input: { query: 'test' },
+    functionDefinition: { name: 'testFunction', parameters: { type: 'object' } },
+    functionName: 'testFunction',
+    schema: TestSchema,
+    temperature: 0,
+    maxTokens: 10,
+    timeoutMs: 1000,
+  };
+}
 
 function modelResponse(argumentsJson: string, finishReason?: string) {
   return {
@@ -245,10 +303,10 @@ function modelResponse(argumentsJson: string, finishReason?: string) {
   };
 }
 
-function errorResponse(body: unknown) {
+function errorResponse(body: unknown, status = 400) {
   return {
     ok: false,
-    status: 400,
+    status,
     headers: {
       get: () => null,
     },

@@ -9,6 +9,7 @@ import type { MetricsSink } from './metrics';
 import { GoalPatchSchema, UserGoalSchema } from './schemas/goal';
 import { PendingQuestionSchema, SearchSupervisorOutputSchema } from './schemas/clarification';
 import { deriveGoalSignature, withUpdatedGoalVersion } from './goalVersion';
+import { AgentError } from './types';
 import type {
   AgentAuthorization,
   AgentMessage,
@@ -115,7 +116,7 @@ export async function runSearchSupervisor(
   }
 
   if (!OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is required for SupervisorPlannerAgent');
+    throw new AgentError('OPENAI_API_KEY is required for SupervisorPlannerAgent', 'CONFIG_MISSING', false);
   }
 
   try {
@@ -170,7 +171,7 @@ function normalizeSupervisorOutput(
   logger.warn('SupervisorPlannerAgent returned no goal patch for a pending clarification answer', {
     question: input.pendingQuestion.question,
   });
-  throw new Error('SupervisorPlannerAgent returned no goal patch for a pending clarification answer');
+  throw new AgentError('SupervisorPlannerAgent returned no goal patch for a pending clarification answer', 'SUPERVISOR_UNAVAILABLE', true);
 }
 
 function inferConversationMode(
@@ -276,7 +277,7 @@ export async function understandSearchGoal(input: AgentInput): Promise<UserGoal>
     return applyGoalPatch(input.runtimeState.goal, output.patch, input.query);
   }
 
-  throw new Error('SupervisorPlannerAgent returned no goal or patch');
+  throw new AgentError('SupervisorPlannerAgent returned no goal or patch', 'SUPERVISOR_UNAVAILABLE', true);
 }
 
 export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal.rawQuery): UserGoal {

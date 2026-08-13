@@ -55,8 +55,24 @@ export interface AgentTraceEvent {
  */
 export interface AgentSearchCallbacks {
   onThinking?: (message: string) => void;
-  onSearching?: (keywords: string[], round: number, searchIntent?: string) => void;
-  onSearchResult?: (found: number, total: number, restaurants: SearchResultRestaurant[]) => void;
+  /**
+   * 一次搜索开始。
+   *
+   * 开启并行 fan-out 后同一步会有多个计划同时在搜，planId 用来区分它们——
+   * 没有它，后到的事件会把先到的覆盖掉，用户只看得见最后一个关键词。
+   */
+  onSearching?: (
+    keywords: string[],
+    round: number,
+    searchIntent?: string,
+    planId?: string
+  ) => void;
+  onSearchResult?: (
+    found: number,
+    total: number,
+    restaurants: SearchResultRestaurant[],
+    planId?: string
+  ) => void;
   onFiltering?: (message: string, total: number) => void;
   onDone?: (restaurants: Restaurant[], candidates: Restaurant[], explanation?: string, unmetConstraints?: string[]) => void;
   onError?: (message: string) => void;
@@ -578,10 +594,20 @@ async function requestAgentStream(
               callbacks?.onStatus?.(event.message);
               break;
             case 'searching':
-              callbacks?.onSearching?.(event.keywords, event.round);
+              callbacks?.onSearching?.(
+                event.keywords,
+                event.round,
+                event.searchIntent,
+                event.planId
+              );
               break;
             case 'search_result':
-              callbacks?.onSearchResult?.(event.found, event.total, event.restaurants);
+              callbacks?.onSearchResult?.(
+                event.found,
+                event.total,
+                event.restaurants,
+                event.planId
+              );
               break;
             case 'filtering':
               callbacks?.onFiltering?.(event.message, event.total);

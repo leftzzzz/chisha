@@ -1,0 +1,47 @@
+[
+  {
+    "id": "strict-distance-hotpot",
+    "description": "严格距离：楼下500米内的火锅，超距候选必须被硬过滤",
+    "turns": [
+      {
+        "message": "楼下500米内有火锅吗",
+        "stubGoal": {
+          "primaryKeywords": ["火锅"],
+          "requestedItems": ["火锅"],
+          "strictDistanceMeters": 500
+        },
+        "stubExpansion": { "related": ["川菜"], "broadened": [] },
+        "expect": {
+          "shouldAsk": false,
+          "minPrimary": 1,
+          "maxPrimary": 2,
+          "anyCuisine": ["火锅"],
+          "maxSearchRounds": 4
+        }
+      }
+    ]
+  },
+  {
+    "id": "exclusion-only",
+    "description": "只有排除项没有正向目标：不要辣的，其他都可以",
+    "turns": [
+      {
+        "message": "不要辣的，其他都可以",
+        "stubGoal": { "clarifyingQuestion": "除了不吃辣，你想吃点什么类型的？" },
+        "expect": { "shouldAsk": true }
+      }
+    ]
+  },
+  {
+    "id": "no-result",
+    "description": "数据源没有结果：素食，应追问而不是硬推",
+    "turns": [
+      {
+        "message": "想吃素食",
+        "stubGoal": { "primaryKeywords": ["素食"], "requestedItems": ["素食"] },
+        "stubExpansion": { "related": [], "broadened": [] },
+        "expect": { "shouldAsk": true, "maxSearchRounds": 4 }
+      }
+    ]
+  }
+]

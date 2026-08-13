@@ -134,6 +134,7 @@ import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import { runSupervisorPlanner } from '@/lib/agent/supervisorPlanner';
 import { runEvaluationAgent } from '@/lib/agent/subagents/evaluationAgent';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
+import { AgentError } from '@/lib/agent/types';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 
@@ -212,7 +213,7 @@ describe('runSearchAgentV3', () => {
     expect(events.some((event) => event.type === 'final')).toBe(true);
   });
 
-  it('records a replayable trace timeline for model, guard, tool, evaluation, and final steps', async () => {
+  it('records a replayable trace timeline for decision, tool, evaluation, and final steps', async () => {
     const result = await runSearchAgentV3(
       input(goal()),
       () => undefined,
@@ -223,8 +224,7 @@ describe('runSearchAgentV3', () => {
     expect(trace.map((item) => item.type)).toEqual(expect.arrayContaining([
       'user_message',
       'model_goal',
-      'model_action',
-      'guard_decision',
+      'runtime_decision',
       'tool_start',
       'tool_result',
       'evaluation',
@@ -232,8 +232,13 @@ describe('runSearchAgentV3', () => {
       'state_update',
       'final',
     ]));
-    expect(trace.find((item) => item.type === 'model_action')?.rawAction?.type).toBe('search');
-    expect(trace.find((item) => item.type === 'guard_decision')?.guardDecision?.type).toBe('allow');
+    // 常规轮次不再有 model_action / guard_decision：动作由 policy 生成，
+    // guard 只在拒绝时才写 trace。
+    expect(trace.some((item) => item.type === 'model_action')).toBe(false);
+    expect(trace.some((item) => item.type === 'guard_decision')).toBe(false);
+    expect(trace.find((item) => item.type === 'runtime_decision')?.output).toEqual(
+      expect.objectContaining({ kind: 'search', stage: 'first_batch', plans: ['日料'] })
+    );
     expect(trace.find((item) => item.type === 'tool_result')?.output).toEqual(
       expect.objectContaining({
         found: 1,
@@ -982,7 +987,10 @@ describe('runSearchAgentV3', () => {
   it('keeps EvaluationAgent failures out of primary recommendations and records a structured trace', async () => {
     const evaluationMock = runEvaluationAgent as jest.Mock;
     const defaultImplementation = evaluationMock.getMockImplementation();
-    evaluationMock.mockRejectedValue(new Error('429 too many requests'));
+    // 真实链路上 429 由 modelClient 抛成带码的 AgentError；这里照同一个契约来。
+    evaluationMock.mockRejectedValue(
+      new AgentError('429 too many requests', 'RATE_LIMITED', true)
+    );
 
     try {
       const result = await runSearchAgentV3(

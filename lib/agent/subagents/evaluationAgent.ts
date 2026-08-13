@@ -6,6 +6,7 @@ import {
 } from '../modelClient';
 import type { MetricsSink } from '../metrics';
 import { EvaluationAgentOutputSchema } from '../schemas/verdict';
+import { AgentError } from '../types';
 import type {
   CandidateVerdict,
   EvaluationAgentOutput,
@@ -92,7 +93,7 @@ const EVALUATION_FUNCTION = {
 
 export async function runEvaluationAgent(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
   if (!OPENAI_API_KEY) {
-    throw new Error('EvaluationAgent requires OPENAI_API_KEY');
+    throw new AgentError('EvaluationAgent requires OPENAI_API_KEY', 'CONFIG_MISSING', false);
   }
 
   return {

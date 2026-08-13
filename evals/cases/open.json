@@ -1,0 +1,29 @@
+[
+  {
+    "id": "open-anything",
+    "description": "开放授权：随便，走通用兜底",
+    "turns": [
+      {
+        "message": "随便，你决定",
+        "stubGoal": { "allowBroaden": true },
+        "stubExpansion": { "broadened": ["小吃", "中餐"] },
+        "expect": {
+          "shouldAsk": false,
+          "minPrimary": 3,
+          "maxSearchRounds": 4
+        }
+      }
+    ]
+  },
+  {
+    "id": "open-vague-browsing",
+    "description": "软偏好式开放询问：附近有什么，应先追问而不是直搜通用词",
+    "turns": [
+      {
+        "message": "附近有什么好吃的",
+        "stubGoal": { "clarifyingQuestion": "你想找哪类餐厅，或具体想吃什么？" },
+        "expect": { "shouldAsk": true }
+      }
+    ]
+  }
+]

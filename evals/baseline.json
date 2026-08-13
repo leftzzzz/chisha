@@ -1,0 +1,94 @@
+{
+  "updatedAt": "2026-08-13",
+  "totals": {
+    "searchRounds": 20,
+    "searchSteps": 18,
+    "searchCalls": 20,
+    "plannerModelCalls": 0,
+    "evaluationCalls": 18,
+    "evaluatedSlots": 50,
+    "duplicateEvaluations": 1,
+    "modelCalls": 0,
+    "serialModelSteps": 0,
+    "askRate": 0.308
+  },
+  "cases": {
+    "strict-distance-hotpot": {
+      "passed": true,
+      "searchSteps": 2,
+      "searchRounds": 2,
+      "duplicateEvaluations": 0,
+      "primaryCount": 1
+    },
+    "exclusion-only": {
+      "passed": true,
+      "searchSteps": 0,
+      "searchRounds": 0,
+      "duplicateEvaluations": 0,
+      "primaryCount": 0
+    },
+    "no-result": {
+      "passed": true,
+      "searchSteps": 1,
+      "searchRounds": 1,
+      "duplicateEvaluations": 0,
+      "primaryCount": 0
+    },
+    "exact-hotpot": {
+      "passed": true,
+      "searchSteps": 2,
+      "searchRounds": 3,
+      "duplicateEvaluations": 0,
+      "primaryCount": 8
+    },
+    "exact-steak": {
+      "passed": true,
+      "searchSteps": 2,
+      "searchRounds": 3,
+      "duplicateEvaluations": 0,
+      "primaryCount": 5
+    },
+    "exact-sushi": {
+      "passed": true,
+      "searchSteps": 2,
+      "searchRounds": 2,
+      "duplicateEvaluations": 0,
+      "primaryCount": 4
+    },
+    "exact-category": {
+      "passed": true,
+      "searchSteps": 2,
+      "searchRounds": 2,
+      "duplicateEvaluations": 1,
+      "primaryCount": 7
+    },
+    "clarify-then-answer": {
+      "passed": true,
+      "searchSteps": 2,
+      "searchRounds": 2,
+      "duplicateEvaluations": 0,
+      "primaryCount": 7
+    },
+    "switch-target": {
+      "passed": true,
+      "searchSteps": 4,
+      "searchRounds": 4,
+      "duplicateEvaluations": 0,
+      "primaryCount": 4
+    },
+    "open-anything": {
+      "passed": true,
+      "searchSteps": 1,
+      "searchRounds": 1,
+      "duplicateEvaluations": 0,
+      "primaryCount": 5
+    },
+    "open-vague-browsing": {
+      "passed": true,
+      "searchSteps": 0,
+      "searchRounds": 0,
+      "duplicateEvaluations": 0,
+      "primaryCount": 0
+    }
+  }
+}

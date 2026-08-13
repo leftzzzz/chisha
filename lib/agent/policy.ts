@@ -1,11 +1,12 @@
 /**
- * Agent 确定性策略的唯一实现。
+ * Agent 确定性策略的唯一实现，也是唯一的 planner。
  *
- * Runtime（runtimeV3）与 Planner（supervisorPlanner）都从这里取策略，
- * 不再各自维护一份——历史上两份实现已经在用户可见文案上发生过漂移。
+ * "下一步做什么"完全由这里决定：模型不再参与常规轮次的动作决策。
+ * 历史上这套顺序逻辑同时存在于 runtimeV3、supervisorPlanner 和 guard 三处，
+ * 阈值已经漂移过（见 docs/agent-loop-shape-review-2026-08.md 3.2）。
  *
- * 这里只放"给定状态该怎么做"的确定性决策，不做语义理解（属于 Supervisor）
- * 也不做候选准入（属于 FinalGuard）。
+ * 边界：这里只做"给定状态该怎么做"的确定性决策，不做语义理解（属于
+ * Supervisor / KeywordExpansion），也不做候选准入（属于 FinalGuard）。
  */
 
 import type { Location } from '@/types';
@@ -13,6 +14,7 @@ import { countDistinctBrands } from '@/lib/restaurantIdentity';
 import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
 import { isOpenExplorationAuthorized, isSearchIntentAuthorizedForPrimary } from './authorization';
 import { isPrimaryRecommendationAllowed } from './finalGuard';
+import type { FinishReason } from './finishReason';
 import {
   DEFAULT_POI_TYPE,
   lookupFoodPoiTypes,
@@ -24,6 +26,7 @@ import type {
   PendingQuestion,
   RestaurantCandidate,
   SearchAttempt,
+  SearchIntent,
   SearchKeywordTarget,
   SearchPlan,
   UserGoal,
@@ -43,11 +46,299 @@ export interface PolicyContext {
 
 export type TargetKind = 'initial' | 'related' | 'broadened';
 
+/**
+ * 策略阈值的唯一来源。
+ *
+ * 这两个数此前分别写在 supervisorPlanner（min(6, targetCount)）与 runtime
+ * guard（targetCount）里，在 6–8 个品牌的区间给出相反结论。合并到这里。
+ */
+export const POLICY_LIMITS = {
+  /** 达到这么多个不同品牌即可考虑结束 */
+  ENOUGH_DISTINCT_BRANDS: 3,
+  /**
+   * 低于这个品牌数就继续尝试联想词，即使已经够结束。
+   *
+   * 取 targetCount（转盘要 8 个格子）而不是更小的值：开启 fan-out 后同一批
+   * 里多铺一个关键词不增加串行步数，多样性几乎是免费的。关掉 fan-out 时这个
+   * 阈值会换成多搜一轮——那是回滚路径上可以接受的代价。
+   */
+  KEEP_EXPANDING_BELOW: 8,
+} as const;
+
+/**
+ * 一批最多铺开几个搜索计划。
+ *
+ * 关掉并行开关时恒为 1，行为与串行完全一致——这是 fan-out 的回滚开关。
+ */
+export function maxPlansPerBatch(): number {
+  if (process.env.AGENT_PARALLEL_SEARCH === 'false') {
+    return 1;
+  }
+
+  const configured = Number.parseInt(process.env.AGENT_SEARCH_CONCURRENCY ?? '', 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : 3;
+}
+
 const DEFAULT_RADIUS_METERS = 1800;
 const MIN_RADIUS_METERS = 300;
 const MAX_RADIUS_METERS = 5000;
 const RADIUS_GROWTH = 1.25;
 const MAX_POI_TYPE_CODES = 5;
+const OPEN_EXPLORATION_FALLBACK_KEYWORDS = ['餐厅', '美食'];
+
+/** 策略给 Runtime 的决策。Runtime 只负责执行，不再自行推导下一步。 */
+export type PolicyDecision =
+  | { kind: 'search'; plans: SearchPlan[] }
+  | {
+      kind: 'finish';
+      reason: FinishReason;
+      selectedIds: string[];
+      candidateIds: string[];
+      confidence: number;
+    }
+  /** 确定性关键词全部试完仍无主推荐，交给模型重新构思方向 */
+  | { kind: 'replan'; exhausted: { triedKeywords: string[]; triedIntents: SearchIntent[] } }
+  | { kind: 'ask'; question: PendingQuestion };
+
+/** decideNextAction 需要的额外运行时状态。 */
+export interface PolicyRuntimeState {
+  /** 本轮是否已经用掉了那次 replan 机会 */
+  replanUsed?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// 决策
+// ---------------------------------------------------------------------------
+
+/**
+ * 决定下一步做什么。
+ *
+ * 分支顺序即优先级：够了就结束 > 预算耗尽 > 有未授权候补就请求授权 >
+ * 还有可搜的就搜 > 有主推荐就结束 > 还能重新构思就 replan > 追问。
+ */
+export function decideNextAction(
+  ctx: PolicyContext,
+  runtime: PolicyRuntimeState = {}
+): PolicyDecision {
+  const distinctBrands = distinctPrimaryBrandCount(ctx);
+  const remainingSearchCalls = Math.max(0, ctx.maxSearchCalls - ctx.attempts.length);
+
+  if (distinctBrands >= enoughDistinctBrands(ctx) && !shouldKeepExpanding(ctx, distinctBrands)) {
+    return finishDecision(ctx, 'ENOUGH_PRIMARY', 0.82);
+  }
+
+  if (remainingSearchCalls <= 0) {
+    return hasPrimaryCandidates(ctx)
+      ? finishDecision(ctx, 'SEARCH_BUDGET_EXHAUSTED', 0.62)
+      : { kind: 'ask', question: buildNoPrimaryQuestion(ctx) };
+  }
+
+  // 已经有通过验证、只差一个授权就能进主推荐的候补：该问，不该继续搜。
+  if (hasUnauthorizedBroadenedCandidates(ctx)) {
+    return { kind: 'ask', question: buildNoPrimaryQuestion(ctx) };
+  }
+
+  const plans = planSearchBatch(ctx, remainingSearchCalls);
+  if (plans.length > 0) {
+    return { kind: 'search', plans };
+  }
+
+  if (hasPrimaryCandidates(ctx)) {
+    return finishDecision(ctx, 'NO_MORE_STRATEGY', 0.68);
+  }
+
+  if (!runtime.replanUsed) {
+    return {
+      kind: 'replan',
+      exhausted: {
+        triedKeywords: Array.from(new Set(ctx.attempts.flatMap((attempt) => attempt.keywords))),
+        triedIntents: Array.from(new Set(ctx.attempts.map((attempt) => attempt.searchIntent))),
+      },
+    };
+  }
+
+  return { kind: 'ask', question: buildNoPrimaryQuestion(ctx) };
+}
+
+/**
+ * 铺开这一步要执行的搜索计划。
+ *
+ * 顺序：用户明确目标 > 开放探索兜底 > 联想词 > 相邻品类 > 通用兜底。
+ * 同一批里只放同一类目标，避免"还没搜用户说的东西就先去搜相邻品类"。
+ */
+export function planSearchBatch(
+  ctx: PolicyContext,
+  remainingSearchCalls = Math.max(0, ctx.maxSearchCalls - ctx.attempts.length),
+  maxPlans = maxPlansPerBatch()
+): SearchPlan[] {
+  const budget = Math.max(0, Math.min(maxPlans, remainingSearchCalls));
+  if (budget === 0) {
+    return [];
+  }
+
+  const distinctBrands = distinctPrimaryBrandCount(ctx);
+
+  const initial = untriedTargets(ctx, 'initial');
+  if (initial.length > 0) {
+    return buildPlanBatch(ctx, initial, 'exact', () => true, budget, '先搜索用户明确表达的餐饮目标。');
+  }
+
+  if (isOpenExplorationContext(ctx) && !hasTriedIntent(ctx, 'fallback')) {
+    return buildPlanBatch(
+      ctx,
+      [{ keyword: nextFallbackKeyword(ctx) }],
+      'fallback',
+      () => true,
+      1,
+      '开放需求下先使用通用餐饮兜底搜索。'
+    );
+  }
+
+  const related = untriedTargets(ctx, 'related');
+  const broadened = untriedTargets(ctx, 'broadened');
+  const broadenedAuthorized = (target: SearchKeywordTarget) =>
+    isSearchIntentAuthorizedForPrimary(ctx.goal, 'broadened', [target.keyword]);
+
+  // 一个结果都没有：优先换镜头而不是加深同一个镜头。把预算全花在同义词上
+  // 会把相邻品类饿死——用户要的是"有没有能吃的"，不是"同义词穷举得全不全"。
+  if (distinctBrands === 0 && (related.length > 0 || broadened.length > 0)) {
+    const diverse = [
+      ...buildPlanBatch(ctx, related.slice(0, 1), 'synonym', () => true, 1, '原始目标没有结果，先试一个联想关键词。'),
+      ...buildPlanBatch(ctx, broadened, 'broadened', broadenedAuthorized, budget, '原始目标没有结果，同时尝试相邻品类。'),
+    ].slice(0, budget);
+
+    if (diverse.length > 0) {
+      return diverse;
+    }
+  }
+
+  if (related.length > 0 && distinctBrands < POLICY_LIMITS.KEEP_EXPANDING_BELOW) {
+    return buildPlanBatch(
+      ctx,
+      related,
+      'synonym',
+      () => true,
+      budget,
+      '主推荐未满目标数，继续尝试联想关键词。'
+    );
+  }
+
+  if (broadened.length > 0 && distinctBrands === 0) {
+    return buildPlanBatch(
+      ctx,
+      broadened,
+      'broadened',
+      broadenedAuthorized,
+      budget,
+      '原始目标没有结果，尝试相邻品类。'
+    );
+  }
+
+  if (isOpenExplorationAuthorized(ctx.goal) && !hasTriedIntent(ctx, 'fallback')) {
+    return buildPlanBatch(
+      ctx,
+      [{ keyword: nextFallbackKeyword(ctx) }],
+      'fallback',
+      () => true,
+      1,
+      '开放需求下使用通用餐饮兜底搜索。'
+    );
+  }
+
+  return [];
+}
+
+function buildPlanBatch(
+  ctx: PolicyContext,
+  targets: SearchKeywordTarget[],
+  searchIntent: SearchPlan['searchIntent'],
+  allowedForPrimary: (target: SearchKeywordTarget) => boolean,
+  budget: number,
+  reason: string
+): SearchPlan[] {
+  const plans: SearchPlan[] = [];
+  const usedKeywords = new Set<string>();
+
+  for (const target of targets) {
+    if (plans.length >= budget) {
+      break;
+    }
+
+    const [keyword] = normalizeSearchKeywords([target.keyword]);
+    if (!keyword || usedKeywords.has(keyword) || hitsExclusion(ctx.goal, keyword)) {
+      continue;
+    }
+
+    const authorized = allowedForPrimary(target);
+    const plan = buildSearchPlan(
+      ctx,
+      target,
+      searchIntent,
+      authorized,
+      authorized ? reason : `${reason}未获授权，结果只作为候补。`
+    );
+
+    if (hasTriedPlan(ctx, plan) || plans.some((existing) => searchPlanKey(existing) === searchPlanKey(plan))) {
+      continue;
+    }
+
+    usedKeywords.add(keyword);
+    plans.push(plan);
+  }
+
+  return plans;
+}
+
+function finishDecision(
+  ctx: PolicyContext,
+  reason: FinishReason,
+  confidence: number
+): Extract<PolicyDecision, { kind: 'finish' }> {
+  const primary = primaryCandidates(ctx);
+  const primarySet = new Set(primary);
+
+  return {
+    kind: 'finish',
+    reason,
+    selectedIds: primary.slice(0, ctx.targetCount).map((candidate) => candidate.restaurant.id),
+    candidateIds: ctx.candidates
+      .filter((candidate) => !primarySet.has(candidate))
+      .slice(0, 20)
+      .map((candidate) => candidate.restaurant.id),
+    confidence,
+  };
+}
+
+function enoughDistinctBrands(ctx: PolicyContext): number {
+  return Math.min(POLICY_LIMITS.ENOUGH_DISTINCT_BRANDS, ctx.targetCount);
+}
+
+/** 已经够结束，但还值不值得再多搜一轮。 */
+function shouldKeepExpanding(ctx: PolicyContext, distinctBrands: number): boolean {
+  if (ctx.attempts.length >= ctx.maxSearchCalls) {
+    return false;
+  }
+
+  const wantsMoreVariety = distinctBrands
+    < Math.min(POLICY_LIMITS.KEEP_EXPANDING_BELOW, ctx.targetCount);
+
+  return (wantsMoreVariety && hasUntriedTarget(ctx, 'related'))
+    || (distinctBrands === 0 && hasUntriedTarget(ctx, 'broadened'));
+}
+
+function hitsExclusion(goal: UserGoal, keyword: string): boolean {
+  return goal.exclusions.some((exclusion) => exclusion && keyword.includes(exclusion));
+}
+
+/**
+ * 开放探索的通用兜底词。
+ *
+ * 一次搜索只能带一个意图词，按顺序取第一个未尝试过的。
+ */
+function nextFallbackKeyword(ctx: PolicyContext): string {
+  return OPEN_EXPLORATION_FALLBACK_KEYWORDS.find((keyword) => !hasTriedKeyword(ctx, keyword))
+    ?? OPEN_EXPLORATION_FALLBACK_KEYWORDS[0];
+}
 
 // ---------------------------------------------------------------------------
 // 搜索计划
