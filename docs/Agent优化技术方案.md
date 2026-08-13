@@ -1,5 +1,10 @@
 # Agent 优化技术方案
 
+> ⚠️ **已过期，仅作演进记录。** 本文描述的 Agent 架构已被后续两轮改造取代：
+> 当前形态见 `docs/agent-loop-shape-review-2026-08.md` 与
+> `docs/Agent-Loop-形态重构技术方案-2026-08.md`。
+> 文中的 planner 选 action 流程已被 policy.decideNextAction 取代。
+
 审计日期：2026-06-03  
 适用范围：`app/api/agent/chat/route.ts`、`lib/agent/runtimeV3.ts`、`lib/agent/supervisorPlanner.ts`、`lib/agent/supervisor.ts`、`lib/agent/session.ts`、`lib/agent/guards.ts`、`lib/agent/finalGuard.ts`、`lib/agent/subagents/evaluationAgent.ts`、前端 Agent 状态展示链路。
 

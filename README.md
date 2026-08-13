@@ -105,30 +105,46 @@ npm run db:migrate:remote
 
 ## Agent 架构总览
 
-当前主链路是 Runtime V3，并已按方案 A 收敛到单一主控概念：`SupervisorPlannerAgent`。它通过 `lib/agent/supervisorPlanner.ts` 提供 canonical 入口，统一维护 `UserGoal`、处理追问、生成 `GoalPatch`，并选择下一步 `AgentAction`。Runtime 只负责编排、执行工具、权限、预算、guard 和审计。
+当前主链路是 Runtime V3。核心原则是**模型只做代码枚举不了的事**：
 
-当前实现仍可能在一轮推荐里分两次调用 planner：先维护 goal，再经过 `KeywordExpansionHelper` 补搜索词，随后让同一个 planner 选择 action。这样先消除第二 Supervisor 概念，再评估是否把 goal/action 合并为一次模型调用。
+| 谁 | 负责什么 | 为什么是它 |
+|---|---|---|
+| Supervisor（模型） | 理解口语、维护 `UserGoal`、决定要不要追问 | 自然语言意图无法枚举 |
+| KeywordExpansion（模型） | 把目标扩成更容易命中 POI 的搜索词 | 同义词与相邻品类无法枚举 |
+| Evaluation（模型） | 判断 POI 是否满足目标 | 语义匹配无法枚举 |
+| **`policy.ts`（代码）** | **下一步做什么：搜哪些词、够不够、要不要追问** | **可枚举，代码算得比模型快也比模型稳** |
+
+常规轮次没有模型参与动作决策。模型 planner 只保留一个罕见分支
+`runSearchReplan`：确定性关键词全部试完仍无主推荐时调一次，可以给新搜索词，
+也可以给一个贴合上下文的问句。
+
+历史上"下一步搜什么"同时存在于 planner、runtime guard 和预算兜底三处并已
+发生阈值漂移，收敛过程见 `docs/agent-loop-shape-review-2026-08.md`。
 
 ```mermaid
 graph TB
     U["User Message"] --> API["/api/agent/chat"]
     API --> STORE["AgentSessionStore"]
-    STORE --> CTX["ContextBuilder"]
-    CTX --> ORCH["Agent Orchestrator / runtimeV3"]
+    STORE --> ORCH["Runtime V3"]
 
-    ORCH --> SUP["SupervisorPlannerAgent"]
-    SUP --> KW["KeywordExpansionHelper"]
-    SUP --> RAW["Raw AgentAction"]
-    RAW --> GUARD["ActionGuard"]
+    ORCH --> SUP["Supervisor 模型：UserGoal / 追问"]
+    SUP --> KW["KeywordExpansion 模型"]
+    SUP -. "首批不依赖联想词，并发发起" .-> POLICY
 
-    GUARD -- "allow search" --> TOOL["Search Tool: Amap / OSM"]
-    TOOL --> EVA["EvaluationAgent"]
+    KW --> POLICY["policy.decideNextAction"]
+
+    POLICY -- "search" --> BATCH["一次铺开 N 个 SearchPlan"]
+    BATCH --> VALID["validateSearchPlan 只校验"]
+    VALID --> TOOL["并行 Amap / OSM"]
+    TOOL --> EVA["EvaluationAgent + 一轮内裁决缓存"]
     EVA --> VG["VerdictGuard"]
     VG --> MERGE["Candidate Merge"]
-    MERGE --> ORCH
+    MERGE --> POLICY
 
-    GUARD -- "ask_user" --> PAUSE["Pause Session"]
-    GUARD -- "finish" --> FG["FinalGuard"]
+    POLICY -- "replan" --> RP["runSearchReplan 模型，一轮最多一次"]
+    RP --> POLICY
+    POLICY -- "ask" --> PAUSE["Pause Session"]
+    POLICY -- "finish" --> FG["FinalGuard"]
     FG --> ASM["ResultAssembler"]
     ASM --> UI["Turntable UI"]
 ```
@@ -137,15 +153,20 @@ graph TB
 
 1. 用户输入：“附近想吃便宜点的川菜，不要太远。”
 2. `/api/agent/chat` 校验请求，加载或创建 session。
-3. `SupervisorPlannerAgent` 理解用户消息，创建或更新 `UserGoal`。
-4. `KeywordExpansionHelper` 为明确目标生成可搜索的同义词或相邻品类。
-5. `SupervisorPlannerAgent` 基于 goal、attempts、observations 和 candidates 决定下一步：搜索、追问或结束。
-6. `ActionGuard` 校验 action 是否安全、合法、在预算内。
-7. 搜索工具调用高德，失败时 fallback 到 OSM。
-8. `EvaluationAgent` 根据事实字段验证候选是否符合用户目标。
+3. `Supervisor` 理解用户消息，创建或更新 `UserGoal`；需要澄清就在这里追问。
+4. `KeywordExpansionHelper` 生成同义词与相邻品类。**首批 exact 搜索不依赖它，
+   两者并发**——首批只用得到 `UserGoal.primaryKeywords`。
+5. `policy.decideNextAction` 决定下一步：搜索（一次铺开整批计划）、结束、
+   追问，或在关键词枯竭时 replan。
+6. `validateSearchPlan` 校验计划。计划由 policy 生成，任何违规都是编程错误，
+   记 error 日志后换下一个决策——**不改写、也不请求重写**。
+7. 批内计划并行调用高德，失败时 fallback 到 OSM。
+8. `EvaluationAgent` 根据事实字段验证候选。一轮内同一家店只判一次
+   （`evaluationCache.ts`）。
 9. `VerdictGuard` 清理模型 verdict 中不合法的内容。
 10. `FinalGuard` 决定哪些候选能进入主推荐。
-11. 前端收到 SSE 事件，展示进度、追问、结果和转盘。
+11. 前端收到 SSE 事件，展示进度、追问、结果和转盘。同一步的并发计划按
+    `planId` 聚合展示。
 
 ## 核心概念
 
@@ -172,8 +193,8 @@ graph TB
 
 - `lib/agent/types.ts`
 - `lib/agent/schemas/goal.ts`
-- `lib/agent/supervisorPlanner.ts`
-- `lib/agent/supervisor.ts`（兼容旧 goal helper 的过渡入口）
+- `lib/agent/supervisor.ts`（目标理解与 GoalPatch 的实现）
+- `lib/agent/supervisorPlanner.ts`（对外入口，转发目标理解 + replan）
 
 ### SearchPlan
 
@@ -187,13 +208,17 @@ graph TB
 - 是否允许结果进入主推荐
 - 搜索理由
 
-注意：高德 POI 搜索中，`keywords` 不要把多个无关意图合成一个字符串，例如不要生成 `川菜|咖啡|奶茶`。多个意图应该拆成多次搜索。
+注意：高德 POI 搜索中，`keywords` 不要把多个无关意图合成一个字符串，例如不要生成 `川菜|咖啡|奶茶`。多个意图应该拆成多次搜索——这条约束已经写进
+`SearchPlanSchema`（`keywords` 长度恒为 1），多个意图由 `planSearchBatch`
+铺成同一批里的多个计划并行执行。
+
+计划全部由 `policy.ts` 生成，模型不再产出 `SearchPlan`。
 
 相关文件：
 
 - `lib/agent/schemas/plan.ts`
-- `lib/agent/supervisorPlanner.ts`
-- `lib/agent/supervisor.ts`（兼容旧 goal helper 的过渡入口）
+- `lib/agent/policy.ts`（唯一生成方）
+- `lib/agent/guards.ts`（`validateSearchPlan`）
 - `lib/agent/runtimeV3.ts`
 - `lib/agent/poiTaxonomy.ts`
 
@@ -272,9 +297,10 @@ graph TB
 职责：
 
 - Agent loop 编排。
-- 调用 SupervisorPlanner、KeywordExpansionHelper、Evaluation。
+- 调用 Supervisor、KeywordExpansionHelper、Evaluation。
+- 执行 `policy.decideNextAction` 给出的决策。
 - 控制搜索次数、action 次数和评价 batch。
-- 执行搜索 action。
+- 并行执行批内搜索计划，串行提交结果（保证 `sourceAttempt` 索引稳定）。
 - 触发 guard 和 FinalGuard。
 - 生成 SSE 事件和 runtime state。
 
@@ -288,43 +314,56 @@ graph TB
 
 不要做：
 
-- 不要把 Runtime 变成隐藏 Planner。
-- 不要静默把模型的 `finish` 改成 `search`。
-- 不要静默把多关键词计划截成单关键词而不记录原因。
+- 不要把 Runtime 变成第二个 Planner——顺序决策只能写在 `policy.ts`。
+- 不要静默改写 policy 给出的计划。计划非法说明 policy 有 bug，应该报出来。
 - 不要让未验证候选进入主推荐。
 
-当前代码里 Runtime 仍承担了一些策略兜底，这是迁移期现实。新开发应逐步把这些逻辑改成结构化 `GuardrailDecision` 和 trace。
-
-更具体地说，Runtime 的边界应是：
+Runtime 的边界：
 
 | Runtime 可以做 | Runtime 不应该做 |
 |---|---|
 | 执行 loop | 理解用户到底想吃什么 |
-| 调用模型子模块 | 替 Planner 选择语义策略 |
+| 调用模型子模块 | 自己推导"下一步搜什么" |
 | 调用 Amap/OSM 工具 | 编造或修改餐厅事实 |
 | 限制预算、半径、并发 | 静默把一个 action 改成另一个 action |
 | 调用 Guard / FinalGuard | 把未验证候选提升为主推荐 |
 | 保存 session / trace | 在前端或存储层补业务规则 |
 
-如果模型 action 不合法，推荐做法不是 Runtime 直接替它改好，而是：
+计划不合法时：记 `guard_decision` trace + `logger.error`，把该批标记为已尝试，
+重新向 policy 要决策。**不要就地改写，也不要请求模型重写**——后者在 guard
+已经算出替代方案之后再花一次模型往返，只可能亏。
 
-1. 记录模型原始 action。
-2. 生成结构化 guard violation。
-3. 返回 `request_rewrite` 让模型重写。
-4. 如果必须由 Runtime 强制结束或追问，记录 `runtime_decision` trace。
+### `lib/agent/policy.ts`
+
+职责：
+
+- **唯一 planner**：`decideNextAction` 决定搜索 / 结束 / 追问 / replan。
+- `planSearchBatch` 一次铺开整批搜索计划。
+- 计划构造、半径递增、poiType 选择、关键词队列。
+- 追问文案与授权 effect（`buildNoPrimaryQuestion` / `buildBroadenEffect`）。
+- 阈值集中在 `POLICY_LIMITS`。
+
+不要做：
+
+- 不要做语义理解——那是 Supervisor 的事。
+- 不要做候选准入——那是 FinalGuard 的事。
+- 不要在 runtime 或 guard 里另写一份顺序决策。
+- 不要把阈值散落到各处：改行为就改 `POLICY_LIMITS`。
+
+分支优先级（即 `decideNextAction` 的顺序）：够了就结束 > 预算耗尽 >
+有未授权候补就请求授权 > 还有可搜的就搜 > 有主推荐就结束 > 还能重新构思
+就 replan > 追问。
+
+一个刻意的策略：**一个结果都没有时优先换镜头，而不是加深同一个镜头**。
+批次里放 1 个同义词 + 相邻品类，而不是把预算全花在同义词穷举上。
 
 ### `lib/agent/supervisorPlanner.ts`
 
 职责：
 
-- 理解用户消息。
-- 创建或更新 `UserGoal`。
-- 处理追问回答。
-- 判断是否需要继续澄清。
-- 输出 `GoalPatch` 或 `PendingQuestion`。
-- 在已有 `UserGoal`、attempts、observations、candidates 基础上选择下一步 `AgentAction`。
-- action 类型只有三种：`search`、`ask_user`、`finish`。
-- 给出搜索、追问或结束的策略理由。
+- 转发目标理解（实现在 `supervisor.ts`）。
+- `runSearchReplan`：确定性关键词全部试完仍无主推荐时重新构思方向，
+  一轮最多一次，可返回新搜索词或一个追问；返回 `null` 时回落模板追问。
 
 不要做：
 
@@ -334,8 +373,7 @@ graph TB
 - 不要生成或修改餐厅事实。
 - 不要自由生成高德 POI typecode。
 - 不要把“不辣”“都可以”“环境好”这类非餐饮目标塞进搜索关键词。
-- 不要选择没有观察到的餐厅 id。
-- 不要绕过 `allowedForPrimary`。
+- **不要重新承担常规轮次的 action 决策**——那是 `policy.ts` 的职责。
 
 ### `lib/agent/subagents/keywordExpansionAgent.ts`
 
@@ -376,10 +414,29 @@ graph TB
 
 重要约束：如果 `EvaluationAgent` 失败，系统可以重试、缓存命中、暂停、报错或只返回未验证候补，但不能用本地规则生成 `passed` verdict。
 
+### `lib/agent/evaluationCache.ts`
+
+职责：
+
+- 一轮内同一家餐厅只送一次 `EvaluationAgent`。高德对相邻关键词会返回大量
+  重叠 POI，而 Evaluation 是调用量最大的 agent。
+- 并发批次下用申领机制协调：同一家店只由一个计划评估，其余等待结果。
+
+三条刻意的边界（改这个文件前先读它们）：
+
+1. 缓存的是**模型原始裁决**，不是准入结论。`primaryEligible` 仍要在
+   `applyVerdictGuard` 里与当轮 plan 的 `allowedForPrimary` 相与。
+2. **只在一轮内复用**。跨轮的裁决存在 `runtimeState.candidates` 里，但那份
+   `primaryEligible` 是 guard 之后（甚至被 broadenAdmission 提升过）的值。
+3. **只复用 `passed`，且产出它的镜头不比当前更宽**。「寿司专门店」在
+   「日本料理」下判失败、在「寿司」下应当通过——failed / unverified 一律重判。
+
 ### `lib/agent/guards.ts`
 
 职责：
 
+- `validateSearchPlan`：校验 policy 生成的计划（schema、排除项、严格距离、
+  重复计划）。**只校验并拒绝，不改写字段，也不请求重写。**
 - 在模型 verdict 后再次检查硬约束。
 - 清理未观察 id。
 - 阻止未授权候选进入主推荐。
@@ -390,6 +447,7 @@ graph TB
 - 不要生成新的语义判断。
 - 不要把 `unverified` 改成 `passed`。
 - 不要作为隐藏策略层替 Agent 重新规划。
+- 不要"顺手修好"非法计划——那会掩盖 policy 的 bug。
 
 ### `lib/agent/finalGuard.ts`
 
@@ -445,12 +503,15 @@ graph TB
 - 调用 `/api/agent/chat`。
 - 消费 SSE 事件。
 - 更新前端进度、问题、结果。
+- 按 `planId` 聚合同一步内并发计划的进度：关键词合并展示、`found` 累加。
 
 不要做：
 
 - 不要在前端重新解释用户意图。
 - 不要根据餐厅字段自己过滤主推荐。
 - 不要丢失 `sessionId` 和 pending question。
+- 不要用覆盖式写入处理搜索事件——并发下后到的会盖掉先到的，用户只看得见
+  最后一个关键词。
 
 ### `context/AppReducer.ts`
 
@@ -542,11 +603,23 @@ graph TB
 
 Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
-- 模型原始 action 是什么
+- policy 这一步为什么选了这个决策（`runtime_decision` trace）
 - Guard 是否拦截
 - 搜索工具返回了什么
-- EvaluationAgent 为什么通过或拒绝
+- EvaluationAgent 为什么通过或拒绝，还是命中了缓存
 - FinalGuard 为什么没有让某个候选进入主推荐
+
+### 9. 只跑单测就改 loop 行为
+
+单测锁的是分支，锁不住"这一轮总共搜了几步、评了几次、追没追问"。
+改 `policy.ts` / `runtimeV3.ts` / `evaluationCache.ts` 之后必须跑
+`npm run eval`，并在 PR 里附基线 diff。
+
+### 10. 并发化时忘了共享可变状态
+
+首搜与联想词并发、批内计划并发之后，几个路径会同时写 `context`。
+串行下安全的共享容器在并行下不一定安全——曾经就因为两个 metrics 容器
+互相覆盖丢过一半调用记录。加并发时把"谁往哪个容器写"单独过一遍。
 
 ## 常见开发任务应该改哪里
 
@@ -556,7 +629,7 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 - `lib/agent/types.ts`
 - `lib/agent/schemas/goal.ts`
-- `lib/agent/supervisorPlanner.ts`
+- `lib/agent/supervisor.ts`
 - `lib/agent/constraintEvaluator.ts`
 - `lib/agent/guards.ts`
 - `lib/agent/finalGuard.ts`
@@ -578,14 +651,15 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 需要检查：
 
-- `lib/agent/supervisorPlanner.ts`
+- `lib/agent/policy.ts`（顺序决策、批次、阈值——**先看这里**）
 - `lib/agent/runtimeV3.ts`
 - `lib/agent/poiTaxonomy.ts`
 - `lib/agent/subagents/keywordExpansionAgent.ts`
+- `__tests__/lib/agent/policy.test.ts`
 - `__tests__/lib/agent/runtimeV3.test.ts`
-- `__tests__/lib/agent/supervisorPlanner.test.ts`
+- `evals/cases/`（新策略要有对应的 golden case）
 
-不要在 `lib/amap.ts` 里写用户策略。
+不要在 `lib/amap.ts` 里写用户策略，也不要把顺序决策写回 runtime 或 guard。
 
 ### 修改主推荐准入
 
@@ -605,7 +679,8 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 - `app/api/agent/chat/route.ts`
 - `lib/agent/session.ts`
-- `lib/agent/supervisorPlanner.ts`
+- `lib/agent/supervisor.ts`
+- `lib/agent/goalVersion.ts`
 - `lib/agent/runtimeV3.ts`
 - `hooks/useRestaurantSearch.ts`
 - `context/AppReducer.ts`
@@ -643,9 +718,11 @@ chisha/
 │
 ├── lib/
 │   ├── agent/
-│   │   ├── runtimeV3.ts
-│   │   ├── supervisorPlanner.ts
-│   │   ├── supervisor.ts
+│   │   ├── runtimeV3.ts          # loop controller
+│   │   ├── policy.ts             # 唯一 planner
+│   │   ├── supervisor.ts         # 目标理解（模型）
+│   │   ├── supervisorPlanner.ts  # 目标理解转发 + replan
+│   │   ├── evaluationCache.ts    # 一轮内候选裁决缓存
 │   │   ├── session.ts
 │   │   ├── d1SessionStore.ts
 │   │   ├── guards.ts
@@ -653,6 +730,7 @@ chisha/
 │   │   ├── evaluator.ts
 │   │   ├── resultAssembler.ts
 │   │   ├── modelClient.ts
+│   │   ├── metrics.ts
 │   │   ├── poiTaxonomy.ts
 │   │   ├── schemas/
 │   │   └── subagents/
@@ -664,6 +742,7 @@ chisha/
 │
 ├── types/
 ├── docs/
+├── evals/                        # Agent loop 行为评测集（npm run eval）
 ├── __tests__/
 ├── migrations/
 ├── package.json
@@ -698,11 +777,12 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 
 - `thinking`
 - `status`
+- `heartbeat`（保活，客户端据此判断流是否卡死）
 - `action`
 - `tool_start`
 - `tool_result`
-- `searching`
-- `search_result`
+- `searching`（并发批次下同一步会有多条，用 `planId` 区分）
+- `search_result`（同上；`total` 是单个计划的数量，需要前端按批次累加）
 - `observation`
 - `guardrail`
 - `partial_results`
@@ -748,18 +828,29 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 | `AGENT_EVALUATION_LIMIT` | 否 | Evaluation 候选硬上限 | 未设置 |
 | `AGENT_POI_PAGES_PER_SEARCH` | 否 | 每次 POI 搜索页数 | `2` |
 | `AGENT_DETAIL_ENRICH_LIMIT` | 否 | 每次详情补全数量 | `6` |
+| `AGENT_PARALLEL_SEARCH` | 否 | 设为 `false` 关闭一轮内并行搜索（每批只跑 1 个计划） | 开启 |
+| `AGENT_SEARCH_CONCURRENCY` | 否 | 一批最多铺开几个搜索计划 | `3` |
+| `AGENT_CONCURRENT_FIRST_SEARCH` | 否 | 设为 `false` 关闭"首搜与联想词并发" | 开启 |
+| `AGENT_HEARTBEAT_MS` | 否 | SSE 心跳间隔；改动需同步 `lib/api.ts` 的超时阈值 | `10000` |
+| `AGENT_DETERMINISTIC` | 否 | 设为 `1` 强制走确定性分支（测试默认开启） | - |
+| `OPENAI_MODEL_SUPERVISOR` | 否 | 目标理解模型 | 继承 `OPENAI_MODEL` |
+| `OPENAI_MODEL_PLANNER` | 否 | replan 模型 | 继承 `OPENAI_MODEL` |
+| `OPENAI_MODEL_EVALUATION` | 否 | 候选验证模型，调用量最大，可配便宜模型 | 继承 `OPENAI_MODEL` |
+| `OPENAI_MODEL_KEYWORD` | 否 | 关键词联想模型 | 继承 `OPENAI_MODEL` |
 | `NEXT_PUBLIC_APP_URL` | 否 | 应用 URL | `http://localhost:3000` |
 | `LOG_LEVEL` | 否 | 日志级别 | `info` |
-| `AGENT_SUPERVISOR_V2` | 否 | 旧兼容开关，设置为 `false` 回退旧 runtime | `true` |
 | `CHISHA_DB` | 生产必需 | Cloudflare D1 binding，用于持久化 session | - |
 
 ## 测试建议
 
 Agent 相关测试集中在：
 
+- `__tests__/lib/agent/policy.test.ts`（顺序决策与批次）
 - `__tests__/lib/agent/runtimeV3.test.ts`
+- `__tests__/lib/agent/runtimeV3.parallel.test.ts`
+- `__tests__/lib/agent/evaluationCache.test.ts`
 - `__tests__/lib/agent/supervisor.test.ts`
-- `__tests__/lib/agent/supervisorPlanner.test.ts`
+- `__tests__/lib/agent/supervisorPlanner.test.ts`（replan）
 - `__tests__/lib/agent/finalGuard.test.ts`
 - `__tests__/lib/agent/guards.test.ts`
 - `__tests__/lib/agent/subagents/evaluationAgent.test.ts`
@@ -775,19 +866,43 @@ Agent 相关测试集中在：
 
 如果改 Amap POI 搜索规则，必须补 `poiTaxonomy` 或 runtime POI type 测试。
 
+模型决策路径默认被 `AGENT_DETERMINISTIC=1`（`jest.setup.js`）关掉。要覆盖
+模型分支，在用例内 `delete process.env.AGENT_DETERMINISTIC` 并 mock
+`@/lib/withTimeout` 的 `fetchWithTimeout`。
+
+### Agent 行为评测（`npm run eval`）
+
+单测锁的是分支，锁不住"这一轮总共搜了几步、评了几次、追没追问"。
+`evals/` 用桩模型 + fixture 高德驱动真实 `runSearchAgentV3`，度量：
+
+- 串行搜索步数（并发铺开的关键词只算一步）
+- 评估调用数与重复评估数
+- 追问率、主推荐数
+
+改 `policy.ts` / `runtimeV3.ts` / `evaluationCache.ts` 之后必须跑，并在 PR 里
+附 `evals/baseline.json` 的 diff。新增策略要配套加 golden case。
+
+`EVAL_MODE=live npm run eval` 会改用真实模型（需要 `OPENAI_API_KEY`），
+用于 prompt 相关改动——prompt 的效果 offline 模式测不出来。
+
 ## 推荐阅读顺序
 
 如果你是刚接触 Agent 开发的新同学，建议按这个顺序读：
 
 1. 本 README。
-2. [docs/Agent优化技术方案.md](./docs/Agent优化技术方案.md)。
-3. [docs/agent-architecture-review.md](./docs/agent-architecture-review.md)。
+2. [docs/agent-loop-shape-review-2026-08.md](./docs/agent-loop-shape-review-2026-08.md)
+   ——为什么模型不再参与常规轮次的动作决策。
+3. [docs/Agent-Loop-形态重构技术方案-2026-08.md](./docs/Agent-Loop-形态重构技术方案-2026-08.md)
+   ——落地记录与踩过的坑（第 9 节）。
 4. `lib/agent/types.ts`。
-5. `lib/agent/runtimeV3.ts`。
-6. `lib/agent/supervisorPlanner.ts`。
+5. `lib/agent/policy.ts`——顺序决策都在这里。
+6. `lib/agent/runtimeV3.ts`。
 7. `lib/agent/supervisor.ts`。
 8. `lib/agent/finalGuard.ts`。
-9. `__tests__/lib/agent/runtimeV3.test.ts`。
+9. `__tests__/lib/agent/policy.test.ts` 与 `evals/cases/`。
+
+更早的评审与方案（`docs/Agent优化技术方案.md`、`docs/agent-architecture-review.md`
+等）保留作为演进记录，其中的架构描述已被上面两份取代，不要照着实现。
 
 ## 部署
 

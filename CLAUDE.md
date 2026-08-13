@@ -108,7 +108,7 @@ Optional:
 OPENAI_BASE_URL=        # Custom OpenAI endpoint
 OPENAI_MODEL=           # Model override (default: gpt-4o)
 OPENAI_MODEL_SUPERVISOR= # 目标理解模型（默认继承 OPENAI_MODEL）
-OPENAI_MODEL_PLANNER=   # action 决策模型（默认继承 OPENAI_MODEL）
+OPENAI_MODEL_PLANNER=   # replan 模型（默认继承 OPENAI_MODEL）
 OPENAI_MODEL_EVALUATION= # 候选验证模型，调用量最大，可配便宜模型
 OPENAI_MODEL_KEYWORD=   # 关键词联想模型（默认继承 OPENAI_MODEL）
 AGENT_PARALLEL_SEARCH=  # false 关闭一轮内并行搜索（默认开启）
@@ -130,6 +130,14 @@ AMAP_SECURITY_CODE=     # Amap digital signature
 
 Jest + React Testing Library. Test files in `__tests__/` mirror source structure.
 Coverage threshold: 70% across all metrics.
+
+模型决策路径默认被 `AGENT_DETERMINISTIC=1`（`jest.setup.js`）关掉。要覆盖模型
+分支的用例，在用例内 `delete process.env.AGENT_DETERMINISTIC` 并 mock
+`@/lib/withTimeout` 的 `fetchWithTimeout`，参考
+`__tests__/lib/agent/supervisorPlanner.test.ts`。
+
+改动 agent loop 行为时，单测之外还要跑 `npm run eval`——单测锁的是分支，
+eval 锁的是"这一轮总共搜了几步、评了几次"。
 
 ## Responsive Breakpoints
 
