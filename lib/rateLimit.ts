@@ -87,7 +87,7 @@ if (isServerless) {
 
 // 定期清理仅在非 Serverless 环境下有效
 if (typeof setInterval !== 'undefined' && !isServerless) {
-  setInterval(() => {
+  const cleanupTimer: unknown = setInterval(() => {
     const now = Date.now();
     for (const [ip, record] of requests.entries()) {
       if (now > record.resetTime) {
@@ -95,6 +95,12 @@ if (typeof setInterval !== 'undefined' && !isServerless) {
       }
     }
   }, CLEANUP_INTERVAL);
+
+  // 这个定时器只是清理内存，不该拖着进程不退出。
+  // 不 unref 的话，任何 import 本模块的 Jest 用例跑完都会挂住不结束。
+  if (typeof (cleanupTimer as { unref?: () => void }).unref === 'function') {
+    (cleanupTimer as { unref: () => void }).unref();
+  }
 }
 
 export interface RateLimitResult {
