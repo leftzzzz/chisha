@@ -2,7 +2,7 @@
  * Agent 确定性策略的唯一实现，也是唯一的 planner。
  *
  * "下一步做什么"完全由这里决定：模型不再参与常规轮次的动作决策。
- * 历史上这套顺序逻辑同时存在于 runtimeV3、supervisorPlanner 和 guard 三处，
+ * 历史上这套顺序逻辑同时存在于 runtime、目标理解与 guard 三处，
  * 阈值已经漂移过（见 docs/agent-loop-shape-review-2026-08.md 3.2）。
  *
  * 边界：这里只做"给定状态该怎么做"的确定性决策，不做语义理解（属于
@@ -11,17 +11,17 @@
 
 import type { Location } from '@/types';
 import { countDistinctBrands } from '@/lib/restaurantIdentity';
-import { getAmapFoodPoiType } from './amapPoiTypeCatalog';
-import { isOpenExplorationAuthorized, isSearchIntentAuthorizedForPrimary } from './authorization';
-import { isPrimaryRecommendationAllowed } from './finalGuard';
-import type { FinishReason } from './finishReason';
+import { getAmapFoodPoiType } from '../amapPoiTypeCatalog';
+import { isOpenExplorationAuthorized, isSearchIntentAuthorizedForPrimary } from '../authorization';
+import { isPrimaryRecommendationAllowed } from '../finalGuard';
+import type { FinishReason } from '../finishReason';
 import {
   DEFAULT_POI_TYPE,
   lookupFoodPoiTypes,
   normalizeSearchKeywords,
-} from './poiTaxonomy';
-import { SearchPlanSchema } from './schemas/plan';
-import { CLARIFICATION_OPTION, clarificationOption } from './clarificationOptions';
+} from '../poiTaxonomy';
+import { SearchPlanSchema } from '../schemas/plan';
+import { CLARIFICATION_OPTION, clarificationOption } from '../clarificationOptions';
 import type {
   AgentErrorCode,
   ClarificationEffect,
@@ -32,7 +32,7 @@ import type {
   SearchKeywordTarget,
   SearchPlan,
   UserGoal,
-} from './types';
+} from '../types';
 
 /** 策略所需的最小上下文；AgentContext / AgentV3Context 均结构性满足。 */
 export interface PolicyContext {
@@ -56,7 +56,7 @@ export type TargetKind = 'initial' | 'related' | 'broadened';
 /**
  * 策略阈值的唯一来源。
  *
- * 这两个数此前分别写在 supervisorPlanner（min(6, targetCount)）与 runtime
+ * 这两个数此前分别写在 planner（min(6, targetCount)）与 runtime
  * guard（targetCount）里，在 6–8 个品牌的区间给出相反结论。合并到这里。
  */
 export const POLICY_LIMITS = {

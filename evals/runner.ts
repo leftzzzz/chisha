@@ -7,7 +7,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
+import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
 import type { TurnMetrics } from '@/lib/agent/metrics';
 import type {
   AgentEvent,

@@ -199,7 +199,13 @@ export function normalizeStoredPendingQuestion(value: unknown): unknown {
   return parsed.success ? parsed.data : undefined;
 }
 
-export const SearchSupervisorOutputSchema = z.object({
+/**
+ * GoalUnderstandingAgent 的输出。
+ *
+ * 刻意不含 `nextAction`：下一步做什么由 orchestrator/policy 决定，
+ * 子 Agent 说了不算。历史上它输出过该字段，但全仓没有任何消费点。
+ */
+export const GoalUnderstandingOutputSchema = z.object({
   goal: UserGoalSchema.optional(),
   patch: GoalPatchSchema.optional(),
   question: PendingQuestionSchema.optional(),
@@ -208,5 +214,4 @@ export const SearchSupervisorOutputSchema = z.object({
     'patch_current_goal',
     'start_new_goal',
   ]).optional(),
-  nextAction: z.enum(['plan', 'ask_user', 'finish']).optional(),
 });

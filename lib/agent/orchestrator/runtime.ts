@@ -1,25 +1,30 @@
+/**
+ * 编排层的执行器。
+ *
+ * 只做三件事：按 policy 的决策发起调用、发 SSE 事件、提交状态与 trace。
+ * "下一步做什么"一律来自 `./policy`——这里不再自行推导动作。
+ */
+
 import type { Restaurant } from '@/types';
 import {
   applyClarificationOptionToGoal,
   applyGoalPatch,
   clarificationNeedToPendingQuestion,
   clarificationOptionLabel,
-  createActionRecord,
   hasClarificationOption,
-  runSearchReplan,
-  runSupervisorPlanner,
-  summarizeAction,
-} from './supervisorPlanner';
-import { evaluateSearchResult, mergeCandidates } from './evaluator';
-import { applyHardConstraintGuard, applyVerdictGuard, validateSearchPlan } from './guards';
-import { isPrimaryRecommendationAllowed } from './finalGuard';
-import { createTurnLogger } from './turnLogger';
-import { summarizeTurnMetrics, type MetricsSink } from './metrics';
-import { describeFinish, internalFinishNote, type FinishReason } from './finishReason';
+} from '../goal';
+import { runGoalUnderstandingAgent } from '../subagents/goalUnderstandingAgent';
+import { runSearchReplan } from '../subagents/replanAgent';
+import { evaluateSearchResult, mergeCandidates } from '../evaluator';
+import { applyHardConstraintGuard, applyVerdictGuard, validateSearchPlan } from '../guards';
+import { isPrimaryRecommendationAllowed } from '../finalGuard';
+import { createTurnLogger } from '../turnLogger';
+import { summarizeTurnMetrics, type MetricsSink } from '../metrics';
+import { describeFinish, internalFinishNote, type FinishReason } from '../finishReason';
 import {
   buildQuestionFingerprint,
   CLARIFICATION_OPTION,
-} from './clarificationOptions';
+} from '../clarificationOptions';
 import {
   buildFallbackPrimaryEffect,
   buildNoPrimaryQuestion,
@@ -36,26 +41,27 @@ import {
 import {
   buildNearbyCategoryQuestion,
   summarizeNearbyCategories,
-} from './nearbyCategories';
+} from '../nearbyCategories';
 import {
   hasPromotedBroadenedPrimaryCandidates,
   promoteAuthorizedBroadenedResults,
-} from './broadenAdmission';
-import { finalizeRecommendations } from './resultAssembler';
-import { isGenericSearchKeyword, normalizeSearchKeywords } from './poiTaxonomy';
-import { applyKeywordExpansion, runKeywordExpansionAgent } from './subagents/keywordExpansionAgent';
-import { runEvaluationAgent, type EvaluationAgentInput } from './subagents/evaluationAgent';
+} from '../broadenAdmission';
+import { finalizeRecommendations } from '../resultAssembler';
+import { isGenericSearchKeyword, normalizeSearchKeywords } from '../poiTaxonomy';
+import { applyKeywordExpansion, runKeywordExpansionAgent } from '../subagents/keywordExpansionAgent';
+import { runEvaluationAgent, type EvaluationAgentInput } from '../subagents/evaluationAgent';
 import {
   deriveContextInvalidationPlan,
   deriveGoalSignature,
   markStaleCandidatesForContext,
   withUpdatedGoalVersion,
-} from './goalVersion';
-import type { ContextInvalidationPlan } from './goalVersion';
-import { createVerdictCache, type VerdictCache } from './evaluationCache';
-import { AgentError, AgentRunError, isAgentError } from './types';
+} from '../goalVersion';
+import type { ContextInvalidationPlan } from '../goalVersion';
+import { createVerdictCache, type VerdictCache } from '../evaluationCache';
+import { AgentError, AgentRunError, isAgentError } from '../types';
 import type {
   AgentAction,
+  AgentActionRecord,
   AgentContext,
   AgentErrorCode,
   AgentFinalResult,
@@ -73,7 +79,7 @@ import type {
   SearchKeywordTarget,
   SearchPlan,
   UserGoal,
-} from './types';
+} from '../types';
 
 interface AgentV3Context extends AgentContext {
   actions: NonNullable<AgentRuntimeState['actions']>;
@@ -582,7 +588,7 @@ function buildFinishAction(
 interface TurnGoalResolution {
   goal: UserGoal;
   conversationMode: ConversationMode;
-  supervisorOutput: Awaited<ReturnType<typeof runSupervisorPlanner>> | null;
+  supervisorOutput: Awaited<ReturnType<typeof runGoalUnderstandingAgent>> | null;
   clarifyingQuestion?: PendingQuestion;
 }
 
@@ -611,7 +617,7 @@ async function resolveTurnGoal(
     ? { ...input, query: optionOutcome.answer, optionId: undefined }
     : input;
 
-  const supervisorOutput = await getSupervisorPlannerOutput(effectiveInput, metricsSink);
+  const supervisorOutput = await getGoalUnderstandingOutput(effectiveInput, metricsSink);
 
   // 模型只提问、不给目标是合法输出（"这句话还不够，我得先问清楚"）。
   // 此时用一个空目标承载本轮上下文——不做任何关键词猜测。
@@ -766,7 +772,7 @@ function isRetryableAgentError(error: unknown, code: AgentErrorCode): boolean {
 
 function resolveSupervisorGoal(
   input: AgentInput,
-  output: Awaited<ReturnType<typeof runSupervisorPlanner>>
+  output: Awaited<ReturnType<typeof runGoalUnderstandingAgent>>
 ): UserGoal {
   if (output.goal) {
     return output.goal;
@@ -780,14 +786,14 @@ function resolveSupervisorGoal(
     );
   }
 
-  throw new AgentError('SupervisorPlannerAgent returned no goal or patch', 'SUPERVISOR_UNAVAILABLE', true);
+  throw new AgentError('GoalUnderstandingAgent returned no goal or patch', 'SUPERVISOR_UNAVAILABLE', true);
 }
 
-async function getSupervisorPlannerOutput(
+async function getGoalUnderstandingOutput(
   input: AgentInput,
   metricsSink: MetricsSink
-): Promise<Awaited<ReturnType<typeof runSupervisorPlanner>>> {
-  return runSupervisorPlanner({
+): Promise<Awaited<ReturnType<typeof runGoalUnderstandingAgent>>> {
+  return runGoalUnderstandingAgent({
     metricsSink,
     message: input.query,
     previousGoal: input.runtimeState?.goal,
@@ -800,7 +806,7 @@ async function getSupervisorPlannerOutput(
 
 function inferRuntimeConversationMode(
   input: AgentInput,
-  output: Awaited<ReturnType<typeof runSupervisorPlanner>>
+  output: Awaited<ReturnType<typeof runGoalUnderstandingAgent>>
 ): ConversationMode {
   if (!input.runtimeState?.goal) {
     return 'start_new_goal';
@@ -1824,4 +1830,40 @@ function snapshotRuntimeState(context: AgentV3Context): AgentRuntimeState {
     lastQuestionFingerprint: context.lastQuestionFingerprint,
     consecutiveAskTurns: context.consecutiveAskTurns ?? 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 动作记录
+//
+// 原先住在 supervisorPlanner.ts——但"把一个动作记成一条 record"本就是执行层的事，
+// 与目标理解无关。随该文件拆分一并迁入。
+// ---------------------------------------------------------------------------
+
+export function summarizeAction(action: AgentAction): string {
+  if (action.type === 'search') {
+    return `搜索「${action.plan.keywords.join('、')}」：${action.plan.reason}`;
+  }
+
+  if (action.type === 'ask_user') {
+    return action.question.reason ?? action.question.question;
+  }
+
+  return action.explanation;
+}
+
+export function createActionRecord(action: AgentAction): AgentActionRecord {
+  return {
+    id: createActionId(),
+    action,
+    createdAt: Date.now(),
+    summary: summarizeAction(action),
+  };
+}
+
+function createActionId(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `action_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

@@ -17,7 +17,7 @@ import type {
   SearchPlan,
 } from '@/lib/agent/types';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
-import { clarificationOptionLabel } from '@/lib/agent/supervisorPlanner';
+import { clarificationOptionLabel } from '@/lib/agent/goal';
 import {
   applyRuntimeStateToSessionAsync,
   appendAssistantMessageAsync,
@@ -27,7 +27,7 @@ import {
   saveAgentSessionAsync,
 } from '@/lib/agent/session';
 import { configureCloudflareAgentSessionStore } from '@/lib/agent/cloudflareSessionStore';
-import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
+import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
 import { osmSearch } from '@/lib/osm';

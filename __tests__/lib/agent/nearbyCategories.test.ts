@@ -9,7 +9,7 @@ import {
   buildNearbyCategoryQuestion,
   summarizeNearbyCategories,
 } from '@/lib/agent/nearbyCategories';
-import { buildFallbackPrimaryEffect } from '@/lib/agent/policy';
+import { buildFallbackPrimaryEffect } from '@/lib/agent/orchestrator/policy';
 import type { Restaurant } from '@/types';
 
 const location = { lat: 30.2794, lng: 120.1305 };

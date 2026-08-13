@@ -62,21 +62,21 @@ function input(searchGoal: UserGoal): AgentInput {
 
 describe('runSearchAgentV3 POI type selection', () => {
   afterEach(() => {
-    jest.dontMock('@/lib/agent/supervisorPlanner');
+    jest.dontMock('@/lib/agent/subagents/goalUnderstandingAgent');
     jest.resetModules();
   });
 
   it('uses selected Amap POI type and rejects unrelated exact-keyword retrievals', async () => {
-    jest.doMock('@/lib/agent/supervisorPlanner', () => {
-      const actual = jest.requireActual('@/lib/agent/supervisorPlanner');
+    jest.doMock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
+      const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
       return {
         ...actual,
-        runSupervisorPlanner: jest.fn(async (
+        runGoalUnderstandingAgent: jest.fn(async (
           supervisorInput: { previousGoal?: UserGoal; goal?: UserGoal; limits?: unknown },
           context?: import('@/lib/agent/types').AgentContext
         ) => {
           if (supervisorInput.goal && supervisorInput.limits) {
-            return actual.runSupervisorPlanner(supervisorInput, context);
+            return actual.runGoalUnderstandingAgent(supervisorInput, context);
           }
 
           return {
@@ -123,7 +123,7 @@ describe('runSearchAgentV3 POI type selection', () => {
       }),
     }));
 
-    const { runSearchAgentV3 } = await import('@/lib/agent/runtimeV3');
+    const { runSearchAgentV3 } = await import('@/lib/agent/orchestrator/runtime');
     const searchedPlans: SearchPlan[] = [];
 
     const result = await runSearchAgentV3(

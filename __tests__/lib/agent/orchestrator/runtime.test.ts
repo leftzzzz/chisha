@@ -1,8 +1,8 @@
-jest.mock('@/lib/agent/supervisorPlanner', () => {
-  const actual = jest.requireActual('@/lib/agent/supervisorPlanner');
+jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
+  const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
   return {
     ...actual,
-    runSupervisorPlanner: jest.fn(async (input: {
+    runGoalUnderstandingAgent: jest.fn(async (input: {
       message: string;
       previousGoal?: import('@/lib/agent/types').UserGoal;
       pendingQuestion?: import('@/lib/agent/types').PendingQuestion;
@@ -10,7 +10,7 @@ jest.mock('@/lib/agent/supervisorPlanner', () => {
       limits?: unknown;
     }, context?: import('@/lib/agent/types').AgentContext) => {
       if (input.goal && input.limits) {
-        return actual.runSupervisorPlanner(input, context);
+        return actual.runGoalUnderstandingAgent(input, context);
       }
 
       if (input.previousGoal && input.pendingQuestion) {
@@ -130,8 +130,8 @@ jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
   }),
 }));
 
-import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
-import { runSupervisorPlanner } from '@/lib/agent/supervisorPlanner';
+import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
+import { runGoalUnderstandingAgent } from '@/lib/agent/subagents/goalUnderstandingAgent';
 import { runEvaluationAgent } from '@/lib/agent/subagents/evaluationAgent';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
 import { AgentError, AgentRunError } from '@/lib/agent/types';
@@ -262,7 +262,7 @@ describe('runSearchAgentV3', () => {
     );
     expect(first.paused).not.toBe(true);
 
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     supervisorMock.mockResolvedValueOnce({
       patch: {
         addConstraints: [{
@@ -630,7 +630,7 @@ describe('runSearchAgentV3', () => {
   // 模型生成的选项通常只有文案没有 effect。这条锁住"点这类选项要把 label
   // 当用户回答交给模型"，而不是报 INVALID_OPTION——线上正是这么挂的。
   it('delegates an effect-less option to the Supervisor as the user answer', async () => {
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     const defaultSupervisor = supervisorMock.getMockImplementation();
     supervisorMock.mockClear();
     supervisorMock.mockImplementationOnce(async (plannerInput: { message: string }) => ({
@@ -683,7 +683,7 @@ describe('runSearchAgentV3', () => {
   // 死循环的直接不变量：同一个问题不能连问两次。线上就是靠这条缺失，
   // 把用户锁在「想吃点什么？」上出不去的。
   it('converges instead of asking the same question twice', async () => {
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     const defaultSupervisor = supervisorMock.getMockImplementation();
     supervisorMock.mockClear();
     const stuckQuestion = {
@@ -736,7 +736,7 @@ describe('runSearchAgentV3', () => {
   });
 
   it('uses fallback search when the Supervisor returns an open recommendation goal', async () => {
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     supervisorMock.mockClear();
     supervisorMock.mockResolvedValueOnce({
       goal: goal({
@@ -809,7 +809,7 @@ describe('runSearchAgentV3', () => {
   });
 
   it('fails the turn instead of guessing when the Supervisor is unavailable', async () => {
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     supervisorMock.mockRejectedValueOnce(
       new AgentError('Free quota exhausted', 'MODEL_QUOTA_EXHAUSTED', false)
     );
@@ -842,9 +842,9 @@ describe('runSearchAgentV3', () => {
   });
 
   it('does not fall back to raw-query search when the Supervisor fails', async () => {
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     supervisorMock.mockRejectedValueOnce(
-      new AgentError('SupervisorPlannerAgent API failed: 500', 'MODEL_UNAVAILABLE', true)
+      new AgentError('GoalUnderstandingAgent API failed: 500', 'MODEL_UNAVAILABLE', true)
     );
     const searchedPlans: SearchPlan[] = [];
 
@@ -1156,7 +1156,7 @@ describe('runSearchAgentV3', () => {
     }));
 
     const searchedRadii: number[] = [];
-    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
     supervisorMock.mockClear();
     const second = await runSearchAgentV3(
       {

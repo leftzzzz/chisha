@@ -9,7 +9,7 @@ import {
   resolvePlanPoiType,
   untriedTargets,
   type PolicyContext,
-} from '@/lib/agent/policy';
+} from '@/lib/agent/orchestrator/policy';
 import type {
   Constraint,
   RestaurantCandidate,

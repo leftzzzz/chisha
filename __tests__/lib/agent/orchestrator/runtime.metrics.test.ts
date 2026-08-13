@@ -29,13 +29,13 @@ function recordInto(sink: { modelCallMetrics?: ModelCallMetrics[] }, agentName: 
   sink.modelCallMetrics.push(metrics);
 }
 
-jest.mock('@/lib/agent/supervisorPlanner', () => {
-  const actual = jest.requireActual('@/lib/agent/supervisorPlanner');
+jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
+  const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
   return {
     ...actual,
     // Supervisor 走确定性短路：不记指标，于是 turn 容器起初是空的——
     // 这正是曾经触发覆盖的条件。
-    runSupervisorPlanner: jest.fn(async (input: { message: string }) => ({
+    runGoalUnderstandingAgent: jest.fn(async (input: { message: string }) => ({
       goal: {
         intent: 'find_restaurants',
         rawQuery: input.message,
@@ -109,7 +109,7 @@ jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
   }),
 }));
 
-import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
+import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
 
 const input: AgentInput = {
   query: '想吃火锅',

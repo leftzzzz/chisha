@@ -1,10 +1,8 @@
 /**
- * Supervisor 的模型入口。
+ * ReplanAgent：确定性关键词全部试完仍无主推荐时，重新构思搜索方向。
  *
- * 常规轮次的动作决策已经完全交给 `policy.decideNextAction`——那些"下一个搜
- * 哪个词、够不够可以结束"的判断是可枚举的，代码算得比模型快也比模型稳。
- * 模型只保留两处：理解目标（runSearchSupervisor），以及确定性关键词全部试完
- * 仍然没有主推荐时重新构思方向（runSearchReplan）。后者一轮最多一次。
+ * 它是子 Agent，只回答"还有什么方向没试过"这一个问题；何时调用它、一轮调几次
+ * 由 orchestrator/policy 决定（当前一轮最多一次）。
  */
 
 import { logger } from '@/lib/logger';
@@ -12,17 +10,10 @@ import {
   callJsonFunctionAgent,
   JSON_FUNCTION_MAX_TOKENS,
   JSON_FUNCTION_RETRY_MAX_TOKENS,
-} from './modelClient';
-import type { MetricsSink } from './metrics';
-import { ReplanOutputSchema } from './schemas/replan';
-import {
-  runSearchSupervisor,
-  type SearchSupervisorInput,
-  type SearchSupervisorOutput,
-} from './supervisor';
+} from '../modelClient';
+import type { MetricsSink } from '../metrics';
+import { ReplanOutputSchema } from '../schemas/replan';
 import type {
-  AgentAction,
-  AgentActionRecord,
   AgentMessage,
   AgentObservation,
   PendingQuestion,
@@ -31,18 +22,7 @@ import type {
   SearchKeywordTarget,
   UserGoal,
   UserPreferenceSummary,
-} from './types';
-
-export {
-  applyClarificationOptionToGoal,
-  applyGoalPatch,
-  applySupervisorClarifyingAnswer,
-  clarificationNeedToPendingQuestion,
-  clarificationOptionLabel,
-  hasClarificationOption,
-  understandSearchGoal,
-} from './supervisor';
-export type { SearchSupervisorInput, SearchSupervisorOutput } from './supervisor';
+} from '../types';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
@@ -50,9 +30,6 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL_PLANNER
   || process.env.OPENAI_MODEL
   || 'deepseek-v4-flash-0731';
 const REPLAN_TIMEOUT = 60000;
-
-export type SupervisorPlannerInput = SearchSupervisorInput;
-export type SupervisorPlannerOutput = SearchSupervisorOutput;
 
 export interface SearchReplanInput {
   metricsSink?: MetricsSink;
@@ -123,12 +100,6 @@ const REPLAN_FUNCTION = {
   },
 };
 
-export async function runSupervisorPlanner(
-  input: SupervisorPlannerInput
-): Promise<SupervisorPlannerOutput> {
-  return runSearchSupervisor(input);
-}
-
 /**
  * 策略枯竭时重新构思搜索方向。
  *
@@ -166,27 +137,6 @@ export async function runSearchReplan(
     });
     return null;
   }
-}
-
-export function summarizeAction(action: AgentAction): string {
-  if (action.type === 'search') {
-    return `搜索「${action.plan.keywords.join('、')}」：${action.plan.reason}`;
-  }
-
-  if (action.type === 'ask_user') {
-    return action.question.reason ?? action.question.question;
-  }
-
-  return action.explanation;
-}
-
-export function createActionRecord(action: AgentAction): AgentActionRecord {
-  return {
-    id: createActionId(),
-    action,
-    createdAt: Date.now(),
-    summary: summarizeAction(action),
-  };
 }
 
 /**
@@ -258,12 +208,4 @@ function sanitizeReplanOutput(
   }
 
   return output.question ? { question: output.question, rationale: output.rationale } : null;
-}
-
-function createActionId(): string {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
-
-  return `action_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

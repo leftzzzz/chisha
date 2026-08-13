@@ -7,7 +7,7 @@ import type {
   UserGoal,
 } from './types';
 import { evaluateConstraint } from './constraintEvaluator';
-import { getStrictDistanceMaxMeters, hasTriedPlan, type PolicyContext } from './policy';
+import { getStrictDistanceMaxMeters, hasTriedPlan, type PolicyContext } from './orchestrator/policy';
 import { SearchPlanSchema } from './schemas/plan';
 
 export interface HardConstraintGuardResult {

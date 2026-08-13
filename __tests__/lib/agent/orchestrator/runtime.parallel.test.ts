@@ -81,11 +81,11 @@ async function loadRuntime(parallel: boolean) {
 
   // 每一轮自由文本都要经过 Supervisor：模型不可用时 runtime 直接报错，
   // 不再有"按原文关键词搜索"的降级路径，所以这里必须显式桩掉理解环节。
-  jest.doMock('@/lib/agent/supervisorPlanner', () => {
-    const actual = jest.requireActual('@/lib/agent/supervisorPlanner');
+  jest.doMock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
+    const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
     return {
       ...actual,
-      runSupervisorPlanner: jest.fn(async () => ({ goal: goal() })),
+      runGoalUnderstandingAgent: jest.fn(async () => ({ goal: goal() })),
       runSearchReplan: jest.fn(async () => null),
     };
   });
@@ -111,7 +111,7 @@ async function loadRuntime(parallel: boolean) {
     })),
   }));
 
-  const { runSearchAgentV3 } = await import('@/lib/agent/runtimeV3');
+  const { runSearchAgentV3 } = await import('@/lib/agent/orchestrator/runtime');
   return runSearchAgentV3;
 }
 

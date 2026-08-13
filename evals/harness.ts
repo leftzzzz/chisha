@@ -140,23 +140,23 @@ interface SupervisorStubInput {
 }
 
 /**
- * 路由 runSupervisorPlanner：
+ * 路由 runGoalUnderstandingAgent：
  * - action 规划输入交给真实实现（M3 之前是确定性 planner，M3 之后不再被调用）
  * - 目标理解输入用 case 声明的桩目标
  */
-export function routeSupervisorPlanner(
-  actual: { runSupervisorPlanner: (input: unknown, context?: unknown) => Promise<unknown> },
+export function routeGoalUnderstanding(
+  actual: { runGoalUnderstandingAgent: (input: unknown, context?: unknown) => Promise<unknown> },
   input: SupervisorStubInput,
   context?: unknown
 ): Promise<unknown> {
   if (input.goal && input.limits) {
     harnessState.counters.plannerModelCalls += 1;
-    return actual.runSupervisorPlanner(input, context);
+    return actual.runGoalUnderstandingAgent(input, context);
   }
 
   const failWithCode = harnessState.stubs.goal?.failWithCode;
   if (failWithCode) {
-    return Promise.reject(createStubAgentError('SupervisorPlannerAgent 桩故障', failWithCode));
+    return Promise.reject(createStubAgentError('GoalUnderstandingAgent 桩故障', failWithCode));
   }
 
   return Promise.resolve({

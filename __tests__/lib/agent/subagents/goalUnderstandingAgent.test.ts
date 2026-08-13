@@ -1,9 +1,5 @@
-import {
-  applyGoalPatch,
-  applySupervisorClarifyingAnswer,
-} from '@/lib/agent/supervisorPlanner';
-import { SearchSupervisorOutputSchema } from '@/lib/agent/schemas/clarification';
-import type { AgentSession, UserGoal } from '@/lib/agent/types';
+import { GoalUnderstandingOutputSchema } from '@/lib/agent/schemas/clarification';
+import type { UserGoal } from '@/lib/agent/types';
 
 function goal(overrides: Partial<UserGoal> = {}): UserGoal {
   return {
@@ -25,15 +21,15 @@ function goal(overrides: Partial<UserGoal> = {}): UserGoal {
   };
 }
 
-describe('SupervisorPlannerAgent goal maintenance', () => {
+describe('GoalUnderstandingAgent', () => {
   it('requires the model instead of falling back to local parsing', async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
     jest.resetModules();
 
     try {
-      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
-      await expect(runSupervisorPlanner({ message: '想吃牛排' })).rejects.toThrow('OPENAI_API_KEY');
+      const { runGoalUnderstandingAgent } = await import('@/lib/agent/subagents/goalUnderstandingAgent');
+      await expect(runGoalUnderstandingAgent({ message: '想吃牛排' })).rejects.toThrow('OPENAI_API_KEY');
     } finally {
       if (originalApiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -49,8 +45,8 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
     jest.resetModules();
 
     try {
-      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
-      await expect(runSupervisorPlanner({
+      const { runGoalUnderstandingAgent } = await import('@/lib/agent/subagents/goalUnderstandingAgent');
+      await expect(runGoalUnderstandingAgent({
         message: '你看着办',
         previousGoal: goal({
           requestedItems: [],
@@ -77,8 +73,8 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
     jest.resetModules();
 
     try {
-      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
-      await expect(runSupervisorPlanner({
+      const { runGoalUnderstandingAgent } = await import('@/lib/agent/subagents/goalUnderstandingAgent');
+      await expect(runGoalUnderstandingAgent({
         message: '扩大范围',
         previousGoal: goal({
           hardConstraints: [{
@@ -117,7 +113,7 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
             finish_reason: 'length',
             message: {
               function_call: {
-                name: 'superviseRestaurantSearch',
+                name: 'understandRestaurantGoal',
                 arguments: '{"goal":{"intent":"find_restaurants","rawQuery":"想吃日料"',
               },
             },
@@ -130,14 +126,13 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
           choices: [{
             message: {
               function_call: {
-                name: 'superviseRestaurantSearch',
+                name: 'understandRestaurantGoal',
                 arguments: JSON.stringify({
                   goal: {
                     intent: 'find_restaurants',
                     rawQuery: '想吃日料',
                     primaryKeywords: ['日料'],
                   },
-                  nextAction: 'plan',
                 }),
               },
             },
@@ -147,8 +142,8 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
     try {
-      const { runSupervisorPlanner } = await import('@/lib/agent/supervisorPlanner');
-      const output = await runSupervisorPlanner({ message: '想吃日料' });
+      const { runGoalUnderstandingAgent } = await import('@/lib/agent/subagents/goalUnderstandingAgent');
+      const output = await runGoalUnderstandingAgent({ message: '想吃日料' });
       const initialRequest = JSON.parse(fetchWithTimeout.mock.calls[0][1].body as string);
       const retryRequest = JSON.parse(fetchWithTimeout.mock.calls[1][1].body as string);
 
@@ -166,184 +161,11 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
       jest.dontMock('@/lib/withTimeout');
     }
   });
+});
 
-  it('applies goal patches without overwriting existing hard constraints', () => {
-    const patched = applyGoalPatch(
-      goal({
-        hardConstraints: [{ kind: 'distance', label: '500米内', value: 500, maxMeters: 500, strict: true }],
-      }),
-      {
-        addRequestedItems: [{ name: '日料', required: true, aliases: [] }],
-        reason: '用户补充了想吃日料。',
-      },
-      '随便吃点，日料'
-    );
-
-    expect(patched.requestedItems.map((item) => item.name)).toContain('日料');
-    expect(patched.hardConstraints).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: 'distance', maxMeters: 500 })])
-    );
-  });
-
-  it('replaces stale primary targets when a clarification answer names a new target', () => {
-    const patched = applyGoalPatch(
-      goal({
-        requestedItems: [{ name: '日料', required: true, aliases: [] }],
-        primaryKeywords: ['日料'],
-        relatedKeywords: ['寿司'],
-      }),
-      {
-        replacePrimaryKeywords: ['火锅'],
-        replaceRequestedItems: [{ name: '火锅', required: true, aliases: [] }],
-        reason: '用户补充了新的主目标。',
-      },
-      '火锅'
-    );
-
-    expect(patched.primaryKeywords).toEqual(['火锅']);
-    expect(patched.requestedItems.map((item) => item.name)).toEqual(['火锅']);
-    expect(patched.relatedKeywords).toEqual([]);
-    expect(patched.clarificationNeeded).toEqual([]);
-  });
-
-  it('applies soft preference patches without turning them into requested items', () => {
-    const patched = applyGoalPatch(
-      goal({ primaryKeywords: ['火锅'] }),
-      {
-        addSoftPreferences: [{ name: '人气高', weight: 1, verifiable: false }],
-        reason: '用户补充了不可稳定验证的体验偏好。',
-      },
-      '想吃火锅，人多的地方'
-    );
-
-    expect(patched.requestedItems.map((item) => item.name)).not.toContain('人气高');
-    expect(patched.softPreferences).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: '人气高', verifiable: false })])
-    );
-  });
-
-  it('applies pending question option effects inside Supervisor ownership', () => {
-    const session: AgentSession = {
-      id: 's1',
-      version: 4,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      expiresAt: Date.now() + 1000,
-      location: { lat: 31.2, lng: 121.4 },
-      messages: [],
-      attempts: [],
-      candidates: [],
-      actions: [],
-      observations: [],
-      trace: [],
-      goal: goal(),
-      pendingQuestion: {
-        question: '要允许放宽吗？',
-        options: [
-          { id: 'authorize_category_broaden', label: '允许放宽' },
-          { id: 'change_target', label: '换个类型' },
-        ],
-        optionEffects: {
-          authorize_category_broaden: { allowBroaden: true, setDistanceMaxMeters: 5000 },
-        },
-      },
-    };
-
-    applySupervisorClarifyingAnswer(session, 'authorize_category_broaden');
-
-    expect(session.pendingQuestion).toBeUndefined();
-    expect(session.goal?.allowBroaden).toBe(true);
-    expect(session.goal?.requestedItems.map((item) => item.name)).not.toContain('允许放宽');
-    expect(session.goal?.hardConstraints).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: 'distance', maxMeters: 5000 })])
-    );
-  });
-
-  it('uses structured option effects to re-summarize clarification answers with previous context', () => {
-    const session: AgentSession = {
-      id: 's2',
-      version: 4,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      expiresAt: Date.now() + 1000,
-      location: { lat: 31.2, lng: 121.4 },
-      messages: [
-        { role: 'user', content: '港奶', createdAt: Date.now() },
-        { role: 'assistant', content: '你说的「港奶」是菜品、菜系还是店名？', createdAt: Date.now() },
-      ],
-      attempts: [],
-      candidates: [],
-      actions: [],
-      observations: [],
-      trace: [],
-      goal: goal({
-        rawQuery: '港奶',
-        primaryKeywords: ['港奶'],
-      }),
-      pendingQuestion: {
-        question: '你说的「港奶」是菜品、菜系还是店名？',
-        options: [
-          { id: 'opt_1', label: '菜品' },
-          { id: 'opt_2', label: '菜系' },
-          { id: 'opt_3', label: '店名' },
-        ],
-        allowFreeText: true,
-        optionEffects: {
-          opt_1: {
-            replaceRequestedItems: ['港奶'],
-            replacePrimaryKeywords: ['港奶'],
-          },
-          opt_2: {
-            replaceCategories: ['港奶'],
-            replacePrimaryKeywords: ['港奶'],
-          },
-          opt_3: {
-            replacePrimaryKeywords: ['港奶'],
-          },
-        },
-      },
-    };
-
-    applySupervisorClarifyingAnswer(session, 'opt_1');
-
-    expect(session.pendingQuestion).toBeUndefined();
-    // 选项文案不是搜索词，不该被拼进 rawQuery。
-    expect(session.goal?.rawQuery).toBe('港奶');
-    expect(session.goal?.primaryKeywords).toEqual(['港奶']);
-    expect(session.goal?.requestedItems).toEqual([{ name: '港奶', required: true, aliases: [] }]);
-    expect(session.goal?.primaryKeywords).not.toContain('菜品');
-  });
-
-  it('does not parse free-text clarification answers without structured option effects', () => {
-    const session: AgentSession = {
-      id: 's3',
-      version: 4,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      expiresAt: Date.now() + 1000,
-      location: { lat: 31.2, lng: 121.4 },
-      messages: [],
-      attempts: [],
-      candidates: [],
-      actions: [],
-      observations: [],
-      trace: [],
-      goal: goal({ primaryKeywords: [] }),
-      pendingQuestion: {
-        question: '你想找哪类餐厅，或具体想吃什么？',
-        allowFreeText: true,
-      },
-    };
-
-    applySupervisorClarifyingAnswer(session, 'authorize_fallback_primary');
-
-    expect(session.pendingQuestion).toBeUndefined();
-    expect(session.goal?.primaryKeywords).toEqual([]);
-    expect(session.goal?.requestedItems).toEqual([]);
-  });
-
+describe('GoalUnderstandingAgent output schema', () => {
   it('normalizes category objects in clarification option effects', () => {
-    const parsed = SearchSupervisorOutputSchema.parse({
+    const parsed = GoalUnderstandingOutputSchema.parse({
       goal: {
         ...goal({
           rawQuery: '随便推荐',
@@ -372,7 +194,7 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
   });
 
   it('drops malformed clarification entries instead of rejecting supervisor output', () => {
-    const parsed = SearchSupervisorOutputSchema.parse({
+    const parsed = GoalUnderstandingOutputSchema.parse({
       goal: {
         ...goal({
           rawQuery: '想吃清淡点',
@@ -401,7 +223,7 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
   });
 
   it('normalizes malformed clarification options without dropping the question', () => {
-    const parsed = SearchSupervisorOutputSchema.parse({
+    const parsed = GoalUnderstandingOutputSchema.parse({
       goal: {
         ...goal({
           rawQuery: '附近有什么吃的',
@@ -434,7 +256,7 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
   });
 
   it('defaults omitted goal arrays from model output', () => {
-    const parsed = SearchSupervisorOutputSchema.parse({
+    const parsed = GoalUnderstandingOutputSchema.parse({
       goal: {
         intent: 'find_restaurants',
         rawQuery: '想吃日料',
@@ -449,7 +271,7 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
   });
 
   it('accepts boolean hard constraint values from model output', () => {
-    const parsed = SearchSupervisorOutputSchema.parse({
+    const parsed = GoalUnderstandingOutputSchema.parse({
       goal: {
         intent: 'find_restaurants',
         rawQuery: '找现在营业的餐厅',
@@ -472,18 +294,18 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
   });
 
   it('defaults omitted patch reason from model output', () => {
-    const parsed = SearchSupervisorOutputSchema.parse({
+    const parsed = GoalUnderstandingOutputSchema.parse({
       patch: {
         allowBroaden: true,
       },
       nextAction: 'plan',
     });
 
-    expect(parsed.patch?.reason).toBe('SupervisorPlannerAgent 更新目标。');
+    expect(parsed.patch?.reason).toBe('GoalUnderstandingAgent 更新目标。');
   });
 
-  it('accepts conversation mode from Supervisor output', () => {
-    const parsed = SearchSupervisorOutputSchema.parse({
+  it('accepts conversation mode from model output', () => {
+    const parsed = GoalUnderstandingOutputSchema.parse({
       goal: goal({ primaryKeywords: ['火锅'] }),
       conversationMode: 'start_new_goal',
       nextAction: 'plan',

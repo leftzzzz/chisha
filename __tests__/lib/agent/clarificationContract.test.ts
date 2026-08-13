@@ -9,7 +9,7 @@
 
 import { PendingQuestionSchema, normalizeStoredPendingQuestion } from '@/lib/agent/schemas/clarification';
 import { buildQuestionFingerprint, CLARIFICATION_OPTION, clarificationOption } from '@/lib/agent/clarificationOptions';
-import { applyClarificationOptionToGoal, hasClarificationOption } from '@/lib/agent/supervisor';
+import { applyClarificationOptionToGoal, hasClarificationOption } from '@/lib/agent/goal';
 import type { UserGoal } from '@/lib/agent/types';
 
 function goal(overrides: Partial<UserGoal> = {}): UserGoal {

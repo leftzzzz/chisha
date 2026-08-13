@@ -1,5 +1,5 @@
 import { AgentActionSchema } from '@/lib/agent/schemas/action';
-import { SearchSupervisorOutputSchema } from '@/lib/agent/schemas/clarification';
+import { GoalUnderstandingOutputSchema } from '@/lib/agent/schemas/clarification';
 import { UserGoalSchema } from '@/lib/agent/schemas/goal';
 import { KeywordExpansionOutputSchema } from '@/lib/agent/schemas/keywordExpansion';
 import { SearchPlanSchema } from '@/lib/agent/schemas/plan';
@@ -118,7 +118,7 @@ describe('Agent schema defaults', () => {
   });
 
   it('repairs blank or missing pending questions from model output', () => {
-    const supervisorOutput = SearchSupervisorOutputSchema.parse({
+    const supervisorOutput = GoalUnderstandingOutputSchema.parse({
       question: {
         reason: '',
         question: '   ',
@@ -146,7 +146,7 @@ describe('Agent schema defaults', () => {
       },
     });
 
-    expect(SearchSupervisorOutputSchema.parse({
+    expect(GoalUnderstandingOutputSchema.parse({
       question: {
         reason: '用户需求缺少明确餐饮目标。',
       },
