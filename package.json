@@ -2,6 +2,17 @@
   "name": "chisha",
   "version": "0.1.0",
   "private": true,
+  "description": "今天吃啥 —— 基于 Agent 的餐厅推荐应用：自然语言理解目标、搜索附近餐厅、验证候选，再用转盘做最终选择",
+  "license": "MIT",
+  "author": "leftzzzz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leftzzzz/chisha.git"
+  },
+  "bugs": {
+    "url": "https://github.com/leftzzzz/chisha/issues"
+  },
+  "homepage": "https://github.com/leftzzzz/chisha#readme",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

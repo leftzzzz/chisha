@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题
+    url: https://github.com/leftzzzz/chisha/security/advisories/new
+    about: 请不要开公开 issue，通过私密安全通告报告
