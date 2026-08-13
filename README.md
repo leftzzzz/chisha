@@ -193,8 +193,8 @@ graph TB
 
 - `lib/agent/types.ts`
 - `lib/agent/schemas/goal.ts`
-- `lib/agent/supervisor.ts`（目标理解与 GoalPatch 的实现）
-- `lib/agent/supervisorPlanner.ts`（对外入口，转发目标理解 + replan）
+- `lib/agent/subagents/goalUnderstandingAgent.ts`（目标理解与 GoalPatch 的实现）
+- `lib/agent/subagents/replanAgent.ts`（对外入口，转发目标理解 + replan）
 
 ### SearchPlan
 
@@ -217,9 +217,9 @@ graph TB
 相关文件：
 
 - `lib/agent/schemas/plan.ts`
-- `lib/agent/policy.ts`（唯一生成方）
+- `lib/agent/orchestrator/policy.ts`（唯一生成方）
 - `lib/agent/guards.ts`（`validateSearchPlan`）
-- `lib/agent/runtimeV3.ts`
+- `lib/agent/orchestrator/runtime.ts`
 - `lib/agent/poiTaxonomy.ts`
 
 ### CandidateVerdict
@@ -292,7 +292,7 @@ graph TB
 - 不要在 route 层编写候选验证逻辑。
 - 不要把 pending question 当成唯一续跑条件。新架构下，有效 `sessionId` 应代表一段可持续会话。
 
-### `lib/agent/runtimeV3.ts`
+### `lib/agent/orchestrator/runtime.ts`
 
 职责：
 
@@ -333,7 +333,7 @@ Runtime 的边界：
 重新向 policy 要决策。**不要就地改写，也不要请求模型重写**——后者在 guard
 已经算出替代方案之后再花一次模型往返，只可能亏。
 
-### `lib/agent/policy.ts`
+### `lib/agent/orchestrator/policy.ts`
 
 职责：
 
@@ -357,7 +357,7 @@ Runtime 的边界：
 一个刻意的策略：**一个结果都没有时优先换镜头，而不是加深同一个镜头**。
 批次里放 1 个同义词 + 相邻品类，而不是把预算全花在同义词穷举上。
 
-### `lib/agent/supervisorPlanner.ts`
+### `lib/agent/subagents/replanAgent.ts`
 
 职责：
 
@@ -612,7 +612,7 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 ### 9. 只跑单测就改 loop 行为
 
 单测锁的是分支，锁不住"这一轮总共搜了几步、评了几次、追没追问"。
-改 `policy.ts` / `runtimeV3.ts` / `evaluationCache.ts` 之后必须跑
+改 `orchestrator/policy.ts` / `orchestrator/runtime.ts` / `evaluationCache.ts` 之后必须跑
 `npm run eval`，并在 PR 里附基线 diff。
 
 ### 10. 并发化时忘了共享可变状态
@@ -629,7 +629,7 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 - `lib/agent/types.ts`
 - `lib/agent/schemas/goal.ts`
-- `lib/agent/supervisor.ts`
+- `lib/agent/subagents/goalUnderstandingAgent.ts`
 - `lib/agent/constraintEvaluator.ts`
 - `lib/agent/guards.ts`
 - `lib/agent/finalGuard.ts`
@@ -651,12 +651,12 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 需要检查：
 
-- `lib/agent/policy.ts`（顺序决策、批次、阈值——**先看这里**）
-- `lib/agent/runtimeV3.ts`
+- `lib/agent/orchestrator/policy.ts`（顺序决策、批次、阈值——**先看这里**）
+- `lib/agent/orchestrator/runtime.ts`
 - `lib/agent/poiTaxonomy.ts`
 - `lib/agent/subagents/keywordExpansionAgent.ts`
-- `__tests__/lib/agent/policy.test.ts`
-- `__tests__/lib/agent/runtimeV3.test.ts`
+- `__tests__/lib/agent/orchestrator/policy.test.ts`
+- `__tests__/lib/agent/orchestrator/runtime.test.ts`
 - `evals/cases/`（新策略要有对应的 golden case）
 
 不要在 `lib/amap.ts` 里写用户策略，也不要把顺序决策写回 runtime 或 guard。
@@ -679,9 +679,9 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 - `app/api/agent/chat/route.ts`
 - `lib/agent/session.ts`
-- `lib/agent/supervisor.ts`
+- `lib/agent/subagents/goalUnderstandingAgent.ts`
 - `lib/agent/goalVersion.ts`
-- `lib/agent/runtimeV3.ts`
+- `lib/agent/orchestrator/runtime.ts`
 - `hooks/useRestaurantSearch.ts`
 - `context/AppReducer.ts`
 - session 相关测试
@@ -718,10 +718,10 @@ chisha/
 │
 ├── lib/
 │   ├── agent/
-│   │   ├── runtimeV3.ts          # loop controller
+│   │   ├── orchestrator/runtime.ts # 执行器
 │   │   ├── policy.ts             # 唯一 planner
-│   │   ├── supervisor.ts         # 目标理解（模型）
-│   │   ├── supervisorPlanner.ts  # 目标理解转发 + replan
+│   │   ├── subagents/goalUnderstandingAgent.ts # 目标理解（模型）
+│   │   ├── subagents/replanAgent.ts # 重新构思方向（模型）
 │   │   ├── evaluationCache.ts    # 一轮内候选裁决缓存
 │   │   ├── session.ts
 │   │   ├── d1SessionStore.ts
@@ -845,12 +845,12 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 
 Agent 相关测试集中在：
 
-- `__tests__/lib/agent/policy.test.ts`（顺序决策与批次）
-- `__tests__/lib/agent/runtimeV3.test.ts`
-- `__tests__/lib/agent/runtimeV3.parallel.test.ts`
+- `__tests__/lib/agent/orchestrator/policy.test.ts`（顺序决策与批次）
+- `__tests__/lib/agent/orchestrator/runtime.test.ts`
+- `__tests__/lib/agent/orchestrator/runtime.parallel.test.ts`
 - `__tests__/lib/agent/evaluationCache.test.ts`
-- `__tests__/lib/agent/supervisor.test.ts`
-- `__tests__/lib/agent/supervisorPlanner.test.ts`（replan）
+- `__tests__/lib/agent/subagents/goalUnderstandingAgent.test.ts`
+- `__tests__/lib/agent/subagents/replanAgent.test.ts`（replan）
 - `__tests__/lib/agent/finalGuard.test.ts`
 - `__tests__/lib/agent/guards.test.ts`
 - `__tests__/lib/agent/subagents/evaluationAgent.test.ts`
@@ -879,7 +879,7 @@ Agent 相关测试集中在：
 - 评估调用数与重复评估数
 - 追问率、主推荐数
 
-改 `policy.ts` / `runtimeV3.ts` / `evaluationCache.ts` 之后必须跑，并在 PR 里
+改 `orchestrator/policy.ts` / `orchestrator/runtime.ts` / `evaluationCache.ts` 之后必须跑，并在 PR 里
 附 `evals/baseline.json` 的 diff。新增策略要配套加 golden case。
 
 `EVAL_MODE=live npm run eval` 会改用真实模型（需要 `OPENAI_API_KEY`），
@@ -895,11 +895,11 @@ Agent 相关测试集中在：
 3. [docs/Agent-Loop-形态重构技术方案-2026-08.md](./docs/Agent-Loop-形态重构技术方案-2026-08.md)
    ——落地记录与踩过的坑（第 9 节）。
 4. `lib/agent/types.ts`。
-5. `lib/agent/policy.ts`——顺序决策都在这里。
-6. `lib/agent/runtimeV3.ts`。
-7. `lib/agent/supervisor.ts`。
+5. `lib/agent/orchestrator/policy.ts`——顺序决策都在这里。
+6. `lib/agent/orchestrator/runtime.ts`。
+7. `lib/agent/subagents/goalUnderstandingAgent.ts`。
 8. `lib/agent/finalGuard.ts`。
-9. `__tests__/lib/agent/policy.test.ts` 与 `evals/cases/`。
+9. `__tests__/lib/agent/orchestrator/policy.test.ts` 与 `evals/cases/`。
 
 更早的评审与方案（`docs/Agent优化技术方案.md`、`docs/agent-architecture-review.md`
 等）保留作为演进记录，其中的架构描述已被上面两份取代，不要照着实现。
