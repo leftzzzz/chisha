@@ -132,20 +132,26 @@ graph TB
     API --> STORE["AgentSessionStore"]
     STORE --> RT["orchestrator/runtime 执行器"]
 
-    RT --> ENTRY["policy.decideTurnEntry"]
-    ENTRY -- "optionId 带 effect：确定性打补丁，不调模型" --> RESET
-    ENTRY -- "自由文本" --> GU["goalUnderstandingAgent 模型"]
-    GU --> RESET["policy.decideContextReset<br/>要不要作废已搜到的东西"]
+    RT --> ENTRY["policy.decideTurnEntry<br/>本轮从哪开始"]
+    ENTRY -- "optionId 带 effect：确定性打补丁，不调模型" --> GOAL
+    ENTRY -- "自由文本 / 无 effect 的选项" --> GU["goalUnderstandingAgent 模型"]
+    GU --> GOAL["本轮 UserGoal + conversationMode"]
 
-    RESET -- "需要先问清楚" --> SCOUT["policy.decideScouting"]
-    SCOUT -- "scout" --> PROBE["探一次路 → nearbyCategories<br/>用真实品类替换选项"]
-    PROBE --> ASK
-    SCOUT -- "skip" --> ASK["policy.decideAskOrConverge<br/>指纹去重 + 连问上限"]
+    GOAL --> RESET["policy.decideContextReset<br/>旧的 attempts / candidates 清不清空"]
+    RESET --> CTX["createInitialContext 应用重置计划"]
+
+    CTX --> Q{"子 Agent 说要先问清楚？"}
+    Q -- "是" --> SCOUT["policy.decideScouting"]
+    SCOUT -- "scout" --> PROBE["探一次路 → nearbyCategories<br/>用附近真实品类替换选项"]
+    SCOUT -- "skip" --> ASK
+    PROBE --> ASK["policy.decideAskOrConverge<br/>问题指纹 + 连问上限"]
     ASK -- "ask" --> PAUSE["Pause Session"]
     ASK -- "converge" --> FG
 
-    RESET -- "信息够了" --> KW["keywordExpansionAgent 模型"]
-    RESET -. "首批不依赖联想词，并发发起" .-> POLICY
+    Q -- "否" --> PROMO{"授权放宽后已有候选转正？"}
+    PROMO -- "是" --> FG
+    PROMO -- "否" --> KW["keywordExpansionAgent 模型"]
+    PROMO -. "首批不依赖联想词，并发发起" .-> POLICY
     KW --> POLICY["policy.decideNextAction"]
 
     POLICY -- "search" --> BATCH["铺开 N 个 SearchPlan<br/>policy 内部已过 guard"]
@@ -165,6 +171,12 @@ graph TB
     FG --> ASM["ResultAssembler"]
     ASM --> UI["Turntable UI"]
 ```
+
+读图说明：方框里的 `policy.*` 是决策函数（纯函数，给状态就能单测）；
+菱形是 runtime 里剩下的两个分支——它们只是转发上游已经做出的判断
+（子 Agent 说要追问、放宽授权已让候选转正），不自行选择动作。
+`decideContextReset` 不产生分支，它只算出"清空哪些状态"交给
+`createInitialContext` 执行。
 
 ### 一次推荐发生了什么
 
