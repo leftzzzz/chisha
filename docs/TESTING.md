@@ -15,7 +15,25 @@
 
 ### 配置文件
 - `jest.config.js` - Jest 配置
-- `jest.setup.js` - Jest 设置文件
+- `jest.setup.js` - Jest 设置文件（其中 `AGENT_DETERMINISTIC=1` 让 Agent 默认
+  走确定性分支；要测模型分支的用例需在用例内删除该变量并 mock
+  `@/lib/withTimeout`）
+- `jest.eval.config.js` - Agent 行为评测配置（`npm run eval`，见下）
+
+## Agent 行为评测（`npm run eval`）
+
+单测锁的是分支，锁不住"这一轮总共搜了几步、评了几次、追没追问"。
+`evals/` 用桩模型 + fixture 高德驱动真实 `runSearchAgentV3`，度量串行搜索步数、
+评估调用数、重复评估数、追问率和主推荐数，并与 `evals/baseline.json` 对比。
+
+```bash
+npm run eval             # 跑 golden case，输出报告与基线 diff
+npm run eval:baseline    # 同上并更新基线
+EVAL_MODE=live npm run eval   # 改用真实模型（需要 OPENAI_API_KEY）
+```
+
+改 `lib/agent/policy.ts` / `runtimeV3.ts` / `evaluationCache.ts` 之后必须跑，
+新增策略要在 `evals/cases/` 配套加 golden case。
 
 ## 运行测试
 

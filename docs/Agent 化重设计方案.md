@@ -1,5 +1,9 @@
 # AI 架构分析与 Agent 化重设计方案
 
+> ⚠️ **已过期，仅作演进记录。** 本文描述的 Agent 架构已被后续两轮改造取代：
+> 当前形态见 `docs/agent-loop-shape-review-2026-08.md` 与
+> `docs/Agent-Loop-形态重构技术方案-2026-08.md`。
+
 > 本文档分析 ChiSha 当前 AI 实现的 Workflow 模式局限性，并给出可落地的 Agent 化重设计方案。方案分为“先改核心 Agent Loop，再扩展多轮对话和记忆系统”，避免一次性大重构。
 
 ---

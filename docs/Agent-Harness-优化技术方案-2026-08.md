@@ -1,5 +1,11 @@
 # Agent Harness 优化技术方案（2026-08）
 
+> **后续**：本方案已落地。其中"Supervisor 决定 action、Runtime guard 校验并
+> 请求重写"的形态已被下一轮取代——常规轮次的动作决策收归 `policy.ts`，
+> guard 不再改写也不再请求重写。见
+> `docs/agent-loop-shape-review-2026-08.md` 与
+> `docs/Agent-Loop-形态重构技术方案-2026-08.md`。
+
 编制日期：2026-08-12
 依据文档：`docs/agent-harness-review-2026-08.md`
 适用范围：`lib/agent/**`、`app/api/agent/**`、`lib/api.ts`、`lib/logger.ts`、`lib/monitoring.ts`、`hooks/useRestaurantSearch.ts`、`context/AppReducer.ts`

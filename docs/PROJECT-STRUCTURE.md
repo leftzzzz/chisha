@@ -79,6 +79,8 @@ chisha/
 | `lib/logger.ts` | 日志 | logger.info() 等 |
 | `lib/withTimeout.ts` | 超时控制 | withTimeout(), fetchWithTimeout() |
 | `lib/agent/modelClient.ts` | 模型调用统一入口 | callJsonFunctionAgent() |
+| `lib/agent/policy.ts` | Agent 唯一 planner（顺序决策、搜索批次） | decideNextAction(), planSearchBatch() |
+| `lib/agent/evaluationCache.ts` | 一轮内候选裁决缓存 | createVerdictCache() |
 | `lib/amap.ts` | 高德地图 | amapPoiSearch(), amapGeocode() |
 | `lib/osm.ts` | OSM | osmSearch() |
 | `lib/distance.ts` | 距离计算 | haversineDistance() |

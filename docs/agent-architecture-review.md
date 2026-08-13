@@ -1,5 +1,10 @@
 # Agent Architecture Review
 
+> ⚠️ **已过期，仅作演进记录。** 本文描述的 Agent 架构已被后续两轮改造取代：
+> 当前形态见 `docs/agent-loop-shape-review-2026-08.md` 与
+> `docs/Agent-Loop-形态重构技术方案-2026-08.md`。
+> 文中的 supervisorAction.ts 等文件已不存在。
+
 > 基于当前代码的 Agent 架构审计与问题分析。本文重点回答：现有 Agent 为什么难以自主决策、上下文管理为什么脆弱、哪些 runtime 硬约束已经越界，以及下一步应如何治理。
 
 审计日期：2026-05-29  

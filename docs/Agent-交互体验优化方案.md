@@ -1,5 +1,10 @@
 # Agent 交互体验优化方案
 
+> ⚠️ **已过期，仅作演进记录。** 本文描述的 Agent 架构已被后续两轮改造取代：
+> 当前形态见 `docs/agent-loop-shape-review-2026-08.md` 与
+> `docs/Agent-Loop-形态重构技术方案-2026-08.md`。
+> SSE 事件契约已变化：并发批次下 searching / search_result 带 planId。
+
 审计日期：2026-06-11
 适用范围：前端 Agent 状态展示链路（`LoadingSteps`、`useRestaurantSearch`、`HomePage`）、Agent SSE 事件（`runtimeV3.ts`、`api.ts`）、追问交互（`supervisorPlanner.ts`、`supervisor.ts`）。
 

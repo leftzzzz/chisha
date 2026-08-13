@@ -30,12 +30,17 @@ const requiredFiles = [
   { path: 'lib/apiResponse.ts', description: '统一 API 响应格式' },
   { path: 'lib/logger.ts', description: '日志工具' },
   { path: 'lib/withTimeout.ts', description: '超时中间件' },
-  { path: 'lib/llm.ts', description: 'OpenAI API 兼容封装' },
-  { path: 'lib/agent/supervisorPlanner.ts', description: 'SupervisorPlannerAgent' },
-  { path: 'lib/agent/subagents/planningAgent.ts', description: 'PlanningAgent' },
+  { path: 'lib/agent/modelClient.ts', description: '模型调用统一入口' },
+  { path: 'lib/agent/runtimeV3.ts', description: 'Agent loop controller' },
+  { path: 'lib/agent/policy.ts', description: 'Agent 唯一 planner（顺序决策）' },
+  { path: 'lib/agent/supervisor.ts', description: '目标理解（模型）' },
+  { path: 'lib/agent/supervisorPlanner.ts', description: '目标理解入口 + replan' },
+  { path: 'lib/agent/subagents/keywordExpansionAgent.ts', description: 'KeywordExpansionAgent' },
   { path: 'lib/agent/subagents/evaluationAgent.ts', description: 'EvaluationAgent' },
+  { path: 'lib/agent/evaluationCache.ts', description: '一轮内候选裁决缓存' },
   { path: 'lib/agent/poiTaxonomy.ts', description: '高德 POI Taxonomy' },
   { path: 'lib/agent/guards.ts', description: 'Agent Runtime Guards' },
+  { path: 'lib/agent/finalGuard.ts', description: '主推荐准入' },
   { path: 'lib/amap.ts', description: '高德地图 API 封装' },
   { path: 'lib/osm.ts', description: 'OpenStreetMap API 封装' },
   { path: 'lib/distance.ts', description: '距离计算工具' },
@@ -54,6 +59,10 @@ const requiredFiles = [
   { path: '.env.example', description: '环境变量模板' },
   { path: '.gitignore', description: 'Git 忽略配置' },
 
+  // 评测
+  { path: 'jest.eval.config.js', description: 'Agent 行为评测配置' },
+  { path: 'evals/baseline.json', description: 'Agent 行为评测基线' },
+
   // 文档
   { path: 'README.md', description: '项目说明' },
   { path: 'docs/Phase2-API-Documentation.md', description: 'API 文档' },
@@ -66,7 +75,6 @@ const requiredEnvVars = [
   { name: 'AMAP_SECURITY_CODE', required: false, description: '高德地图安全码' },
   { name: 'NEXT_PUBLIC_APP_URL', required: false, description: '应用 URL' },
   { name: 'LOG_LEVEL', required: false, description: '日志级别' },
-  { name: 'AGENT_SUPERVISOR_V2', required: false, description: '启用 Supervisor + 子 Agent 搜索链路' },
 ];
 
 function checkFile(filePath) {
