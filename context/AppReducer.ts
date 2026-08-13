@@ -12,7 +12,7 @@
 
 import { AppState, AppAction, Restaurant } from '@/types';
 import { getRestaurantIdentityKeys, getRestaurantBrand } from '@/lib/restaurantIdentity';
-import { MAX_TURNTABLE_OPTIONS, hasTurntableCapacity } from '@/lib/turntableOptions';
+import { MAX_TURNTABLE_OPTIONS, MIN_TURNTABLE_OPTIONS, hasTurntableCapacity } from '@/lib/turntableOptions';
 
 /**
  * 初始状态
@@ -101,11 +101,23 @@ export function appReducer(state: AppState, action: AppAction): AppState {
      */
     case 'SET_RESTAURANTS_WITH_CANDIDATES': {
       const dedupedTurntable = dedupeRestaurants(action.payload.turntable);
-      const turntable = dedupedTurntable.slice(0, MAX_TURNTABLE_OPTIONS);
+      const seenPrimaryKeys = new Set<string>();
+      addRestaurantIdentityKeys(dedupedTurntable, seenPrimaryKeys);
+      const dedupedCandidates = dedupeRestaurants(
+        action.payload.candidates,
+        seenPrimaryKeys
+      );
+      // 主推荐不足以转动转盘时，先用候补补到最低可转数量。
+      // 否则会出现"1 家推荐 + 20 家候补躺在旁边、转盘点了没反应"。
+      const turntableFill = dedupedTurntable.length >= MIN_TURNTABLE_OPTIONS
+        ? []
+        : dedupedCandidates.slice(0, MIN_TURNTABLE_OPTIONS - dedupedTurntable.length);
+      const filledTurntable = [...dedupedTurntable, ...turntableFill];
+      const turntable = filledTurntable.slice(0, MAX_TURNTABLE_OPTIONS);
       const seenTurntableKeys = new Set<string>();
       addRestaurantIdentityKeys(turntable, seenTurntableKeys);
       const candidates = dedupeRestaurants(
-        [...dedupedTurntable.slice(MAX_TURNTABLE_OPTIONS), ...action.payload.candidates],
+        [...filledTurntable.slice(MAX_TURNTABLE_OPTIONS), ...dedupedCandidates],
         seenTurntableKeys
       );
 

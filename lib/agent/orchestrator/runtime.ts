@@ -14,7 +14,7 @@ import { runGoalUnderstandingAgent } from '../subagents/goalUnderstandingAgent';
 import { runSearchReplan, summarizeExhaustedSearch } from '../subagents/replanAgent';
 import { evaluateSearchResult, mergeCandidates } from '../evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from '../guards';
-import { isPrimaryRecommendationAllowed } from '../finalGuard';
+import { isPrimaryRecommendationEligible } from '../finalGuard';
 import { createTurnLogger } from '../turnLogger';
 import { summarizeTurnMetrics, type MetricsSink } from '../metrics';
 import { describeFinish, internalFinishNote, type FinishReason } from '../finishReason';
@@ -551,7 +551,7 @@ function buildFinishAction(
     reason,
     selectedIds: withSelectedIds
       ? context.candidates
-          .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
+          .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
           .map((candidate) => candidate.restaurant.id)
       : undefined,
     explanation: internalFinishNote(reason),
@@ -1258,8 +1258,10 @@ function commitSearchPlanResult(
   mergeCandidates(context, evaluated.acceptedCandidates);
 
   const verdicts = verdictGuard.output.verdicts;
+  // 口径与 finalGuard 一致：observation.accepted 是"会被当成主推荐展示的家数"。
+  // 用严格准入会在品类补位的场景下报 0，而实际展示了若干家——排障时极具误导性。
   const acceptedPrimaryIds = evaluated.acceptedCandidates
-    .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
+    .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
     .map((candidate) => candidate.restaurant.id);
   const candidateIds = evaluated.acceptedCandidates
     .map((candidate) => candidate.restaurant.id);

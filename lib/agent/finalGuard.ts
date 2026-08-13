@@ -25,9 +25,18 @@ export function applyFinalGuard(
   const recommendationCandidates = isRandomRecommendationContext(context)
     ? seededShuffleCandidates(orderedCandidates, randomRecommendationSeed(context))
     : dedupeCandidatesForRecommendation(orderedCandidates);
-  const primaryCandidates = recommendationCandidates
+  const strictPrimary = recommendationCandidates
     .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
     .slice(0, context.targetCount);
+  // 严格准入凑不满时，用"品类兼容但菜单未验证"的候选补齐，避免菜品级目标
+  // 因为 POI 没有菜单字段而永远空手而归。补进来的带 warning，见 buildUnmetConstraints。
+  const categoryBackfill = strictPrimary.length >= context.targetCount
+    ? []
+    : recommendationCandidates
+      .filter((candidate) => !strictPrimary.includes(candidate))
+      .filter((candidate) => isCategoryCompatiblePrimaryAllowed(candidate, context))
+      .slice(0, context.targetCount - strictPrimary.length);
+  const primaryCandidates = [...strictPrimary, ...categoryBackfill];
   const primaryIds = new Set(primaryCandidates.map((candidate) => candidate.restaurant.id));
   const backupCandidates = recommendationCandidates
     .filter((candidate) => !primaryIds.has(candidate.restaurant.id))
@@ -51,15 +60,81 @@ export function isPrimaryRecommendationAllowed(
   candidate: RestaurantCandidate,
   context: CandidateAdmissionContext
 ): boolean {
-  if (!isCandidateFreshForContext(candidate, context)) {
-    return false;
-  }
-
   if (candidate.verification.status !== 'passed') {
     return false;
   }
 
   if (!candidate.verification.primaryEligible) {
+    return false;
+  }
+
+  if (!passesSearchAuthorizationGates(candidate, context)) {
+    return false;
+  }
+
+  const sourceAttempt = context.attempts[candidate.sourceAttempt - 1]!;
+  if (hasRequiredItems(context)) {
+    return candidate.verification.itemMatches.length > 0
+      || (
+        candidate.verification.primaryEligible
+        && isBroadSearchIntent(sourceAttempt.searchIntent)
+        && isSearchIntentAuthorizedForPrimary(
+          context.goal,
+          sourceAttempt.searchIntent,
+          sourceAttempt.keywords
+        )
+      );
+  }
+
+  return true;
+}
+
+/**
+ * 品类兼容、但菜单层面无法验证的候选，是否可以补进主推荐。
+ *
+ * 存在的理由：POI 事实字段里根本没有菜单，所以"这家店有柠檬茶"这种菜品级
+ * 断言，除非店名恰好写着，否则**永远**验证不出来。严格准入因此在这类目标上
+ * 是一条构造上不可达的线——线上表现就是广东能出结果、成都武汉全军覆没。
+ *
+ * 这里放宽的只有"菜品是否验证到"这一项。排除项、停业、距离硬约束、搜索授权
+ * 一条都不放，且只在严格准入凑不满目标数时才启用，补进来的会带 warning。
+ */
+export function isCategoryCompatiblePrimaryAllowed(
+  candidate: RestaurantCandidate,
+  context: CandidateAdmissionContext
+): boolean {
+  if (candidate.verification.status !== 'unverified') {
+    return false;
+  }
+
+  if (candidate.verification.categoryMatches.length === 0) {
+    return false;
+  }
+
+  return passesSearchAuthorizationGates(candidate, context);
+}
+
+/**
+ * 决策层判断"这一轮到底有没有主推荐"的口径。
+ *
+ * 必须与 applyFinalGuard 的装配口径一致：policy 用严格准入去决定要不要追问、
+ * finalGuard 却能靠品类补位装配出结果，就会出现"策略说没有、装配说有 3 家"
+ * 的分裂——线上表现是明明能给结果却弹了追问。
+ */
+export function isPrimaryRecommendationEligible(
+  candidate: RestaurantCandidate,
+  context: CandidateAdmissionContext
+): boolean {
+  return isPrimaryRecommendationAllowed(candidate, context)
+    || isCategoryCompatiblePrimaryAllowed(candidate, context);
+}
+
+/** 与"菜品验证到没有"无关的那部分准入：新鲜度、硬约束、搜索授权。 */
+function passesSearchAuthorizationGates(
+  candidate: RestaurantCandidate,
+  context: CandidateAdmissionContext
+): boolean {
+  if (!isCandidateFreshForContext(candidate, context)) {
     return false;
   }
 
@@ -81,19 +156,6 @@ export function isPrimaryRecommendationAllowed(
     )
   ) {
     return false;
-  }
-
-  if (hasRequiredItems(context)) {
-    return candidate.verification.itemMatches.length > 0
-      || (
-        candidate.verification.primaryEligible
-        && isBroadSearchIntent(sourceAttempt.searchIntent)
-        && isSearchIntentAuthorizedForPrimary(
-          context.goal,
-          sourceAttempt.searchIntent,
-          sourceAttempt.keywords
-        )
-      );
   }
 
   return true;
@@ -313,8 +375,17 @@ function buildUnmetConstraints(
     unmet.push(`只找到 ${brandCount} 个不同品牌的餐厅（共 ${primaryCandidates.length} 家）。`);
   }
 
+  const primaryIds = new Set(primaryCandidates.map((candidate) => candidate.restaurant.id));
+  const backfilledCount = primaryCandidates.filter((candidate) =>
+    candidate.verification.status === 'unverified'
+  ).length;
+  if (backfilledCount > 0) {
+    unmet.push(`其中 ${backfilledCount} 家按品类匹配推荐，未能确认菜单，请以门店实际供应为准。`);
+  }
+
   const hasUnverifiedBackups = context.candidates.some((candidate) =>
     candidate.verification.status === 'unverified'
+    && !primaryIds.has(candidate.restaurant.id)
   );
   if (hasUnverifiedBackups) {
     unmet.push('部分候补缺少可验证字段，未进入主推荐。');
