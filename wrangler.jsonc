@@ -1,11 +1,3 @@
-// Cloudflare Workers 部署配置模板。
-//
-// 使用方式：
-//   cp wrangler.jsonc.example wrangler.jsonc
-//   npx wrangler d1 create chisha        # 输出 database_id，填到下面
-//
-// wrangler.jsonc 本身不进版本库：它含有你自己 Cloudflare 账号下的资源 ID，
-// 提交上来只会让每个 fork 都指向别人的数据库。详见 docs/DEPLOYMENT.md。
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "chisha",
@@ -35,11 +27,15 @@
 	"build": {
 		"command": "npm run wrangler:build"
 	},
+	// Fork 之后必须换成你自己账号下的 database_id，下面这个你访问不了：
+	//   npx wrangler d1 create chisha
+	// 这个文件必须留在仓库里——Cloudflare Workers Builds 从仓库克隆代码构建，
+	// 读不到它就没法部署。
 	"d1_databases": [
 		{
 			"binding": "CHISHA_DB",
 			"database_name": "chisha",
-			"database_id": "<npx wrangler d1 create chisha 输出的 id>"
+			"database_id": "899b64a6-84a0-4eda-8a19-7613c83427b1"
 		}
 	]
 }

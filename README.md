@@ -965,11 +965,8 @@ npm run deploy
 
 生产环境如果使用 Cloudflare，需要配置 D1 binding：`CHISHA_DB`。如果缺少 D1 binding，代码会回退到内存 session store，不适合生产长期运行。
 
-`wrangler.jsonc` 不在版本库里（它含有你自己账号下的 D1 `database_id`），先复制模板：
-
-```bash
-cp wrangler.jsonc.example wrangler.jsonc
-```
+Fork 之后需要把 `wrangler.jsonc` 里的 `d1_databases[].database_id` 换成你自己的——
+仓库里那个是原作者账号下的资源，你访问不了。用 `npx wrangler d1 create chisha` 生成。
 
 详细部署说明见 [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)。
 
