@@ -105,46 +105,63 @@ npm run db:migrate:remote
 
 ## Agent 架构总览
 
-当前主链路是 Runtime V3。核心原则是**模型只做代码枚举不了的事**：
+**编排者是代码，不是模型。** 没有"主 Agent 模型"这种东西——`orchestrator/`
+决定一切流程，四个子 Agent 各做一件独立任务。核心原则是**模型只做代码枚举不了的事**：
 
-| 谁 | 负责什么 | 为什么是它 |
+| 层 | 谁 | 负责什么 |
 |---|---|---|
-| Supervisor（模型） | 理解口语、维护 `UserGoal`、决定要不要追问 | 自然语言意图无法枚举 |
-| KeywordExpansion（模型） | 把目标扩成更容易命中 POI 的搜索词 | 同义词与相邻品类无法枚举 |
-| Evaluation（模型） | 判断 POI 是否满足目标 | 语义匹配无法枚举 |
-| **`policy.ts`（代码）** | **下一步做什么：搜哪些词、够不够、要不要追问** | **可枚举，代码算得比模型快也比模型稳** |
+| 编排（代码） | `orchestrator/policy.ts` | **唯一决策者**：本轮从哪开始、搜哪些词、够不够、要不要追问、何时收敛。纯函数，无 I/O 无模型 |
+| 编排（代码） | `orchestrator/runtime.ts` | **只执行**：按决策发起调用、发 SSE、提交状态与 trace |
+| 子 Agent（模型） | `goalUnderstandingAgent` | 理解口语、维护 `UserGoal`、判断信息够不够 |
+| 子 Agent（模型） | `keywordExpansionAgent` | 把目标扩成更容易命中 POI 的搜索词与探索方向 |
+| 子 Agent（模型） | `evaluationAgent` | **逐家**判断 POI 是否满足目标（不选择、不排序） |
+| 子 Agent（模型） | `replanAgent` | 确定性关键词试完仍无主推荐时重新构思方向，一轮最多一次 |
+| 规则库（代码） | `goal.ts` / `guards.ts` / `finalGuard.ts` 等 | 同样输入永远同样输出，不含语义判断 |
 
-常规轮次没有模型参与动作决策。模型 planner 只保留一个罕见分支
-`runSearchReplan`：确定性关键词全部试完仍无主推荐时调一次，可以给新搜索词，
-也可以给一个贴合上下文的问句。
+依赖方向只允许三条：编排层→子 Agent、编排层→规则库、子 Agent→规则库。
+**这条约束由 `__tests__/lib/agent/layering.test.ts` 强制**，违反即测试红；
+子 Agent 的输入不得含编排状态，由 `subagentContracts.test.ts` 强制。
 
-历史上"下一步搜什么"同时存在于 planner、runtime guard 和预算兜底三处并已
-发生阈值漂移，收敛过程见 `docs/agent-loop-shape-review-2026-08.md`。
+演进过程：动作决策从模型收回到代码见
+`docs/agent-loop-shape-review-2026-08.md`；角色正名与子 Agent 解耦见
+`docs/Agent-职责边界重构-技术方案-2026-08.md`。
 
 ```mermaid
 graph TB
-    U["User Message"] --> API["/api/agent/chat"]
+    U["User Message / optionId"] --> API["/api/agent/chat"]
     API --> STORE["AgentSessionStore"]
-    STORE --> ORCH["Runtime V3"]
+    STORE --> RT["orchestrator/runtime 执行器"]
 
-    ORCH --> SUP["Supervisor 模型：UserGoal / 追问"]
-    SUP --> KW["KeywordExpansion 模型"]
-    SUP -. "首批不依赖联想词，并发发起" .-> POLICY
+    RT --> ENTRY["policy.decideTurnEntry"]
+    ENTRY -- "optionId 带 effect：确定性打补丁，不调模型" --> RESET
+    ENTRY -- "自由文本" --> GU["goalUnderstandingAgent 模型"]
+    GU --> RESET["policy.decideContextReset<br/>要不要作废已搜到的东西"]
 
+    RESET -- "需要先问清楚" --> SCOUT["policy.decideScouting"]
+    SCOUT -- "scout" --> PROBE["探一次路 → nearbyCategories<br/>用真实品类替换选项"]
+    PROBE --> ASK
+    SCOUT -- "skip" --> ASK["policy.decideAskOrConverge<br/>指纹去重 + 连问上限"]
+    ASK -- "ask" --> PAUSE["Pause Session"]
+    ASK -- "converge" --> FG
+
+    RESET -- "信息够了" --> KW["keywordExpansionAgent 模型"]
+    RESET -. "首批不依赖联想词，并发发起" .-> POLICY
     KW --> POLICY["policy.decideNextAction"]
 
-    POLICY -- "search" --> BATCH["一次铺开 N 个 SearchPlan"]
-    BATCH --> VALID["validateSearchPlan 只校验"]
-    VALID --> TOOL["并行 Amap / OSM"]
-    TOOL --> EVA["EvaluationAgent + 一轮内裁决缓存"]
+    POLICY -- "search" --> BATCH["铺开 N 个 SearchPlan<br/>policy 内部已过 guard"]
+    BATCH --> TOOL["并行 Amap / OSM"]
+    TOOL --> EVA["evaluationAgent 逐家裁决<br/>+ 一轮内裁决缓存"]
     EVA --> VG["VerdictGuard"]
     VG --> MERGE["Candidate Merge"]
     MERGE --> POLICY
 
-    POLICY -- "replan" --> RP["runSearchReplan 模型，一轮最多一次"]
+    POLICY -- "replan" --> RP["replanAgent 模型，一轮最多一次"]
     RP --> POLICY
-    POLICY -- "ask" --> PAUSE["Pause Session"]
-    POLICY -- "finish" --> FG["FinalGuard"]
+    POLICY -- "invalid_plans" --> BUG["策略 bug：上报 + 记为已尝试"]
+    BUG --> POLICY
+    POLICY -- "ask" --> ASK
+    POLICY -- "abort" --> ERR["结构化错误结束"]
+    POLICY -- "finish" --> FG["FinalGuard 准入与排序"]
     FG --> ASM["ResultAssembler"]
     ASM --> UI["Turntable UI"]
 ```
@@ -153,19 +170,28 @@ graph TB
 
 1. 用户输入：“附近想吃便宜点的川菜，不要太远。”
 2. `/api/agent/chat` 校验请求，加载或创建 session。
-3. `Supervisor` 理解用户消息，创建或更新 `UserGoal`；需要澄清就在这里追问。
-4. `KeywordExpansionHelper` 生成同义词与相邻品类。**首批 exact 搜索不依赖它，
+3. `policy.decideTurnEntry` 分派：点了带 effect 的追问选项就确定性打补丁
+   （**全程不调模型**）；自由文本才交给 `goalUnderstandingAgent` 理解。
+4. `policy.decideContextReset` 按会话模式决定要不要作废已搜到的东西。
+   注意分工：“这句话与上文什么关系”是语义判断，归子 Agent；
+   “因此要不要清空”是策略判断，归 policy。
+5. 需要先问清楚时，`policy.decideScouting` 判断要不要先探一次路——用户没说
+   想吃什么时，先搜一次拿到附近真实品类分布，再据此生成追问选项，避免模型
+   凭空复述自己 prompt 里的例子。`decideAskOrConverge` 用问题指纹挡住
+   “同一个问题连问两次”。
+6. `keywordExpansionAgent` 生成同义词与探索方向。**首批 exact 搜索不依赖它，
    两者并发**——首批只用得到 `UserGoal.primaryKeywords`。
-5. `policy.decideNextAction` 决定下一步：搜索（一次铺开整批计划）、结束、
-   追问，或在关键词枯竭时 replan。
-6. `validateSearchPlan` 校验计划。计划由 policy 生成，任何违规都是编程错误，
-   记 error 日志后换下一个决策——**不改写、也不请求重写**。
-7. 批内计划并行调用高德，失败时 fallback 到 OSM。
-8. `EvaluationAgent` 根据事实字段验证候选。一轮内同一家店只判一次
-   （`evaluationCache.ts`）。
-9. `VerdictGuard` 清理模型 verdict 中不合法的内容。
-10. `FinalGuard` 决定哪些候选能进入主推荐。
-11. 前端收到 SSE 事件，展示进度、追问、结果和转盘。同一步的并发计划按
+7. `policy.decideNextAction` 决定下一步：搜索（一次铺开整批计划）、结束、
+   追问、replan，或在验证不可用时 abort。计划在 policy 内部就过了
+   `validateSearchPlan`——任何违规都是编程错误，会以 `invalid_plans` 决策
+   显式报出来，**不改写、也不请求重写**。
+8. 批内计划并行调用高德，失败时 fallback 到 OSM。
+9. `evaluationAgent` 逐家验证候选，只出裁决、不做选择与排序。一轮内同一家店
+   只判一次（`evaluationCache.ts`）。
+10. `VerdictGuard` 清理模型 verdict 中不合法的内容。
+11. `FinalGuard` 决定哪些候选能进入主推荐，并按裁决内容与距离确定性排序；
+    开放推荐时按搜索方向轮转，避免单一品类吃满转盘。
+12. 前端收到 SSE 事件，展示进度、追问、结果和转盘。同一步的并发计划按
     `planId` 聚合展示。
 
 ## 核心概念
@@ -193,8 +219,8 @@ graph TB
 
 - `lib/agent/types.ts`
 - `lib/agent/schemas/goal.ts`
-- `lib/agent/subagents/goalUnderstandingAgent.ts`（目标理解与 GoalPatch 的实现）
-- `lib/agent/subagents/replanAgent.ts`（对外入口，转发目标理解 + replan）
+- `lib/agent/subagents/goalUnderstandingAgent.ts`（目标理解，模型）
+- `lib/agent/goal.ts`（目标代数：合并、打补丁、追问选项应用，纯函数）
 
 ### SearchPlan
 
@@ -296,10 +322,9 @@ graph TB
 
 职责：
 
-- Agent loop 编排。
-- 调用 Supervisor、KeywordExpansionHelper、Evaluation。
-- 执行 `policy.decideNextAction` 给出的决策。
-- 控制搜索次数、action 次数和评价 batch。
+- 执行 policy 给出的决策，不自行推导下一步。
+- 调用四个子 Agent 与搜索工具。
+- 控制 action 次数和评价 batch。
 - 并行执行批内搜索计划，串行提交结果（保证 `sourceAttempt` 索引稳定）。
 - 触发 guard 和 FinalGuard。
 - 生成 SSE 事件和 runtime state。
@@ -314,7 +339,8 @@ graph TB
 
 不要做：
 
-- 不要把 Runtime 变成第二个 Planner——顺序决策只能写在 `policy.ts`。
+- 不要把 Runtime 变成第二个 Planner——所有决策只能写在 `orchestrator/policy.ts`。
+  判据：这里不该出现决定"下一步动作类型"的 `if`。
 - 不要静默改写 policy 给出的计划。计划非法说明 policy 有 bug，应该报出来。
 - 不要让未验证候选进入主推荐。
 
@@ -337,15 +363,22 @@ Runtime 的边界：
 
 职责：
 
-- **唯一 planner**：`decideNextAction` 决定搜索 / 结束 / 追问 / replan。
-- `planSearchBatch` 一次铺开整批搜索计划。
+- **唯一决策者**，纯函数、无 I/O、无模型：
+  - `decideTurnEntry` 本轮从哪开始（optionId 分派 / 交给模型理解）
+  - `decideContextReset` 要不要作废已搜到的东西
+  - `decideScouting` 追问前要不要先探一次路
+  - `decideNextAction` 搜索 / 结束 / 追问 / replan / abort / invalid_plans
+  - `decideAskOrConverge` 问题指纹与连问上限
+  - `planSearchBatch` 一次铺开整批搜索计划；`partitionPlansByValidity` 自校验
 - 计划构造、半径递增、poiType 选择、关键词队列。
 - 追问文案与授权 effect（`buildNoPrimaryQuestion` / `buildBroadenEffect`）。
 - 阈值集中在 `POLICY_LIMITS`。
 
 不要做：
 
-- 不要做语义理解——那是 Supervisor 的事。
+- 不要做语义理解——那是 `goalUnderstandingAgent` 的事。
+- 不要 import 子 Agent 或 `modelClient`——那会破坏"能不 mock 就单测"的性质，
+  `layering.test.ts` 会红。
 - 不要做候选准入——那是 FinalGuard 的事。
 - 不要在 runtime 或 guard 里另写一份顺序决策。
 - 不要把阈值散落到各处：改行为就改 `POLICY_LIMITS`。
@@ -361,7 +394,6 @@ Runtime 的边界：
 
 职责：
 
-- 转发目标理解（实现在 `supervisor.ts`）。
 - `runSearchReplan`：确定性关键词全部试完仍无主推荐时重新构思方向，
   一轮最多一次，可返回新搜索词或一个追问；返回 `null` 时回落模板追问。
 
@@ -377,11 +409,14 @@ Runtime 的边界：
 
 ### `lib/agent/subagents/keywordExpansionAgent.ts`
 
-目标架构定位：
+架构定位：
 
-- 它更适合作为 `KeywordExpansionHelper`，而不是独立主控 Agent。
-- 它可以使用模型或 taxonomy，但只生成搜索词和 POI type 建议。
-- 它不决定是否继续搜，也不决定搜索结果是否可进入主推荐。
+- 它只生成搜索词和 POI type 建议，不决定是否继续搜，也不决定搜索结果
+  能否进入主推荐。
+- 它拿到的是编排层算好的 `mode`（`expand_targets` / `open_exploration`），
+  不用自己从 `authorizations` 推断当前处于哪个阶段。
+- 模型失败即报错。**不要再加"用固定词表替它选方向"的兜底**——那两张表
+  （小吃/中餐/快餐、日料降权）已在职责边界重构中删除。
 
 职责：
 
