@@ -399,25 +399,6 @@ export function resolvePlanPoiType(
   return inferred === DEFAULT_POI_TYPE ? undefined : inferred;
 }
 
-/** 校验模型给出的 search action 时的 poiType 选择：关键词推断优先。 */
-export function resolveSearchActionPoiType(
-  goal: UserGoal,
-  keyword: string,
-  planPoiType?: string
-): string | undefined {
-  const keywordPoiType = inferPoiTypesForGoalKeyword(goal, keyword);
-  if (keywordPoiType) {
-    return keywordPoiType;
-  }
-
-  const sanitizedPlanPoiTypes = sanitizePoiTypeCodes(planPoiType);
-  if (sanitizedPlanPoiTypes.length > 0) {
-    return sanitizedPlanPoiTypes.join('|');
-  }
-
-  return sanitizePoiTypeCodes(goal.poiType).join('|') || undefined;
-}
-
 export function inferPoiTypesForGoalKeyword(
   goal: UserGoal | undefined,
   keyword: string
@@ -725,14 +706,6 @@ export function buildPostAuthorizationNoPrimaryQuestion(
   }
 
   return null;
-}
-
-export function questionAsksForBroadenAuthorization(question: PendingQuestion): boolean {
-  return (
-    question.options?.some((option) => option.includes('放宽')) === true
-    || question.question.includes('允许放宽')
-    || Object.values(question.optionEffects ?? {}).some((effect) => effect.allowBroaden === true)
-  );
 }
 
 /** 用户选择"放宽"时写入 goal 的授权效果。 */

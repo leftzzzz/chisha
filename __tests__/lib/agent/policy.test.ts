@@ -7,7 +7,6 @@ import {
   nextUntriedTarget,
   planSearchBatch,
   resolvePlanPoiType,
-  resolveSearchActionPoiType,
   untriedTargets,
   type PolicyContext,
 } from '@/lib/agent/policy';
@@ -110,8 +109,8 @@ describe('policy poiType 选择', () => {
     expect(resolvePlanPoiType(goal(), '火锅', ['050000'])).toBe('050117');
   });
 
-  it('lets keyword taxonomy override a model-provided poi type', () => {
-    expect(resolveSearchActionPoiType(goal(), '火锅', '050118')).toBe('050117');
+  it('ignores a broad food code in favour of the goal poi type', () => {
+    expect(resolvePlanPoiType(goal({ poiType: '050117' }), '未知词', ['050000'])).toBe('050117');
   });
 });
 
