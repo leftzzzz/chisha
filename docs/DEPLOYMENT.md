@@ -631,6 +631,16 @@ pm2 restart chisha
 
 Agent 多轮会话需要持久化到 D1，避免 Cloudflare Workers 多实例、冷启动或重新部署后丢失追问状态。
 
+### 准备 wrangler.jsonc
+
+`wrangler.jsonc` 不进版本库——它含有你自己 Cloudflare 账号下的 D1
+`database_id`，提交上来会让每个 fork 都指向一个它访问不了的数据库。仓库里
+只有模板：
+
+```bash
+cp wrangler.jsonc.example wrangler.jsonc
+```
+
 ### 首次创建 D1 数据库
 
 每个 Cloudflare 账号/环境只需要创建一次数据库：
@@ -639,7 +649,7 @@ Agent 多轮会话需要持久化到 D1，避免 Cloudflare Workers 多实例、
 npx wrangler d1 create chisha
 ```
 
-命令会输出 `database_id`。将它加入 `wrangler.jsonc`：
+命令会输出 `database_id`。将它填进你本地的 `wrangler.jsonc`：
 
 ```jsonc
 {
