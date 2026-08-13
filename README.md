@@ -974,10 +974,10 @@ Fork 之后需要把 `wrangler.jsonc` 里的 `d1_databases[].database_id` 换成
 
 本仓库不附带任何 API Key，你自建一份之后账单归你。有两件事直接决定你会不会被刷：
 
-1. **限流在 Serverless 上基本无效。** `lib/rateLimit.ts` 用的是进程内存，
-   Cloudflare Workers / Vercel Edge 上每个请求可能落在不同实例，限流约等于没有。
-   要挂公开站点就得先换成 KV / Durable Objects / Redis，否则 `/api/agent/chat`
-   会用你的 `OPENAI_API_KEY` 无限跑模型。
+1. **限流依赖 Cloudflare 原生 ratelimit binding，别漏配。** `wrangler.jsonc` 的
+   `ratelimits` 段少了哪个，对应入口就静默退回进程内存计数——在 Workers 上等于
+   没有限流，`/api/agent/chat` 会用你的 `OPENAI_API_KEY` 无限跑模型。部署到
+   Vercel 或自托管 Node 时这套 binding 不存在，要挂公开站点得自己接全局方案。
 2. **`/_AMapService` 是公开路径**，服务端会给转发出去的请求注入
    `AMAP_SECURITY_CODE`。它只放行 JS API 实际需要的几条路径，
    不要改回通配转发。

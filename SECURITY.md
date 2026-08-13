@@ -11,14 +11,31 @@
 这个项目开源的是代码，不附带任何 API Key。你自己部署一份之后，**账单是你的**，
 以下几点直接决定你会不会被刷。
 
-### 1. 限流在 Serverless 上基本无效
+### 1. 部署到 Workers 时，别漏掉 ratelimits 配置
 
-`lib/rateLimit.ts` 用的是进程内存 Map。在 Cloudflare Workers、Vercel Edge、
-AWS Lambda 上，每个请求可能落在不同的隔离实例里，内存不共享——限流约等于没有。
-文件顶部有说明和几种替代方案（KV / Durable Objects / Redis）。
+`lib/rateLimit.ts` 有两套后端：Cloudflare Workers 原生 Rate Limiting binding，
+以及进程内存兜底。**内存兜底在 Serverless 上等于没有限流**——每个请求可能落在
+不同的隔离实例里，内存不共享。
 
-**如果你要挂一个任何人都能访问的公开站点，先把限流换成全局方案。** 否则
-`/api/agent/chat` 会用你的 `OPENAI_API_KEY` 无限跑模型。
+生产必须走 binding。`wrangler.jsonc` 里的 `ratelimits` 段声明了四个命名空间，
+额度与 `lib/rateLimit.ts` 的 `RATE_LIMITS` 表一一对应（由
+`__tests__/lib/rateLimit.config.test.ts` 强制一致）。**少配任何一个，对应入口就会
+静默退回内存计数**——只在日志里留一条 warn：
+
+```
+Rate limit binding missing on a serverless runtime; falling back to in-process memory
+```
+
+部署后 grep 一下这条日志，有就是配漏了。
+
+`/api/agent/chat` 上有两道闸门：按 IP（6 次/分钟）挡普通滥用，按常量 key 的总量
+闸门（60 次/分钟）挡轮换 IP 的脚本——后者才是真正给账单封顶的那道。注意原生
+binding **按 Cloudflare 机房各自计数**，所以总量闸门的实际上限是这个数乘以攻击者
+能打到的机房数。它大幅收窄风险，但不是硬上限。
+
+**部署到 Vercel 或自托管 Node 的话，这套 binding 不存在**，限流会退回内存。
+Vercel 的 Node runtime 单实例内内存是共享的，比 Edge 好一些，但仍然不跨实例。
+要挂公开站点就得自己接一个全局方案（Redis/Upstash 之类）。
 
 ### 2. 不要把 `/_AMapService` 改回通配转发
 
