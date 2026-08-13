@@ -252,8 +252,33 @@ describe('modelClient', () => {
       const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
 
       expect(error).toBeInstanceOf(AgentError);
-      expect(error.code).toBe('UNKNOWN');
+      expect(error.code).toBe('MODEL_UNAVAILABLE');
       expect(error.retryable).toBe(true);
+    });
+
+    // 配额耗尽重试 100% 失败，必须与限流分开：前端据此不给重试入口。
+    it('marks a 403 quota error as non-retryable', async () => {
+      fetchWithTimeoutMock.mockResolvedValue(
+        errorResponse({ error: { message: 'Free quota exhausted' } }, 403)
+      );
+
+      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(AgentError);
+      expect(error.code).toBe('MODEL_QUOTA_EXHAUSTED');
+      expect(error.retryable).toBe(false);
+    });
+
+    it('marks a 401 as a configuration problem', async () => {
+      fetchWithTimeoutMock.mockResolvedValue(
+        errorResponse({ error: { message: 'invalid api key' } }, 401)
+      );
+
+      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(AgentError);
+      expect(error.code).toBe('CONFIG_MISSING');
+      expect(error.retryable).toBe(false);
     });
 
     it('marks a 400 as not retryable', async () => {

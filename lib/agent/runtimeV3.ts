@@ -1,8 +1,10 @@
 import type { Restaurant } from '@/types';
 import {
+  applyClarificationOptionToGoal,
   applyGoalPatch,
   clarificationNeedToPendingQuestion,
   createActionRecord,
+  hasClarificationOption,
   runSearchReplan,
   runSupervisorPlanner,
   summarizeAction,
@@ -14,11 +16,9 @@ import { createTurnLogger } from './turnLogger';
 import { summarizeTurnMetrics, type MetricsSink } from './metrics';
 import { describeFinish, internalFinishNote, type FinishReason } from './finishReason';
 import {
-  buildDegradedGoalFromQuery,
-  buildEmptyDegradedGoal,
-  DEGRADED_CLARIFYING_QUESTION,
-  DEGRADED_GOAL_NOTICE,
-} from './degraded';
+  buildQuestionFingerprint,
+  CLARIFICATION_OPTION,
+} from './clarificationOptions';
 import {
   buildNoPrimaryQuestion,
   decideNextAction,
@@ -76,6 +76,10 @@ interface AgentV3Context extends AgentContext {
   verdictCache: VerdictCache;
   /** 本轮是否已经用掉那次 replan 机会 */
   replanUsed?: boolean;
+  /** 上一轮追问的指纹，用于阻止同一个问题连问两次。 */
+  lastQuestionFingerprint?: string;
+  /** 连续追问轮数，任何一次产出结果的轮次都会清零。 */
+  consecutiveAskTurns?: number;
 }
 
 interface SearchStateResetPlan {
@@ -148,10 +152,6 @@ async function runAgentTurn(
     conversationMode === 'start_new_goal' ? undefined : input.runtimeState?.goal
   );
 
-  if (resolution.degraded) {
-    emit({ type: 'status', message: DEGRADED_GOAL_NOTICE });
-  }
-
   const invalidationPlan = deriveContextInvalidationPlan(
     input.runtimeState?.goal,
     baseGoal,
@@ -162,9 +162,6 @@ async function runAgentTurn(
   const context = createInitialContext(input, baseGoal, resetPlan);
   context.modelCallMetrics = turnMetrics.modelCallMetrics ?? [];
   contextRef.current = context;
-  if (resolution.degraded) {
-    appendTrace(context, 'error', { error: resolution.degraded });
-  }
   appendTrace(context, 'user_message', {
     input: {
       message: input.query,
@@ -185,13 +182,10 @@ async function runAgentTurn(
     },
   });
   const clarifyingQuestion = resolution.clarifyingQuestion
-    ?? supervisorOutput?.question
     ?? getInitialClarifyingQuestion(context.goal);
 
   if (clarifyingQuestion) {
-    const action: AgentAction = { type: 'ask_user', question: clarifyingQuestion };
-    appendAction(context, action, emit);
-    return buildPausedResult(context, clarifyingQuestion);
+    return askOrConverge(context, clarifyingQuestion, emit);
   }
 
   const promotion = promoteAuthorizedBroadenedResults(context);
@@ -209,10 +203,13 @@ async function runAgentTurn(
   while (context.actions.length < context.maxActions) {
     const decision = await nextExecutableDecision(context, emit);
 
+    if (decision.kind === 'abort') {
+      throw context.evaluationError
+        ?? new AgentError('Candidate evaluation failed', decision.reason, true);
+    }
+
     if (decision.kind === 'ask') {
-      const action: AgentAction = { type: 'ask_user', question: decision.question };
-      appendAction(context, action, emit);
-      return buildPausedResult(context, decision.question);
+      return askOrConverge(context, decision.question, emit);
     }
 
     if (decision.kind === 'finish') {
@@ -513,58 +510,139 @@ interface TurnGoalResolution {
   goal: UserGoal;
   conversationMode: ConversationMode;
   supervisorOutput: Awaited<ReturnType<typeof runSupervisorPlanner>> | null;
-  degraded?: { code: AgentErrorCode; message: string; retryable: boolean };
   clarifyingQuestion?: PendingQuestion;
 }
 
 /**
  * 解析本轮目标。
  *
- * Supervisor 不可用时降级为"按原文关键词搜索"，抽不出关键词则转为追问，
- * 而不是让整轮请求失败——这是入口唯一没有降级路径的历史缺口。
+ * 两条互斥的入口：
+ * 1. 用户点了追问选项（optionId）——按 id 查 effect，确定性应用，不调模型；
+ * 2. 用户输入了自由文本——交给 Supervisor 理解，代码不猜语义。
+ *
+ * 模型不可用时**直接抛错**，不再降级成"按原文词表抽菜名继续搜"。用硬编码
+ * 语义冒充模型判断，既给不出可信结果，又制造了追问死循环。
  */
 async function resolveTurnGoal(
   input: AgentInput,
   metricsSink: MetricsSink
 ): Promise<TurnGoalResolution> {
-  try {
-    const supervisorOutput = await getSupervisorPlannerOutput(input, metricsSink);
+  const optionResolution = resolveClarificationOptionTurn(input);
+  if (optionResolution) {
+    return optionResolution;
+  }
+
+  const supervisorOutput = await getSupervisorPlannerOutput(input, metricsSink);
+
+  // 模型只提问、不给目标是合法输出（"这句话还不够，我得先问清楚"）。
+  // 此时用一个空目标承载本轮上下文——不做任何关键词猜测。
+  if (!supervisorOutput.goal && !supervisorOutput.patch && supervisorOutput.question) {
     return {
-      goal: resolveSupervisorGoal(input, supervisorOutput),
-      conversationMode: inferRuntimeConversationMode(input, supervisorOutput),
+      goal: input.runtimeState?.goal ?? buildPlaceholderGoal(input.query),
+      conversationMode: input.runtimeState?.goal ? 'continue_current_goal' : 'start_new_goal',
       supervisorOutput,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    createTurnLogger(input.sessionId).warn(
-      'SupervisorPlannerAgent unavailable, falling back to raw query search',
-      { error: message }
-    );
-
-    const degraded = {
-      code: 'SUPERVISOR_UNAVAILABLE' as const,
-      message,
-      retryable: true,
-    };
-    const degradedGoal = buildDegradedGoalFromQuery(input.query);
-
-    if (degradedGoal) {
-      return {
-        goal: degradedGoal,
-        conversationMode: 'start_new_goal',
-        supervisorOutput: null,
-        degraded,
-      };
-    }
-
-    return {
-      goal: buildEmptyDegradedGoal(input.query),
-      conversationMode: 'start_new_goal',
-      supervisorOutput: null,
-      degraded,
-      clarifyingQuestion: { ...DEGRADED_CLARIFYING_QUESTION },
+      clarifyingQuestion: supervisorOutput.question,
     };
   }
+
+  return {
+    goal: resolveSupervisorGoal(input, supervisorOutput),
+    conversationMode: inferRuntimeConversationMode(input, supervisorOutput),
+    supervisorOutput,
+    clarifyingQuestion: supervisorOutput.question,
+  };
+}
+
+/**
+ * 仅用于"模型要求先追问"时承载上下文的空目标。
+ *
+ * 刻意不从 query 里抽任何词：抽词就是用硬编码语义冒充理解，
+ * 那正是被删掉的降级路径干的事。
+ */
+function buildPlaceholderGoal(query: string): UserGoal {
+  return withUpdatedGoalVersion({
+    intent: 'find_restaurants',
+    rawQuery: query.trim(),
+    requestedItems: [],
+    acceptableCategories: [],
+    alternativeGroups: [],
+    primaryKeywords: [],
+    relatedKeywords: [],
+    broadenedKeywords: [],
+    relatedTargets: [],
+    broadenedTargets: [],
+    hardConstraints: [],
+    softPreferences: [],
+    exclusions: [],
+    ambiguity: [],
+    clarificationNeeded: [],
+    authorizations: [],
+    allowBroaden: false,
+  });
+}
+
+/**
+ * 追问选项的确定性处理。
+ *
+ * 全程不调用模型：选项是后端自己定义的状态转移，语义已经写死在 effect 里，
+ * 再交给模型判断只会引入不确定性（也是模型不可用时的又一个失败点）。
+ */
+function resolveClarificationOptionTurn(input: AgentInput): TurnGoalResolution | null {
+  const optionId = input.optionId?.trim();
+  if (!optionId) {
+    return null;
+  }
+
+  const previousGoal = input.runtimeState?.goal;
+  const pendingQuestion = input.runtimeState?.pendingQuestion;
+
+  if (!previousGoal || !hasClarificationOption(pendingQuestion, optionId)) {
+    throw new AgentError(
+      `Clarification option is no longer available: ${optionId}`,
+      'INVALID_OPTION',
+      false
+    );
+  }
+
+  // 「重试」：原样重跑本轮，不动 goal、不改会话模式。
+  // 历史 bug：把"重试"当成一句新需求喂给模型，rawQuery 被改写成「重试」，
+  // 整个会话的搜索结果被 start_new_goal 清空。
+  if (optionId === CLARIFICATION_OPTION.RETRY_TURN) {
+    return {
+      goal: previousGoal,
+      conversationMode: 'continue_current_goal',
+      supervisorOutput: null,
+    };
+  }
+
+  // 「换个类型」没有 effect：它的语义就是"等用户说新的需求"。
+  if (optionId === CLARIFICATION_OPTION.CHANGE_TARGET) {
+    return {
+      goal: previousGoal,
+      conversationMode: 'continue_current_goal',
+      supervisorOutput: null,
+      clarifyingQuestion: {
+        reason: '用户选择更换搜索目标。',
+        question: '想换成什么？直接说菜品或菜系，例如「牛排」「川菜」。',
+        allowFreeText: true,
+      },
+    };
+  }
+
+  const patchedGoal = applyClarificationOptionToGoal(previousGoal, pendingQuestion, optionId);
+  if (!patchedGoal) {
+    throw new AgentError(
+      `Clarification option has no effect: ${optionId}`,
+      'INVALID_OPTION',
+      false
+    );
+  }
+
+  return {
+    goal: patchedGoal,
+    conversationMode: 'patch_current_goal',
+    supervisorOutput: null,
+  };
 }
 
 /**
@@ -716,6 +794,8 @@ function createInitialContext(input: AgentInput, goal: UserGoal, resetPlan: Sear
     maxActions: (resetPlan.clearActionHistory ? 0 : (input.runtimeState?.actions?.length ?? 0)) + 8,
     maxSearchCalls: previousAttempts.length + DEFAULT_AGENT_MAX_SEARCH_CALLS,
     targetCount: 8,
+    lastQuestionFingerprint: input.runtimeState?.lastQuestionFingerprint,
+    consecutiveAskTurns: input.runtimeState?.consecutiveAskTurns ?? 0,
   };
 }
 
@@ -1062,9 +1142,17 @@ async function evaluatePlanCandidates(
         outputs.push(output);
       } catch (evaluationError) {
         error = evaluationFailureFromError(evaluationError);
-        context.evaluationDegraded = true;
-        // 失败裁决不入缓存：别的计划应当重试，而不是继承一次抖动的结果。
-        outputs.push(buildUnverifiedEvaluationFallback(toEvaluate, context.targetCount, error));
+        context.evaluationFailed = true;
+        context.evaluationError = isAgentError(evaluationError)
+          ? evaluationError
+          : new AgentError(
+              evaluationError instanceof Error ? evaluationError.message : String(evaluationError),
+              'EVALUATION_FAILED',
+              true,
+              { cause: evaluationError }
+            );
+        // 验证失败不再合成 unverified 候选：那是拿"没验证过"冒充验证结果。
+        // 失败裁决同样不入缓存，别的计划不该继承一次抖动的结论。
       } finally {
         claim.done();
       }
@@ -1326,34 +1414,6 @@ function evaluationFailureFromError(error: unknown): NonNullable<EvaluationAgent
   };
 }
 
-function buildUnverifiedEvaluationFallback(
-  restaurants: Restaurant[],
-  targetCount: number,
-  error: NonNullable<EvaluationAgentOutput['error']>
-): EvaluationAgentOutput {
-  const warning = 'EvaluationAgent 验证失败，候选仅作为未验证候补，不进入主推荐。';
-
-  return {
-    verdicts: restaurants.map((restaurant) => ({
-      restaurantId: restaurant.id,
-      status: 'unverified',
-      primaryEligible: false,
-      confidence: 0,
-      matchedItems: [],
-      matchedCategories: [],
-      conflicts: [],
-      evidence: [],
-      warnings: [warning],
-    })),
-    selectedIds: [],
-    candidateIds: restaurants.slice(0, targetCount).map((restaurant) => restaurant.id),
-    explanation: warning,
-    unmetConstraints: [`${warning} ${error.message}`],
-    source: 'error',
-    error,
-  };
-}
-
 async function runBatchedEvaluationAgent(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
   const batchSize = Math.max(1, DEFAULT_AGENT_EVALUATION_BATCH_SIZE);
   if (input.restaurants.length <= batchSize) {
@@ -1507,10 +1567,55 @@ function recordTurnMetrics(context: AgentV3Context, outcome: 'final' | 'paused')
   });
 }
 
+/** 连续追问上限：到顶就收敛，不再把同一类问题继续抛给用户。 */
+const MAX_CONSECUTIVE_ASK_TURNS = 3;
+
+/**
+ * 追问，或者在原地打转时收敛。
+ *
+ * Agent loop 的基本要求是每一轮可度量地前进。同一个问题连问两次说明这一轮
+ * 什么都没推进——线上就是这样把用户锁死的：降级追问反复重发，前端到达追问
+ * 上限后又只留下一个后端消费不了的按钮。
+ *
+ * 收敛时给结果而不是报错：报错会让会话卡在待答状态，用户依然出不去。
+ */
+function askOrConverge(
+  context: AgentV3Context,
+  question: PendingQuestion,
+  emit: EmitAgentEvent
+): AgentFinalResult {
+  const fingerprint = buildQuestionFingerprint(question);
+  const askTurns = context.consecutiveAskTurns ?? 0;
+  const repeated = context.lastQuestionFingerprint === fingerprint;
+
+  if (repeated || askTurns >= MAX_CONSECUTIVE_ASK_TURNS) {
+    appendTrace(context, 'runtime_decision', {
+      output: {
+        kind: 'clarification_stalled',
+        repeated,
+        consecutiveAskTurns: askTurns,
+        question: question.question,
+      },
+    });
+    context.lastQuestionFingerprint = undefined;
+    context.consecutiveAskTurns = 0;
+
+    const action = buildFinishAction(context, 'CLARIFICATION_STALLED', 0.5);
+    appendAction(context, action, emit);
+    return finish(context, action, emit, { allowClarification: false });
+  }
+
+  context.lastQuestionFingerprint = fingerprint;
+  context.consecutiveAskTurns = askTurns + 1;
+  appendAction(context, { type: 'ask_user', question }, emit);
+  return buildPausedResult(context, question);
+}
+
 function finish(
   context: AgentV3Context,
   action: Extract<AgentAction, { type: 'finish' }>,
-  emit: EmitAgentEvent
+  emit: EmitAgentEvent,
+  options: { allowClarification?: boolean } = {}
 ): AgentFinalResult {
   emit({
     type: 'filtering',
@@ -1525,27 +1630,45 @@ function finish(
     confidence: action.confidence,
   });
 
-  if (finalResult.restaurants.length === 0) {
-    const question = buildNoPrimaryQuestion(context);
-    appendAction(context, { type: 'ask_user', question }, emit);
-    return buildPausedResult(context, question);
+  if (finalResult.restaurants.length === 0 && options.allowClarification !== false) {
+    return askOrConverge(context, buildNoPrimaryQuestion(context), emit);
   }
 
+  // 产出结果的轮次把追问计数清零：下一次遇到同样的问题应当被视为新的一次追问。
+  context.lastQuestionFingerprint = undefined;
+  context.consecutiveAskTurns = 0;
+
+  const warnings = buildFinalWarnings(context);
   const finalTrace = appendTrace(context, 'final', {
     output: {
       restaurantIds: finalResult.restaurants.map((restaurant) => restaurant.id),
       candidateIds: finalResult.candidates.map((restaurant) => restaurant.id),
       explanation: finalResult.explanation,
       unmetConstraints: finalResult.unmetConstraints,
+      warnings,
     },
   });
-  emit({ type: 'final', traceId: finalTrace.id, sessionId: context.sessionId, ...finalResult });
+  emit({
+    type: 'final',
+    traceId: finalTrace.id,
+    sessionId: context.sessionId,
+    ...finalResult,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  });
   recordTurnMetrics(context, 'final');
 
   return {
     ...finalResult,
+    ...(warnings.length > 0 ? { warnings } : {}),
     runtimeState: snapshotRuntimeState(context),
   };
+}
+
+/** 结果可用但有瑕疵时的提示。 */
+function buildFinalWarnings(context: AgentV3Context): string[] {
+  return context.evaluationFailed
+    ? ['部分候选餐厅没能完成验证，已只保留通过验证的结果。']
+    : [];
 }
 
 function buildPausedResult(context: AgentV3Context, question: PendingQuestion): AgentFinalResult {
@@ -1597,5 +1720,7 @@ function snapshotRuntimeState(context: AgentV3Context): AgentRuntimeState {
     actions: [...context.actions],
     observations: [...context.observations],
     trace: [...context.trace],
+    lastQuestionFingerprint: context.lastQuestionFingerprint,
+    consecutiveAskTurns: context.consecutiveAskTurns ?? 0,
   };
 }

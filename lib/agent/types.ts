@@ -362,11 +362,20 @@ export type AgentTraceType =
  */
 export type AgentErrorCode =
   | 'SESSION_EXPIRED'
+  /** 缺少 key / 鉴权失败，不可恢复 */
   | 'CONFIG_MISSING'
+  /** 模型配额耗尽（402/403），重试无意义 */
+  | 'MODEL_QUOTA_EXHAUSTED'
+  /** 模型服务暂时不可达（5xx / 超时 / 网络） */
+  | 'MODEL_UNAVAILABLE'
+  /** 模型可达但输出不合法或被截断 */
+  | 'MODEL_INVALID_OUTPUT'
+  /** Supervisor 没有产出可用的目标或补丁 */
   | 'SUPERVISOR_UNAVAILABLE'
   | 'EVALUATION_FAILED'
   | 'SEARCH_PROVIDER_FAILED'
   | 'RATE_LIMITED'
+  | 'INVALID_OPTION'
   | 'UNKNOWN';
 
 export interface AgentTraceItem {
@@ -390,6 +399,13 @@ export interface AgentTraceItem {
 
 export interface AgentInput {
   query: string;
+  /**
+   * 用户点击的追问选项 id。
+   *
+   * 与 query 互斥：有 optionId 走确定性状态转移（不调模型），
+   * 只有 query 才交给 Supervisor 做意图理解。
+   */
+  optionId?: string;
   location: Location;
   previousLocation?: Location;
   sessionId?: string;
@@ -408,8 +424,15 @@ export interface AgentContext extends AgentInput {
   targetCount: number;
   /** 本轮模型调用指标；由 metrics.ts 填充。 */
   modelCallMetrics?: ModelCallMetrics[];
-  /** 本轮是否发生过候选验证失败，用于区分"没搜到"与"验证服务不可用"。 */
-  evaluationDegraded?: boolean;
+  /**
+   * 本轮是否发生过候选验证失败。
+   *
+   * 失败的候选不再被合成为 unverified 结果（那是用硬编码语义冒充模型判断），
+   * 因此这个标记同时意味着"继续扩搜没有意义"——策略层据此立即收敛。
+   */
+  evaluationFailed?: boolean;
+  /** 触发 evaluationFailed 的原始错误，用于在没有主推荐时原样抛出。 */
+  evaluationError?: AgentError;
 }
 
 export interface AgentFinalResult {
@@ -417,6 +440,8 @@ export interface AgentFinalResult {
   candidates: Restaurant[];
   explanation: string;
   unmetConstraints: string[];
+  /** 结果可用但存在瑕疵时的提示（如部分候选未能完成验证）。 */
+  warnings?: string[];
   paused?: boolean;
   question?: PendingQuestion;
   questionTraceId?: string;
@@ -473,6 +498,8 @@ export interface AgentRuntimeState {
   observations?: AgentObservation[];
   trace?: AgentTraceItem[];
   pendingQuestion?: PendingQuestion;
+  lastQuestionFingerprint?: string;
+  consecutiveAskTurns?: number;
 }
 
 type AgentEventPayload =
@@ -513,7 +540,7 @@ type AgentEventPayload =
       type: 'question';
       sessionId: string;
       question: string;
-      options?: string[];
+      options?: PendingQuestionOption[];
       allowFreeText: boolean;
     }
   | { type: 'session_paused'; sessionId: string }
@@ -526,6 +553,7 @@ type AgentEventPayload =
       candidates: Restaurant[];
       explanation: string;
       unmetConstraints: string[];
+      warnings?: string[];
     };
 
 export type AgentEvent = AgentEventPayload & { traceId?: string };
@@ -538,17 +566,30 @@ export interface AgentMessage {
   createdAt: number;
 }
 
+/**
+ * 追问选项。
+ *
+ * `id` 是协议，`label` 只是展示文案——两者必须分开：历史上前端按文案回传、
+ * 后端按文案查 optionEffects，一旦两侧措辞不一致（前端「你推荐」/后端
+ * 「随便推荐」）确定性通道就恒 miss，追问会原地循环。
+ */
+export interface PendingQuestionOption {
+  id: string;
+  label: string;
+}
+
 export interface PendingQuestion {
   reason?: string;
   question: string;
-  options?: string[];
+  options?: PendingQuestionOption[];
   allowFreeText?: boolean;
+  /** key 为 option.id，绝不能用 label。 */
   optionEffects?: Record<string, ClarificationEffect>;
 }
 
 export interface AgentSession {
   id: string;
-  version: 3;
+  version: 4;
   createdAt: number;
   updatedAt: number;
   expiresAt: number;
@@ -561,4 +602,8 @@ export interface AgentSession {
   observations: AgentObservation[];
   trace: AgentTraceItem[];
   pendingQuestion?: PendingQuestion;
+  /** 上一轮追问的指纹，用于阻止同一个问题连问两次。 */
+  lastQuestionFingerprint?: string;
+  /** 连续追问轮数；任何一次产出结果的轮次都会清零。 */
+  consecutiveAskTurns?: number;
 }

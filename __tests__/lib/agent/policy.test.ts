@@ -167,22 +167,43 @@ describe('policy 追问', () => {
       context({ goal: goal({ hardConstraints: [strictDistance] }) })
     );
 
-    expect(question.options).toContain('扩大范围');
-    expect(question.optionEffects?.['扩大范围']?.setDistanceMaxMeters).toBe(5000);
+    // effect 按 id 挂载，不按文案——文案匹配正是追问死循环的成因。
+    expect(question.options?.map((option) => option.id)).toContain('expand_distance');
+    expect(question.optionEffects?.expand_distance?.setDistanceMaxMeters).toBe(5000);
   });
 
   it('offers a broaden authorization when nothing passed admission', () => {
     const question = buildNoPrimaryQuestion(context());
 
     expect(question.question).toContain('牛排');
-    expect(question.optionEffects?.['搜更广的品类']?.allowBroaden).toBe(true);
+    expect(question.optionEffects?.authorize_category_broaden?.allowBroaden).toBe(true);
   });
 
-  it('distinguishes a verification outage from an empty result', () => {
-    const question = buildNoPrimaryQuestion(context({ evaluationDegraded: true }));
+  it('never keys an option effect by its display label', () => {
+    const question = buildNoPrimaryQuestion(context());
 
-    expect(question.question).toContain('验证服务暂时不可用');
-    expect(question.options).toContain('重试');
+    for (const option of question.options ?? []) {
+      expect(question.optionEffects?.[option.label]).toBeUndefined();
+    }
+  });
+
+  it('aborts instead of searching when candidate verification failed', () => {
+    const decision = decideNextAction(context({ evaluationFailed: true }));
+
+    expect(decision.kind).toBe('abort');
+  });
+
+  it('finishes with the verified subset when verification partially failed', () => {
+    const decision = decideNextAction(
+      context({
+        evaluationFailed: true,
+        candidates: [candidate('r1', '牛排家')],
+        attempts: [attempt()],
+      })
+    );
+
+    expect(decision.kind).toBe('finish');
+    expect(decision.kind === 'finish' && decision.reason).toBe('PARTIAL_EVALUATION_FAILURE');
   });
 });
 

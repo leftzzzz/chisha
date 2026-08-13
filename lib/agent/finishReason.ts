@@ -19,7 +19,11 @@ export type FinishReason =
   /** 没有更多可尝试的搜索策略 */
   | 'NO_MORE_STRATEGY'
   /** 用户授权放宽后，把上一轮候补提升为主推荐 */
-  | 'BROADEN_PROMOTION';
+  | 'BROADEN_PROMOTION'
+  /** 部分候选验证失败，但已有通过验证的主推荐 */
+  | 'PARTIAL_EVALUATION_FAILURE'
+  /** 追问原地打转：同一个问题不再问第二次 */
+  | 'CLARIFICATION_STALLED';
 
 const FINISH_TEXT: Record<FinishReason, string> = {
   MODEL_DECIDED: '',
@@ -29,6 +33,8 @@ const FINISH_TEXT: Record<FinishReason, string> = {
   GUARD_REJECTED: '已为您找到合适餐厅，以下是推荐结果。',
   NO_MORE_STRATEGY: '已为您搜索多个方向，以下是精选推荐。',
   BROADEN_PROMOTION: '已根据您的要求扩大搜索范围，以下是推荐结果。',
+  PARTIAL_EVALUATION_FAILURE: '部分餐厅没能完成验证，以下是已确认符合要求的结果。',
+  CLARIFICATION_STALLED: '没能更好地理解你的需求，先给出目前找到的结果。',
 };
 
 /**
@@ -44,6 +50,8 @@ const FINISH_INTERNAL_NOTE: Record<FinishReason, string> = {
   GUARD_REJECTED: 'Guard rejected the next action.',
   NO_MORE_STRATEGY: 'No further verifiable search strategy.',
   BROADEN_PROMOTION: 'Promoted broadened candidates after user authorization.',
+  PARTIAL_EVALUATION_FAILURE: 'Some candidates could not be verified; returning verified ones.',
+  CLARIFICATION_STALLED: 'Clarification made no progress; converging instead of re-asking.',
 };
 
 /**

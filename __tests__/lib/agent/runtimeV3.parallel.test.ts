@@ -79,6 +79,17 @@ async function loadRuntime(parallel: boolean) {
     delete process.env.AGENT_PARALLEL_SEARCH;
   }
 
+  // 每一轮自由文本都要经过 Supervisor：模型不可用时 runtime 直接报错，
+  // 不再有"按原文关键词搜索"的降级路径，所以这里必须显式桩掉理解环节。
+  jest.doMock('@/lib/agent/supervisorPlanner', () => {
+    const actual = jest.requireActual('@/lib/agent/supervisorPlanner');
+    return {
+      ...actual,
+      runSupervisorPlanner: jest.fn(async () => ({ goal: goal() })),
+      runSearchReplan: jest.fn(async () => null),
+    };
+  });
+
   jest.doMock('@/lib/agent/subagents/evaluationAgent', () => ({
     runEvaluationAgent: jest.fn(async (input: { restaurants: Restaurant[] }) => ({
       verdicts: input.restaurants.map((item) => ({

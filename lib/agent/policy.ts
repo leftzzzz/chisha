@@ -21,7 +21,9 @@ import {
   normalizeSearchKeywords,
 } from './poiTaxonomy';
 import { SearchPlanSchema } from './schemas/plan';
+import { CLARIFICATION_OPTION, clarificationOption } from './clarificationOptions';
 import type {
+  AgentErrorCode,
   ClarificationEffect,
   PendingQuestion,
   RestaurantCandidate,
@@ -40,8 +42,13 @@ export interface PolicyContext {
   location: Location;
   targetCount: number;
   maxSearchCalls: number;
-  /** 本轮是否发生过候选验证失败（限流/超时等），用于区分"没搜到"与"验证不可用"。 */
-  evaluationDegraded?: boolean;
+  /**
+   * 本轮是否发生过候选验证失败。
+   *
+   * 验证失败不再合成 unverified 候选，所以这个标记同时意味着"再搜也没用"：
+   * 搜到的东西没人能验证，继续扩搜只会重复调用高德。
+   */
+  evaluationFailed?: boolean;
 }
 
 export type TargetKind = 'initial' | 'related' | 'broadened';
@@ -98,7 +105,13 @@ export type PolicyDecision =
     }
   /** 确定性关键词全部试完仍无主推荐，交给模型重新构思方向 */
   | { kind: 'replan'; exhausted: { triedKeywords: string[]; triedIntents: SearchIntent[] } }
-  | { kind: 'ask'; question: PendingQuestion };
+  | { kind: 'ask'; question: PendingQuestion }
+  /**
+   * 本轮无法给出任何可信结果，必须以错误结束。
+   *
+   * 策略层不抛错（保持纯函数），由 Runtime 决定用哪个 AgentError 抛出。
+   */
+  | { kind: 'abort'; reason: Extract<AgentErrorCode, 'EVALUATION_FAILED'> };
 
 /** decideNextAction 需要的额外运行时状态。 */
 export interface PolicyRuntimeState {
@@ -113,13 +126,22 @@ export interface PolicyRuntimeState {
 /**
  * 决定下一步做什么。
  *
- * 分支顺序即优先级：够了就结束 > 预算耗尽 > 有未授权候补就请求授权 >
- * 还有可搜的就搜 > 有主推荐就结束 > 还能重新构思就 replan > 追问。
+ * 分支顺序即优先级：验证不可用就立刻收敛 > 够了就结束 > 预算耗尽 >
+ * 有未授权候补就请求授权 > 还有可搜的就搜 > 有主推荐就结束 >
+ * 还能重新构思就 replan > 追问。
  */
 export function decideNextAction(
   ctx: PolicyContext,
   runtime: PolicyRuntimeState = {}
 ): PolicyDecision {
+  // 验证环节挂了就别再搜了：搜回来的东西没人能验证，继续扩搜只是在
+  // 重复调用高德（线上实测同一批 POI 被"火锅/涮锅/牛肉火锅"搜了三遍）。
+  if (ctx.evaluationFailed) {
+    return hasPrimaryCandidates(ctx)
+      ? finishDecision(ctx, 'PARTIAL_EVALUATION_FAILURE', 0.6)
+      : { kind: 'abort', reason: 'EVALUATION_FAILED' };
+  }
+
   const distinctBrands = distinctPrimaryBrandCount(ctx);
   const remainingSearchCalls = Math.max(0, ctx.maxSearchCalls - ctx.attempts.length);
 
@@ -600,24 +622,20 @@ export function hasUnauthorizedBroadenedCandidates(ctx: PolicyContext): boolean 
  * 分支优先级：strict 距离 > 已授权放宽但仍无结果 > 通用调整/放宽。
  */
 export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
-  // 验证服务失败时不能说"没找到合适餐厅"——那是把系统故障说成搜索结果。
-  if (ctx.evaluationDegraded && !hasPrimaryCandidates(ctx)) {
-    return {
-      reason: '候选验证服务暂时不可用，本轮结果无法进入主推荐。',
-      question: '验证服务暂时不可用，没能确认这些餐厅是否符合你的要求。要重试一次吗？',
-      options: ['重试', '换个类型'],
-      allowFreeText: true,
-    };
-  }
+  // 验证不可用不再走追问：那是系统故障，应该报错而不是伪装成"没找到"。
+  // 见 decideNextAction 的 evaluationFailed 分支。
 
   if (getStrictDistanceMaxMeters(ctx.goal) !== undefined) {
     return {
       reason: '当前严格距离范围内没有找到通过主推荐准入的餐厅。',
       question: '当前距离范围内没有找到合适餐厅，要扩大范围再搜吗？',
-      options: ['扩大范围', '换个类型'],
+      options: [
+        clarificationOption(CLARIFICATION_OPTION.EXPAND_DISTANCE),
+        clarificationOption(CLARIFICATION_OPTION.CHANGE_TARGET),
+      ],
       allowFreeText: true,
       optionEffects: {
-        扩大范围: {
+        [CLARIFICATION_OPTION.EXPAND_DISTANCE]: {
           allowBroaden: true,
           setDistanceMaxMeters: MAX_RADIUS_METERS,
           addAuthorizations: [
@@ -652,10 +670,13 @@ export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
     question: target
       ? `没有找到符合「${target}」的餐厅，要调整需求或允许放宽吗？`
       : '没有找到符合条件的餐厅，要调整需求或允许放宽吗？',
-    options: ['搜更广的品类', '换个类型'],
+    options: [
+      clarificationOption(CLARIFICATION_OPTION.AUTHORIZE_CATEGORY_BROADEN),
+      clarificationOption(CLARIFICATION_OPTION.CHANGE_TARGET),
+    ],
     allowFreeText: true,
     optionEffects: {
-      搜更广的品类: buildBroadenEffect(ctx.goal),
+      [CLARIFICATION_OPTION.AUTHORIZE_CATEGORY_BROADEN]: buildBroadenEffect(ctx.goal),
     },
   };
 }
@@ -686,9 +707,16 @@ export function buildPostAuthorizationNoPrimaryQuestion(
         ? '已授权并尝试放宽到相邻品类，但没有找到通过主推荐准入的餐厅。'
         : '已授权放宽，但没有更多可尝试的相邻品类。',
       question: postBroadenQuestionText(target || undefined, attemptedBroadenedSearch),
-      options: canAskFallback ? ['随便推荐', '换个类型'] : ['换个类型'],
+      options: canAskFallback
+        ? [
+            clarificationOption(CLARIFICATION_OPTION.AUTHORIZE_FALLBACK_PRIMARY),
+            clarificationOption(CLARIFICATION_OPTION.CHANGE_TARGET),
+          ]
+        : undefined,
       allowFreeText: true,
-      optionEffects: canAskFallback ? { 随便推荐: buildFallbackPrimaryEffect() } : undefined,
+      optionEffects: canAskFallback
+        ? { [CLARIFICATION_OPTION.AUTHORIZE_FALLBACK_PRIMARY]: buildFallbackPrimaryEffect() }
+        : undefined,
     };
   }
 
@@ -700,7 +728,6 @@ export function buildPostAuthorizationNoPrimaryQuestion(
     return {
       reason: '已按开放推荐搜索，但没有找到通过主推荐准入的餐厅。',
       question: '已经按开放推荐搜索过，仍没有找到合适餐厅。换个类型或补充一个想吃的方向吧。',
-      options: ['换个类型'],
       allowFreeText: true,
     };
   }

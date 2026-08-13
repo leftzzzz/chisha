@@ -225,7 +225,7 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
   it('applies pending question option effects inside Supervisor ownership', () => {
     const session: AgentSession = {
       id: 's1',
-      version: 3,
+      version: 4,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       expiresAt: Date.now() + 1000,
@@ -239,14 +239,17 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
       goal: goal(),
       pendingQuestion: {
         question: '要允许放宽吗？',
-        options: ['允许放宽'],
+        options: [
+          { id: 'authorize_category_broaden', label: '允许放宽' },
+          { id: 'change_target', label: '换个类型' },
+        ],
         optionEffects: {
-          '允许放宽': { allowBroaden: true, setDistanceMaxMeters: 5000 },
+          authorize_category_broaden: { allowBroaden: true, setDistanceMaxMeters: 5000 },
         },
       },
     };
 
-    applySupervisorClarifyingAnswer(session, '允许放宽');
+    applySupervisorClarifyingAnswer(session, 'authorize_category_broaden');
 
     expect(session.pendingQuestion).toBeUndefined();
     expect(session.goal?.allowBroaden).toBe(true);
@@ -259,7 +262,7 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
   it('uses structured option effects to re-summarize clarification answers with previous context', () => {
     const session: AgentSession = {
       id: 's2',
-      version: 3,
+      version: 4,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       expiresAt: Date.now() + 1000,
@@ -279,28 +282,33 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
       }),
       pendingQuestion: {
         question: '你说的「港奶」是菜品、菜系还是店名？',
-        options: ['菜品', '菜系', '店名'],
+        options: [
+          { id: 'opt_1', label: '菜品' },
+          { id: 'opt_2', label: '菜系' },
+          { id: 'opt_3', label: '店名' },
+        ],
         allowFreeText: true,
         optionEffects: {
-          '菜品': {
+          opt_1: {
             replaceRequestedItems: ['港奶'],
             replacePrimaryKeywords: ['港奶'],
           },
-          '菜系': {
+          opt_2: {
             replaceCategories: ['港奶'],
             replacePrimaryKeywords: ['港奶'],
           },
-          '店名': {
+          opt_3: {
             replacePrimaryKeywords: ['港奶'],
           },
         },
       },
     };
 
-    applySupervisorClarifyingAnswer(session, '菜品');
+    applySupervisorClarifyingAnswer(session, 'opt_1');
 
     expect(session.pendingQuestion).toBeUndefined();
-    expect(session.goal?.rawQuery).toBe('港奶，菜品');
+    // 选项文案不是搜索词，不该被拼进 rawQuery。
+    expect(session.goal?.rawQuery).toBe('港奶');
     expect(session.goal?.primaryKeywords).toEqual(['港奶']);
     expect(session.goal?.requestedItems).toEqual([{ name: '港奶', required: true, aliases: [] }]);
     expect(session.goal?.primaryKeywords).not.toContain('菜品');
@@ -309,7 +317,7 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
   it('does not parse free-text clarification answers without structured option effects', () => {
     const session: AgentSession = {
       id: 's3',
-      version: 3,
+      version: 4,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       expiresAt: Date.now() + 1000,
@@ -327,7 +335,7 @@ describe('SupervisorPlannerAgent goal maintenance', () => {
       },
     };
 
-    applySupervisorClarifyingAnswer(session, '都行');
+    applySupervisorClarifyingAnswer(session, 'authorize_fallback_primary');
 
     expect(session.pendingQuestion).toBeUndefined();
     expect(session.goal?.primaryKeywords).toEqual([]);

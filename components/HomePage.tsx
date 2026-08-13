@@ -21,6 +21,7 @@ import { ShareModal } from './share';
 import { saveRecordAndReplaceSameSession, getReuseRecord } from '@/lib/storage';
 import { parseShareData, getShareParamFromUrl, clearShareParamFromUrl } from '@/lib/share';
 import { getTurntableOptions, MIN_TURNTABLE_OPTIONS } from '@/lib/turntableOptions';
+import { getErrorInfo } from '@/lib/errorConfig';
 
 export const HomePage: React.FC = () => {
   const router = useRouter();
@@ -151,16 +152,9 @@ export const HomePage: React.FC = () => {
     if (!state.userQuery.trim() || !state.userLocation) return;
 
     await search(state.userQuery, state.userLocation, (errorCode) => {
-      // 获取错误信息并显示弹窗
-      const isRetryable = errorCode === 'SEARCH_NO_RESULTS' ||
-                         errorCode === 'NO_RESULTS' ||
-                         errorCode === 'NETWORK_ERROR' ||
-                         errorCode === 'SEARCH_TIMEOUT' ||
-                         errorCode === 'AGENT_ERROR' ||
-                         errorCode === 'SERVICE_BUSY' ||
-                         errorCode === 'INSUFFICIENT_RESULTS' ||
-                         errorCode === 'API_CALL_FAILED' ||
-                         errorCode === 'UNKNOWN_ERROR';
+      // 是否可重试由错误配置单点决定：配额耗尽、配置缺失这类不可恢复错误
+      // 不能给重试入口——重试 100% 失败，是错误引导。
+      const isRetryable = getErrorInfo(errorCode).retryable;
 
       errorAlert.show(errorCode, isRetryable ? () => {
         // 重试：重新执行搜索

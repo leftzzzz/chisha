@@ -34,9 +34,12 @@ import type {
 } from './types';
 
 export {
+  applyClarificationOptionToGoal,
   applyGoalPatch,
   applySupervisorClarifyingAnswer,
   clarificationNeedToPendingQuestion,
+  clarificationOptionLabel,
+  hasClarificationOption,
   understandSearchGoal,
 } from './supervisor';
 export type { SearchSupervisorInput, SearchSupervisorOutput } from './supervisor';
@@ -45,7 +48,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL_PLANNER
   || process.env.OPENAI_MODEL
-  || 'gpt-4o';
+  || 'deepseek-v4-flash-0731';
 const REPLAN_TIMEOUT = 60000;
 
 export type SupervisorPlannerInput = SearchSupervisorInput;

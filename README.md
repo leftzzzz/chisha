@@ -45,7 +45,7 @@ npm run dev
 ```env
 OPENAI_API_KEY=sk-...
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5.2
+OPENAI_MODEL=deepseek-v4-flash-0731
 # 兼容旧 OpenAI-compatible 端点时可选
 # OPENAI_TOOL_CALL_MODE=functions
 # Qwen/DashScope 强制工具调用会自动关闭 thinking mode；通常不要改
@@ -810,7 +810,7 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 |---|---|---|---|
 | `OPENAI_API_KEY` | 是 | OpenAI 或兼容服务 API Key | - |
 | `OPENAI_BASE_URL` | 否 | OpenAI 兼容 API 地址 | `https://api.openai.com/v1` |
-| `OPENAI_MODEL` | 否 | Agent 使用的模型 | 代码默认 `gpt-4o`，`.env.example` 使用 `gpt-5.2` |
+| `OPENAI_MODEL` | 否 | Agent 使用的模型 | 代码默认 `deepseek-v4-flash-0731` |
 | `OPENAI_TOOL_CALL_MODE` | 否 | 模型函数调用请求格式；默认使用 `tools/tool_choice`，旧兼容端点可设为 `functions` | - |
 | `QWEN_ENABLE_THINKING` | 否 | Qwen/DashScope 兼容端点的 thinking mode 开关；强制工具调用场景默认自动关闭 | - |
 | `AMAP_API_KEY` | 是 | 高德 Web 服务 API Key | - |

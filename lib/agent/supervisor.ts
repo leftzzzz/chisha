@@ -32,7 +32,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.OPENAI_MODEL_SUPERVISOR
   || process.env.OPENAI_MODEL
-  || 'gpt-4o';
+  || 'deepseek-v4-flash-0731';
 const SUPERVISOR_TIMEOUT = 60000;
 const SUPERVISOR_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const SUPERVISOR_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
@@ -70,7 +70,7 @@ const SYSTEM_PROMPT = `你是 SupervisorPlannerAgent，是餐厅搜索主 Agent�
 7a. 如果追问给出选项，必须尽量给每个选项设置 optionEffects；选项只是分类说明时，effect 要指向被澄清的原始目标，不能把选项标签当搜索词。
 8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么/没有具体想吃的”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，加入“默认多样性”软偏好，进入 plan 后由 KeywordExpansionHelper 生成开放探索词；不要 ask_user，也不要把这些词当 keywords。
 8a. 用户只是“附近有什么/吃点/清淡点/健康点/便宜点/环境好/人气高”等软偏好或开放询问、但没有明确授权随意/随机推荐且没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
-9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/直接推荐/按你推荐”等，表示授权开放推荐；输出 patch.allowBroaden=true，加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
+9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/你推荐/直接推荐/按你推荐/你看着办”等，表示授权开放推荐；输出 patch.allowBroaden=true，加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
 10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
 11. primaryKeywords 只能放用户正向想吃的、适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
 12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords/broadenedKeywords 及 relatedTargets/broadenedTargets 由 KeywordExpansionHelper 负责生成，初始目标保持空数组即可。
@@ -110,11 +110,8 @@ const SUPERVISOR_FUNCTION = {
 export async function runSearchSupervisor(
   input: SearchSupervisorInput
 ): Promise<SearchSupervisorOutput> {
-  const deterministicOutput = deterministicClarificationAnswer(input);
-  if (deterministicOutput) {
-    return deterministicOutput;
-  }
-
+  // 追问选项的确定性处理已经前移到 Runtime（按 optionId 查 effect，不调模型）。
+  // 这里只处理自由文本——用户说了什么，只有模型能判断。
   if (!OPENAI_API_KEY) {
     throw new AgentError('OPENAI_API_KEY is required for SupervisorPlannerAgent', 'CONFIG_MISSING', false);
   }
@@ -168,10 +165,20 @@ function normalizeSupervisorOutput(
     };
   }
 
-  logger.warn('SupervisorPlannerAgent returned no goal patch for a pending clarification answer', {
+  // 模型在追问上下文里又提了一个问题：这是合法输出，不是服务故障。
+  // "同一个问题不能连问两次"由 Runtime 的追问指纹不变量兜底。
+  if (output.question) {
+    return {
+      question: output.question,
+      conversationMode,
+      nextAction: 'ask_user',
+    };
+  }
+
+  logger.warn('SupervisorPlannerAgent returned nothing for a pending clarification answer', {
     question: input.pendingQuestion.question,
   });
-  throw new AgentError('SupervisorPlannerAgent returned no goal patch for a pending clarification answer', 'SUPERVISOR_UNAVAILABLE', true);
+  throw new AgentError('SupervisorPlannerAgent returned no goal, patch or question for a pending clarification answer', 'SUPERVISOR_UNAVAILABLE', true);
 }
 
 function inferConversationMode(
@@ -230,35 +237,45 @@ function normalizePendingAnswerPatch(previousGoal: UserGoal, patch: GoalPatch): 
   });
 }
 
-function deterministicClarificationAnswer(
-  input: SearchSupervisorInput
-): SearchSupervisorOutput | null {
-  if (!input.previousGoal) {
+/**
+ * 应用一个追问选项，得到更新后的目标。
+ *
+ * 按 **id** 查 effect——绝不按文案匹配。文案匹配正是死循环的成因：
+ * 前端「你推荐」与后端「随便推荐」对不上，确定性通道恒 miss。
+ *
+ * @returns 该 id 没有对应 effect 时返回 null（调用方据此报 INVALID_OPTION）
+ */
+export function applyClarificationOptionToGoal(
+  goal: UserGoal,
+  pendingQuestion: PendingQuestion | undefined,
+  optionId: string
+): UserGoal | null {
+  const effect = pendingQuestion?.optionEffects?.[optionId];
+  if (!effect) {
     return null;
   }
 
-  const normalizedAnswer = input.message.trim();
-  if (!normalizedAnswer) {
-    return null;
-  }
-
-  const exactEffect = input.pendingQuestion?.optionEffects?.[normalizedAnswer];
-  if (exactEffect) {
-    return deterministicPatchOutput(
-      input.previousGoal,
-      goalPatchFromClarificationEffect(exactEffect, input.previousGoal)
-    );
-  }
-
-  return null;
+  const patch = normalizePendingAnswerPatch(
+    goal,
+    goalPatchFromClarificationEffect(effect, goal)
+  );
+  return applyGoalPatch(goal, patch, goal.rawQuery);
 }
 
-function deterministicPatchOutput(previousGoal: UserGoal, patch: GoalPatch): SearchSupervisorOutput {
-  return {
-    patch: normalizePendingAnswerPatch(previousGoal, patch),
-    conversationMode: 'patch_current_goal',
-    nextAction: 'plan',
-  };
+/** 追问选项在当前问题里是否存在（即使没有 effect，例如"换个类型"）。 */
+export function hasClarificationOption(
+  pendingQuestion: PendingQuestion | undefined,
+  optionId: string
+): boolean {
+  return (pendingQuestion?.options ?? []).some((option) => option.id === optionId);
+}
+
+/** 取选项的展示文案，用于写入会话消息。 */
+export function clarificationOptionLabel(
+  pendingQuestion: PendingQuestion | undefined,
+  optionId: string
+): string | undefined {
+  return (pendingQuestion?.options ?? []).find((option) => option.id === optionId)?.label;
 }
 
 export async function understandSearchGoal(input: AgentInput): Promise<UserGoal> {
@@ -333,28 +350,27 @@ export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal
   return withUpdatedGoalVersion(UserGoalSchema.parse(patched), goal);
 }
 
-export function applySupervisorClarifyingAnswer(session: AgentSession, answer: string): void {
+/**
+ * 会话级的追问选项应用。
+ *
+ * @param optionId - 选项 id（不是文案）
+ */
+export function applySupervisorClarifyingAnswer(session: AgentSession, optionId: string): void {
   const goal = session.goal;
   if (!goal) {
     session.pendingQuestion = undefined;
     return;
   }
 
-  const normalized = answer.trim();
-  const effect = normalized
-    ? session.pendingQuestion?.optionEffects?.[normalized]
-    : undefined;
-  if (!effect) {
+  const effect = session.pendingQuestion?.optionEffects?.[optionId];
+  const patched = applyClarificationOptionToGoal(goal, session.pendingQuestion, optionId);
+  if (!patched) {
     session.pendingQuestion = undefined;
     return;
   }
 
-  const patch = goalPatchFromClarificationEffect(effect, goal);
-  const rawQuery = normalized && !goal.rawQuery.includes(normalized)
-    ? `${goal.rawQuery}，${normalized}`
-    : goal.rawQuery;
-  session.goal = applyGoalPatch(goal, patch, rawQuery);
-  if (effect.allowBroaden === true) {
+  session.goal = patched;
+  if (effect?.allowBroaden === true) {
     promoteAuthorizedBroadenedResults(session);
   }
   session.pendingQuestion = undefined;

@@ -35,6 +35,8 @@ export interface SearchProgress {
   foundRestaurants?: SearchResultRestaurant[];
   /** Agent 需要用户补充信息时的追问 */
   question?: AgentQuestion;
+  /** 当前是本次搜索的第几轮追问，仅用于提示用户可以重新开始。 */
+  questionRound?: number;
   // 全局进度
   maxRounds?: number;
   completedRounds?: number;
@@ -43,13 +45,18 @@ export interface SearchProgress {
 }
 
 /**
+ * 追问的回答：点选项走 id，打字走文本。两者互斥。
+ */
+export type QuestionAnswer = { optionId: string } | { text: string };
+
+/**
  * useRestaurantSearch Hook 返回值
  */
 export interface UseRestaurantSearchReturn {
   isSearching: boolean;
   progress: SearchProgress;
   search: (query: string, location: Location, onError?: (errorCode: string) => void) => Promise<void>;
-  answerQuestion: (answer: string, onError?: (errorCode: string) => void) => Promise<void>;
+  answerQuestion: (answer: QuestionAnswer, onError?: (errorCode: string) => void) => Promise<void>;
 }
 
 /** 一步之内单个搜索计划的进度。 */
@@ -80,6 +87,11 @@ function collectStepRestaurants(plans: Map<string, StepPlanProgress>): SearchRes
   return Array.from(byId.values());
 }
 
+/** 选项比较只看 id：文案变了不代表换了个问题。 */
+function optionSignature(options?: AgentQuestion['options']): string {
+  return (options ?? []).map((option) => option.id).join('|');
+}
+
 function isSameQuestion(left?: AgentQuestion | null, right?: AgentQuestion | null): boolean {
   if (!left || !right) {
     return false;
@@ -88,7 +100,7 @@ function isSameQuestion(left?: AgentQuestion | null, right?: AgentQuestion | nul
   return left.sessionId === right.sessionId
     && left.question === right.question
     && left.allowFreeText === right.allowFreeText
-    && (left.options ?? []).join('\u0000') === (right.options ?? []).join('\u0000');
+    && optionSignature(left.options) === optionSignature(right.options);
 }
 
 /**
@@ -164,7 +176,6 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
    * 就是一步的边界，届时清空。
    */
   const stepPlansRef = useRef(new Map<string, StepPlanProgress>());
-  const MAX_QUESTION_COUNT = 3;
 
   const setQuestionProgress = useCallback((question: AgentQuestion) => {
     activeQuestionRef.current = question;
@@ -173,26 +184,9 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
     setAgentQuestion(question);
     setStep('AGENT_QUESTION');
 
-    // 检查追问次数，超过上限时只显示"你推荐"选项
+    // 追问轮次只用于提示用户可以重新开始，绝不改写后端给的选项，也绝不
+    // 禁用自由输入——历史 bug 正是在这里把用户唯一的自救出口关掉了。
     questionCountRef.current += 1;
-    if (questionCountRef.current > MAX_QUESTION_COUNT) {
-      setProgress(prev => {
-        if (prev.status === 'question' && isSameQuestion(prev.question, question)) {
-          return prev;
-        }
-
-        return {
-          status: 'question',
-          message: question.question,
-          question: {
-            ...question,
-            options: ['你推荐'],
-            allowFreeText: false,
-          },
-        };
-      });
-      return;
-    }
 
     setProgress(prev => {
       if (prev.status === 'question' && isSameQuestion(prev.question, question)) {
@@ -203,6 +197,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         status: 'question',
         message: question.question,
         question,
+        questionRound: questionCountRef.current,
       };
     });
   }, [setAgentQuestion, setAgentSessionId, setStep]);
@@ -219,10 +214,11 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
       message: string,
       location: Location,
       onError?: (errorCode: string) => void,
-      sessionId?: string
+      sessionId?: string,
+      optionId?: string
     ) => {
-      // 验证输入
-      if (!message.trim()) {
+      // 验证输入：点选项时不需要文本
+      if (!optionId && !message.trim()) {
         setError('请输入您想吃什么');
         return;
       }
@@ -406,7 +402,7 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
               message,
             });
           },
-        }, abortController.signal, sessionId, preferenceSummary);
+        }, abortController.signal, sessionId, preferenceSummary, undefined, optionId);
 
         if (result.paused && result.question) {
           setQuestionProgress({
@@ -506,8 +502,14 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
     [runChatSearch, state.agentSessionId, setAgentSessionId]
   );
 
+  /**
+   * 回答当前追问。
+   *
+   * 点选项传 `{ optionId }`，打字传 `{ text }`——**绝不把选项文案当成用户
+   * 输入发给后端**。文案匹配正是死循环的成因。
+   */
   const answerQuestion = useCallback(
-    async (answer: string, onError?: (errorCode: string) => void) => {
+    async (answer: QuestionAnswer, onError?: (errorCode: string) => void) => {
       const question = activeQuestionRef.current ?? progress.question ?? state.agentQuestion;
       const location = activeLocationRef.current;
 
@@ -516,13 +518,19 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         return;
       }
 
+      const optionId = 'optionId' in answer ? answer.optionId : undefined;
+      const text = 'text' in answer ? answer.text : undefined;
+      const label = optionId
+        ? question.options?.find((option) => option.id === optionId)?.label ?? '你的选择'
+        : text;
+
       // 立即设置反馈状态
       setProgress({
         status: 'thinking',
-        message: `好的，正在按您的要求「${answer}」继续搜索...`,
+        message: `好的，正在按您的要求「${label}」继续搜索...`,
       });
 
-      await runChatSearch(answer, location, onError, question.sessionId);
+      await runChatSearch(text ?? '', location, onError, question.sessionId, optionId);
     },
     [progress.question, runChatSearch, setError, state.agentQuestion]
   );

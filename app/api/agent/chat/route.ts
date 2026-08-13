@@ -17,6 +17,7 @@ import type {
   SearchPlan,
 } from '@/lib/agent/types';
 import { mergeUserPreferenceSummaries } from '@/lib/agent/preferences';
+import { clarificationOptionLabel } from '@/lib/agent/supervisorPlanner';
 import {
   applyRuntimeStateToSessionAsync,
   appendAssistantMessageAsync,
@@ -67,13 +68,26 @@ const PreferenceSummarySchema = z.object({
   recentRejectedRestaurants: z.array(z.string()).optional(),
 }).optional();
 
+/**
+ * message 与 optionId 二选一。
+ *
+ * optionId 走确定性状态转移（后端自己定义的 effect，不调模型）；
+ * message 才是需要模型理解的自由文本。选项文案永远不作为 message 回传。
+ */
 const AgentChatRequestSchema = z.object({
-  message: z.string().min(1).max(500),
+  message: z.string().min(1).max(500).optional(),
+  optionId: z.string().min(1).max(64).optional(),
   location: LocationSchema,
   sessionId: z.string().optional(),
   preferenceSummary: PreferenceSummarySchema,
   groupPreferenceSummaries: z.array(PreferenceSummarySchema.unwrap()).optional(),
-});
+}).refine(
+  (data) => Boolean(data.message?.trim()) || Boolean(data.optionId?.trim()),
+  { message: 'Either message or optionId is required' }
+).refine(
+  (data) => !data.optionId || Boolean(data.sessionId),
+  { message: 'optionId requires an existing sessionId' }
+);
 
 function sendEvent(controller: ReadableStreamDefaultController, event: AgentEvent) {
   const data = JSON.stringify(event);
@@ -190,7 +204,7 @@ export async function POST(request: Request) {
         const shouldResumeSession = Boolean(resumableSession);
         let session = shouldResumeSession && resumableSession
           ? resumableSession
-          : await createAgentSessionAsync(requestData.message, requestData.location);
+          : await createAgentSessionAsync(requestData.message ?? '', requestData.location);
 
         if (!session) {
           sendEvent(controller, {
@@ -204,8 +218,15 @@ export async function POST(request: Request) {
           return;
         }
 
+        // 会话消息记录用选项的展示文案，保证 messages 对人可读；
+        // 但传给 Agent 的是 optionId，语义判断绝不依赖这段文案。
+        const userMessage = requestData.optionId
+          ? clarificationOptionLabel(session.pendingQuestion, requestData.optionId)
+            ?? requestData.optionId
+          : requestData.message ?? '';
+
         if (shouldResumeSession) {
-          await appendUserMessageAsync(session, requestData.message);
+          await appendUserMessageAsync(session, userMessage);
           sendEvent(controller, {
             type: 'session_resumed',
             sessionId: session.id,
@@ -217,7 +238,8 @@ export async function POST(request: Request) {
         session.location = requestData.location;
 
         const input: AgentInput = {
-          query: requestData.message,
+          query: requestData.message ?? '',
+          optionId: requestData.optionId,
           location: requestData.location,
           previousLocation,
           sessionId: session.id,
@@ -234,6 +256,8 @@ export async function POST(request: Request) {
             observations: session.observations,
             trace: session.trace,
             pendingQuestion: session.pendingQuestion,
+            lastQuestionFingerprint: session.lastQuestionFingerprint,
+            consecutiveAskTurns: session.consecutiveAskTurns,
           },
         };
 
@@ -304,8 +328,13 @@ export async function POST(request: Request) {
       } catch (error) {
         // 失败的 turn 也要留痕：AgentRunError 携带失败前的运行状态，
         // 先落库再报错，否则最需要 trace 的这一轮什么都查不到。
-        const code: AgentErrorCode = error instanceof AgentRunError ? error.code : 'UNKNOWN';
+        const code: AgentErrorCode = error instanceof AgentRunError
+          ? error.code
+          : error instanceof AgentError ? error.code : 'UNKNOWN';
         const message = error instanceof Error ? error.message : 'Agent 对话搜索失败';
+        // 可恢复性由抛出点决定：配额耗尽这类错误重试 100% 失败，
+        // 前端据此不展示重试入口。
+        const recoverable = resolveRecoverable(error, code);
 
         logger.error('Agent chat stream error', {
           sessionId: activeSession?.id,
@@ -328,7 +357,7 @@ export async function POST(request: Request) {
           type: 'error',
           message,
           code,
-          recoverable: code !== 'CONFIG_MISSING' && code !== 'SESSION_EXPIRED',
+          recoverable,
         });
         stopHeartbeat();
         controller.close();
@@ -359,4 +388,17 @@ function jsonResponse(body: unknown, status: number): Response {
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** 可恢复性优先取抛出点带的标记，取不到再按错误码兜底。 */
+function resolveRecoverable(error: unknown, code: AgentErrorCode): boolean {
+  const cause = error instanceof AgentRunError ? error.cause : error;
+  if (cause instanceof AgentError) {
+    return cause.retryable;
+  }
+
+  return code !== 'CONFIG_MISSING'
+    && code !== 'SESSION_EXPIRED'
+    && code !== 'MODEL_QUOTA_EXHAUSTED'
+    && code !== 'INVALID_OPTION';
 }

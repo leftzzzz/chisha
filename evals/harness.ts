@@ -8,6 +8,7 @@
  * 被 mock 的模块（会形成环）。
  */
 
+import { AgentError } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 import type {
   AmapFixture,
@@ -35,6 +36,7 @@ interface EvalCounters {
 interface EvalStubs {
   goal?: StubGoal;
   expansion?: StubExpansion;
+  evaluationError?: string;
   message: string;
 }
 
@@ -152,6 +154,11 @@ export function routeSupervisorPlanner(
     return actual.runSupervisorPlanner(input, context);
   }
 
+  const failWithCode = harnessState.stubs.goal?.failWithCode;
+  if (failWithCode) {
+    return Promise.reject(createStubAgentError('SupervisorPlannerAgent 桩故障', failWithCode));
+  }
+
   return Promise.resolve({
     goal: buildStubGoal(harnessState.stubs.goal ?? {}, input.message),
     nextAction: harnessState.stubs.goal?.clarifyingQuestion ? 'ask_user' : 'plan',
@@ -205,6 +212,21 @@ export function buildStubGoal(stub: StubGoal, rawQuery: string) {
 // KeywordExpansion 桩
 // ---------------------------------------------------------------------------
 
+/**
+ * 构造一个带错误码的桩错误。
+ *
+ * 必须是真的 AgentError：runtime 用 instanceof 取错误码，结构同形的对象
+ * 会被判成 UNKNOWN，评测就锁不住"错误码从抛出点传下来"这条契约。
+ * types 模块没有被 mock，可以安全 import。
+ */
+function createStubAgentError(message: string, code: string): Error {
+  return new AgentError(
+    message,
+    code as ConstructorParameters<typeof AgentError>[1],
+    code !== 'MODEL_QUOTA_EXHAUSTED' && code !== 'CONFIG_MISSING'
+  );
+}
+
 export function keywordExpansionStub() {
   const expansion = harnessState.stubs.expansion ?? {};
   const related = expansion.related ?? [];
@@ -243,6 +265,14 @@ interface EvaluationStubInput {
 export function evaluationStub(input: EvaluationStubInput) {
   const counters = harnessState.counters;
   counters.evaluationCalls += 1;
+
+  const evaluationError = harnessState.stubs.evaluationError;
+  if (evaluationError) {
+    counters.evaluatedSlots += input.restaurants.length;
+    counters.evaluatedIds.push(...input.restaurants.map((item) => item.id));
+    return Promise.reject(createStubAgentError('EvaluationAgent 桩故障', evaluationError));
+  }
+
   counters.evaluatedSlots += input.restaurants.length;
   counters.evaluatedIds.push(...input.restaurants.map((item) => item.id));
 

@@ -485,13 +485,24 @@ export interface AgentSearchResult {
   question?: AgentQuestion;
 }
 
+export interface AgentQuestionOption {
+  id: string;
+  label: string;
+}
+
 export interface AgentQuestion {
   sessionId: string;
   question: string;
-  options?: string[];
+  options?: AgentQuestionOption[];
   allowFreeText: boolean;
 }
 
+/**
+ * 发起或续跑一轮 Agent 搜索。
+ *
+ * `message` 与 `optionId` 二选一：点击追问选项时只传 optionId，服务端按 id
+ * 执行确定性状态转移；自由文本才交给模型理解。前端不得自己推断选项语义。
+ */
 export async function agentChat(
   message: string,
   location: Location,
@@ -499,11 +510,18 @@ export async function agentChat(
   signal?: AbortSignal,
   sessionId?: string,
   preferenceSummary?: UserPreferenceSummary,
-  groupPreferenceSummaries?: UserPreferenceSummary[]
+  groupPreferenceSummaries?: UserPreferenceSummary[],
+  optionId?: string
 ): Promise<AgentSearchResult> {
   return requestAgentStream(
     '/api/agent/chat',
-    { message, location, sessionId, preferenceSummary, groupPreferenceSummaries },
+    {
+      ...(optionId ? { optionId } : { message }),
+      location,
+      sessionId,
+      preferenceSummary,
+      groupPreferenceSummaries,
+    },
     callbacks,
     signal
   );

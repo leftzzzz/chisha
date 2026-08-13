@@ -72,11 +72,21 @@ Core state files:
   违规即 bug）+ 确定性硬约束过滤
 - `finalGuard.ts` - 主推荐准入
 - `finishReason.ts` - 结束原因枚举与用户文案映射（不要用字符串匹配生成文案）
-- `degraded.ts` - Supervisor 不可用时的降级目标
+- `clarificationOptions.ts` - 追问选项的 id 协议（id 是契约，label 只是文案）
 - `metrics.ts` / `turnLogger.ts` / `tracePersistence.ts` - 观测：模型指标
   （含 `serialModelSteps`）、带 sessionId/turnId 的日志、trace 持久化裁剪
 
 错误码在**抛出点**用 `AgentError` 指定，不要在消费端对 message 做正则匹配。
+
+**三条不可违反的约定**（见 `docs/模型不可用与追问契约-技术方案-2026-08.md`）：
+
+1. **模型不可用就报错，不降级**。不要新增任何"用关键词表从用户原话里抽词"
+   的兜底路径——那是拿硬编码语义冒充模型判断，也是历史上追问死循环的燃料。
+   验证失败同理：不合成 unverified 候选。
+2. **用户意图只由 Supervisor 判断**。「你推荐」「随便」这类说法一个字都不该
+   进代码常量；prompt 里写规则，代码里不做关键词匹配。
+3. **追问选项按 id 走协议**。`optionEffects` 的 key 只能是 option.id，前端回传
+   id、不回传文案，也不许自己造选项。
 
 ### Agent 评测 (`evals/`)
 `npm run eval` 用桩模型 + fixture 高德驱动真实 loop，度量的是**行为**：
@@ -106,7 +116,7 @@ AMAP_API_KEY=           # 高德地图 API key
 Optional:
 ```
 OPENAI_BASE_URL=        # Custom OpenAI endpoint
-OPENAI_MODEL=           # Model override (default: gpt-4o)
+OPENAI_MODEL=           # Model override (default: deepseek-v4-flash-0731)
 OPENAI_MODEL_SUPERVISOR= # 目标理解模型（默认继承 OPENAI_MODEL）
 OPENAI_MODEL_PLANNER=   # replan 模型（默认继承 OPENAI_MODEL）
 OPENAI_MODEL_EVALUATION= # 候选验证模型，调用量最大，可配便宜模型

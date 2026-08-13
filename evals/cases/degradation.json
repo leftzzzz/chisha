@@ -1,0 +1,51 @@
+[
+  {
+    "id": "model-unavailable",
+    "description": "模型不可用时必须直接报错：不搜索、不验证、不拿词表抽词冒充理解",
+    "turns": [
+      {
+        "message": "想吃火锅",
+        "stubGoal": { "failWithCode": "MODEL_QUOTA_EXHAUSTED" },
+        "expect": {
+          "failsWithCode": "MODEL_QUOTA_EXHAUSTED",
+          "maxSearchCalls": 0,
+          "maxEvaluationCalls": 0
+        }
+      }
+    ]
+  },
+  {
+    "id": "evaluation-unavailable",
+    "description": "验证服务不可用时立即收敛：不再换关键词重复搜同一批 POI",
+    "turns": [
+      {
+        "message": "想吃火锅",
+        "stubGoal": { "primaryKeywords": ["火锅"], "requestedItems": ["火锅"] },
+        "stubExpansion": { "related": ["川菜"], "broadened": ["中餐"] },
+        "stubEvaluationError": "RATE_LIMITED",
+        "expect": {
+          "failsWithCode": "RATE_LIMITED",
+          "maxSearchCalls": 3,
+          "maxEvaluationCalls": 3
+        }
+      }
+    ]
+  },
+  {
+    "id": "clarify-option-authorizes",
+    "description": "点击追问选项走确定性状态转移，不消耗理解调用",
+    "turns": [
+      {
+        "message": "附近有什么好吃的",
+        "stubGoal": { "clarifyingQuestion": "你想找哪类餐厅，或具体想吃什么？" },
+        "expect": { "shouldAsk": true }
+      },
+      {
+        "message": "火锅",
+        "stubGoal": { "primaryKeywords": ["火锅"], "requestedItems": ["火锅"] },
+        "stubExpansion": { "related": ["川菜"], "broadened": [] },
+        "expect": { "shouldAsk": false, "minPrimary": 3 }
+      }
+    ]
+  }
+]

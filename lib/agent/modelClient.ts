@@ -2,7 +2,8 @@ import type { z } from 'zod';
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout } from '@/lib/withTimeout';
 import { recordModelCall, type MetricsSink, type ModelCallMetrics } from './metrics';
-import { AgentError } from './types';
+import { AgentError, isAgentError } from './types';
+import type { AgentErrorCode } from './types';
 import {
   extractModelFunctionArguments,
   isModelFunctionOutputTruncated,
@@ -93,7 +94,16 @@ export async function callJsonFunctionAgent<T>(
     return result;
   } catch (error) {
     tracker.finish(false);
-    throw error;
+    // 走到这里还不是 AgentError 的，只可能是"模型可达但输出不合法/被截断"，
+    // 传输层异常已经在 requestJsonFunctionAgent 里定过码了。
+    throw isAgentError(error)
+      ? error
+      : new AgentError(
+          error instanceof Error ? error.message : String(error),
+          'MODEL_INVALID_OUTPUT',
+          true,
+          { cause: error }
+        );
   }
 }
 
@@ -279,18 +289,7 @@ async function requestJsonFunctionAgent<T>(
 
   for (const mode of modes) {
     attempts += 1;
-    const response = await fetchWithTimeout(
-      `${options.baseUrl}/chat/completions`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${options.apiKey}`,
-        },
-        body: JSON.stringify(buildChatCompletionRequestBody(options, maxTokens, mode)),
-      },
-      options.timeoutMs
-    );
+    const response = await requestChatCompletion(options, maxTokens, mode);
 
     if (response.ok) {
       return { data: await response.json(), mode, attempts };
@@ -310,6 +309,40 @@ async function requestJsonFunctionAgent<T>(
   }
 
   throw lastError ?? new Error(`${options.agentName} API failed`);
+}
+
+/**
+ * 发一次 chat/completions。
+ *
+ * 传输层异常（超时、DNS、连接重置）在这里定码：它们不经过 HTTP 状态分类，
+ * 不定码的话下游只能看到 UNKNOWN，无法判断该不该让用户重试。
+ */
+async function requestChatCompletion<T>(
+  options: JsonFunctionAgentOptions<T>,
+  maxTokens: number,
+  mode: ChatToolCallMode
+): Promise<Response> {
+  try {
+    return await fetchWithTimeout(
+      `${options.baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${options.apiKey}`,
+        },
+        body: JSON.stringify(buildChatCompletionRequestBody(options, maxTokens, mode)),
+      },
+      options.timeoutMs
+    );
+  } catch (error) {
+    throw new AgentError(
+      `${options.agentName} API request failed: ${error instanceof Error ? error.message : String(error)}`,
+      'MODEL_UNAVAILABLE',
+      true,
+      { cause: error }
+    );
+  }
 }
 
 function buildChatCompletionRequestBody<T>(
@@ -411,11 +444,42 @@ async function buildChatCompletionError(
   ].filter(Boolean).join('; ');
 
   // 错误码在这里定：HTTP 状态是最可靠的信号，比下游对文案做子串匹配准。
+  const { code, retryable } = classifyChatCompletionStatus(response.status);
+
   return new AgentError(
     `${agentName} API failed: ${response.status}${details ? ` - ${details}` : ''}`,
-    response.status === 429 ? 'RATE_LIMITED' : 'UNKNOWN',
-    response.status === 429 || response.status >= 500
+    code,
+    retryable
   );
+}
+
+/**
+ * HTTP 状态 → 错误码与可恢复性。
+ *
+ * 可恢复性直接决定前端给不给"重试"按钮，所以配额耗尽（402/403）必须与
+ * 限流（429）分开：前者重试一万次也不会成功，给重试入口是错误引导。
+ */
+function classifyChatCompletionStatus(status: number): {
+  code: AgentErrorCode;
+  retryable: boolean;
+} {
+  if (status === 401) {
+    return { code: 'CONFIG_MISSING', retryable: false };
+  }
+
+  if (status === 402 || status === 403) {
+    return { code: 'MODEL_QUOTA_EXHAUSTED', retryable: false };
+  }
+
+  if (status === 429) {
+    return { code: 'RATE_LIMITED', retryable: true };
+  }
+
+  if (status >= 500) {
+    return { code: 'MODEL_UNAVAILABLE', retryable: true };
+  }
+
+  return { code: 'UNKNOWN', retryable: false };
 }
 
 async function readResponseBody(response: Response): Promise<string | null> {
