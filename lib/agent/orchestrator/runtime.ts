@@ -7,36 +7,34 @@
 
 import type { Restaurant } from '@/types';
 import {
-  applyClarificationOptionToGoal,
   applyGoalPatch,
   clarificationNeedToPendingQuestion,
-  clarificationOptionLabel,
-  hasClarificationOption,
 } from '../goal';
 import { runGoalUnderstandingAgent } from '../subagents/goalUnderstandingAgent';
 import { runSearchReplan } from '../subagents/replanAgent';
 import { evaluateSearchResult, mergeCandidates } from '../evaluator';
-import { applyHardConstraintGuard, applyVerdictGuard, validateSearchPlan } from '../guards';
+import { applyHardConstraintGuard, applyVerdictGuard } from '../guards';
 import { isPrimaryRecommendationAllowed } from '../finalGuard';
 import { createTurnLogger } from '../turnLogger';
 import { summarizeTurnMetrics, type MetricsSink } from '../metrics';
 import { describeFinish, internalFinishNote, type FinishReason } from '../finishReason';
 import {
-  buildQuestionFingerprint,
-  CLARIFICATION_OPTION,
-} from '../clarificationOptions';
-import {
   buildFallbackPrimaryEffect,
   buildNoPrimaryQuestion,
-  buildSearchPlan,
+  decideAskOrConverge,
+  decideContextReset,
   decideNextAction,
-  hasPositiveFoodTarget,
+  decideScouting,
+  decideTurnEntry,
   hasPrimaryCandidates,
   inferPoiTypesForGoalKeyword,
   isOpenExplorationContext,
+  partitionPlansByValidity,
   planSearchBatch,
   primaryCandidates,
   type PolicyDecision,
+  type RejectedPlan,
+  type SearchStateResetPlan,
 } from './policy';
 import {
   buildNearbyCategoryQuestion,
@@ -52,11 +50,9 @@ import { applyKeywordExpansion, runKeywordExpansionAgent } from '../subagents/ke
 import { runEvaluationAgent, type EvaluationAgentInput } from '../subagents/evaluationAgent';
 import {
   deriveContextInvalidationPlan,
-  deriveGoalSignature,
   markStaleCandidatesForContext,
   withUpdatedGoalVersion,
 } from '../goalVersion';
-import type { ContextInvalidationPlan } from '../goalVersion';
 import { createVerdictCache, type VerdictCache } from '../evaluationCache';
 import { AgentError, AgentRunError, isAgentError } from '../types';
 import type {
@@ -97,14 +93,6 @@ interface AgentV3Context extends AgentContext {
   consecutiveAskTurns?: number;
 }
 
-interface SearchStateResetPlan {
-  clearAttempts: boolean;
-  clearCandidates: boolean;
-  clearActionHistory: boolean;
-  clearObservations: boolean;
-  reason?: string;
-}
-
 const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 4);
 const DEFAULT_AGENT_EVALUATION_BUFFER = parsePositiveInt(process.env.AGENT_EVALUATION_BUFFER, 4);
 const DEFAULT_AGENT_EVALUATION_BATCH_SIZE = parsePositiveInt(process.env.AGENT_EVALUATION_BATCH_SIZE, 6);
@@ -112,8 +100,6 @@ const DEFAULT_AGENT_EVALUATION_CONCURRENCY = parsePositiveInt(process.env.AGENT_
 const CONFIGURED_AGENT_EVALUATION_LIMIT = parseOptionalPositiveInt(process.env.AGENT_EVALUATION_LIMIT);
 const MAX_HARD_REJECTED_REASON_DETAILS = 6;
 const MAX_HARD_REJECTED_OBSERVATIONS = 20;
-/** 追问前探路用的通用词：只为看清附近有哪些品类，不产生推荐。 */
-const SCOUTING_KEYWORD = '餐厅';
 
 /**
  * 执行一轮 Agent 搜索。
@@ -175,7 +161,7 @@ async function runAgentTurn(
     input.previousLocation,
     input.location
   );
-  const resetPlan = deriveSearchStateResetPlan(invalidationPlan, conversationMode);
+  const resetPlan = decideContextReset(conversationMode, invalidationPlan);
   const context = createInitialContext(input, baseGoal, resetPlan);
   context.modelCallMetrics = turnMetrics.modelCallMetrics ?? [];
   contextRef.current = context;
@@ -271,22 +257,15 @@ async function groundQuestionInNearbyCategories(
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
   emit: EmitAgentEvent
 ): Promise<PendingQuestion> {
-  // 只在"用户没有任何正向目标"时探路。已经说了想吃什么就不必问品类了。
-  if (hasPositiveFoodTarget(context.goal)) {
+  const scouting = decideScouting(context);
+  if (scouting.kind === 'skip') {
     return question;
   }
 
   emit({ type: 'status', message: '正在看看附近都有什么...' });
 
   try {
-    const plan = buildSearchPlan(
-      context,
-      { keyword: SCOUTING_KEYWORD },
-      'fallback',
-      false,
-      '追问前探路：了解附近实际的餐厅品类分布。'
-    );
-    const restaurants = await searchPlaces(plan);
+    const restaurants = await searchPlaces(scouting.plan);
     const categories = summarizeNearbyCategories(restaurants);
     const grounded = buildNearbyCategoryQuestion(categories, buildFallbackPrimaryEffect());
 
@@ -339,9 +318,11 @@ async function expandKeywordsAlongsideFirstSearch(
   // 开放推荐要等联想词：它的首批计划本来就应该是模型给的多样化探索词
   // （火锅/日料/烧烤），并发跑会让首批退化成一个通用词「餐厅」，
   // 转盘的品类分布就只剩高德排序的运气。
-  const firstBatch = concurrentFirstSearchEnabled() && !isOpenExplorationContext(context)
-    ? keepValidPlans(planSearchBatch(context), context, emit)
-    : [];
+  const firstBatchPartition = concurrentFirstSearchEnabled() && !isOpenExplorationContext(context)
+    ? partitionPlansByValidity(context, planSearchBatch(context))
+    : { plans: [], rejectedPlans: [] };
+  reportRejectedPlans(context, firstBatchPartition.rejectedPlans, emit);
+  const firstBatch = firstBatchPartition.plans;
   if (firstBatch.length > 0) {
     appendTrace(context, 'runtime_decision', {
       output: {
@@ -394,17 +375,22 @@ async function runSearchStep(
   }
 }
 
-/** 策略决策在 Runtime 侧的可执行形态：replan 已经被消解掉。 */
-type ExecutableDecision = Exclude<PolicyDecision, { kind: 'replan' }>;
+/** 策略决策在 Runtime 侧的可执行形态：replan 与 invalid_plans 已被消解掉。 */
+type ExecutableDecision = Exclude<PolicyDecision, { kind: 'replan' | 'invalid_plans' }>;
 
+/**
+ * 需要 Runtime 做点事情之后再问一次策略的分支数量上限。
+ *
+ * 只有两个分支会要求重问：replan（补上新关键词）与 invalid_plans（把被拒的
+ * 计划记为已尝试）。两者一轮各最多一次，所以 3 次决策足够收敛。
+ */
 const MAX_DECISION_ROUNDS = 3;
 
 /**
  * 取下一个可执行决策。
  *
- * 策略给出的 search 计划要先过 guard；全部非法时把它们记为已尝试再重新决策，
- * 否则同一批词会被反复选中。replan 在这里被消解成"补充关键词后重新决策"
- * 或"用模型给的问题追问"，Runtime 主循环不需要知道它存在。
+ * "下一步做什么"完全来自 `decideNextAction`——这里不再自行判断计划合不合法、
+ * 该不该重试。剩下的循环只服务于两个"先做点事再重问"的分支。
  */
 async function nextExecutableDecision(
   context: AgentV3Context,
@@ -425,13 +411,16 @@ async function nextExecutableDecision(
     });
 
     if (decision.kind === 'search') {
-      const validPlans = keepValidPlans(decision.plans, context, emit);
-      if (validPlans.length > 0) {
-        return { kind: 'search', plans: validPlans };
-      }
+      reportRejectedPlans(context, decision.rejectedPlans, emit);
+      return decision;
+    }
 
-      // 计划全被拒：记为已尝试，避免下一轮又挑中同一批词。
-      decision.plans.forEach((plan) => recordFailedAttempt(context, plan, '计划未通过校验，未执行搜索。'));
+    if (decision.kind === 'invalid_plans') {
+      reportRejectedPlans(context, decision.rejectedPlans, emit);
+      // 记为已尝试，避免下一次决策又挑中同一批词。
+      decision.rejectedPlans.forEach(({ plan }) =>
+        recordFailedAttempt(context, plan, '计划未通过校验，未执行搜索。')
+      );
       continue;
     }
 
@@ -459,25 +448,17 @@ async function nextExecutableDecision(
 }
 
 /**
- * 过滤掉不合法的搜索计划。
+ * 上报被 guard 拒绝的计划。
  *
  * 计划由 policy 生成，因此违规意味着策略有 bug——除了重复计划（可能来自并发
  * 批次的竞态）之外都按 error 级别记录，让 eval 与日志抓得到。
  */
-function keepValidPlans(
-  plans: SearchPlan[],
+function reportRejectedPlans(
   context: AgentV3Context,
+  rejectedPlans: RejectedPlan[],
   emit: EmitAgentEvent
-): SearchPlan[] {
-  const valid: SearchPlan[] = [];
-
-  for (const plan of plans) {
-    const violations = validateSearchPlan(plan, context);
-    if (violations.length === 0) {
-      valid.push(plan);
-      continue;
-    }
-
+): void {
+  for (const { plan, violations } of rejectedPlans) {
     const trace = appendTrace(context, 'guard_decision', {
       guardDecision: { type: 'reject', violations },
       output: { plan },
@@ -498,8 +479,6 @@ function keepValidPlans(
       });
     }
   }
-
-  return valid;
 }
 
 /**
@@ -606,16 +585,48 @@ async function resolveTurnGoal(
   input: AgentInput,
   metricsSink: MetricsSink
 ): Promise<TurnGoalResolution> {
-  const optionOutcome = resolveClarificationOptionTurn(input);
-  if (optionOutcome.kind === 'resolved') {
-    return optionOutcome.resolution;
+  const entry = decideTurnEntry(input);
+
+  if (entry.kind === 'invalid_option') {
+    throw new AgentError(
+      entry.reason === 'no_label'
+        ? `Clarification option has no label: ${entry.optionId}`
+        : `Clarification option is no longer available: ${entry.optionId}`,
+      'INVALID_OPTION',
+      false
+    );
   }
 
-  // 选项没有带 effect（模型生成的选项通常如此）：它的 label 就是用户用自然
-  // 语言给出的回答，交给 Supervisor 理解。代码依旧不猜语义，只是把话转过去。
-  const effectiveInput = optionOutcome.kind === 'delegate_to_model'
-    ? { ...input, query: optionOutcome.answer, optionId: undefined }
-    : input;
+  if (entry.kind === 'rerun_current_goal') {
+    return {
+      goal: entry.goal,
+      conversationMode: 'continue_current_goal',
+      supervisorOutput: null,
+    };
+  }
+
+  if (entry.kind === 'ask') {
+    return {
+      goal: entry.goal,
+      conversationMode: 'continue_current_goal',
+      supervisorOutput: null,
+      clarifyingQuestion: entry.question,
+    };
+  }
+
+  if (entry.kind === 'apply_effect') {
+    return {
+      goal: entry.goal,
+      conversationMode: entry.conversationMode,
+      supervisorOutput: null,
+    };
+  }
+
+  // entry.kind === 'understand'：交给子 Agent。带 effect 的选项走不到这里；
+  // 模型自己写的选项没有 effect，它的 label 就是一句预填的用户回答。
+  const effectiveInput = entry.message === input.query
+    ? input
+    : { ...input, query: entry.message, optionId: undefined };
 
   const supervisorOutput = await getGoalUnderstandingOutput(effectiveInput, metricsSink);
 
@@ -632,7 +643,7 @@ async function resolveTurnGoal(
 
   return {
     goal: resolveSupervisorGoal(input, supervisorOutput),
-    conversationMode: inferRuntimeConversationMode(input, supervisorOutput),
+    conversationMode: resolveConversationMode(input, supervisorOutput),
     supervisorOutput,
     clarifyingQuestion: supervisorOutput.question,
   };
@@ -664,92 +675,6 @@ function buildPlaceholderGoal(query: string): UserGoal {
     authorizations: [],
     allowBroaden: false,
   });
-}
-
-/**
- * 追问选项的处理结果。
- *
- * 带 effect 的选项（policy 自己构造的授权/放宽类）是确定性状态转移，
- * 不调模型；模型生成的选项通常只有文案没有 effect——那本质上是一句
- * 预置好的用户回答，仍然要交给 Supervisor 理解。
- */
-type ClarificationOptionOutcome =
-  | { kind: 'none' }
-  | { kind: 'resolved'; resolution: TurnGoalResolution }
-  | { kind: 'delegate_to_model'; answer: string };
-
-function resolveClarificationOptionTurn(input: AgentInput): ClarificationOptionOutcome {
-  const optionId = input.optionId?.trim();
-  if (!optionId) {
-    return { kind: 'none' };
-  }
-
-  const previousGoal = input.runtimeState?.goal;
-  const pendingQuestion = input.runtimeState?.pendingQuestion;
-
-  if (!previousGoal || !hasClarificationOption(pendingQuestion, optionId)) {
-    throw new AgentError(
-      `Clarification option is no longer available: ${optionId}`,
-      'INVALID_OPTION',
-      false
-    );
-  }
-
-  // 「重试」：原样重跑本轮，不动 goal、不改会话模式。
-  // 历史 bug：把"重试"当成一句新需求喂给模型，rawQuery 被改写成「重试」，
-  // 整个会话的搜索结果被 start_new_goal 清空。
-  if (optionId === CLARIFICATION_OPTION.RETRY_TURN) {
-    return {
-      kind: 'resolved',
-      resolution: {
-        goal: previousGoal,
-        conversationMode: 'continue_current_goal',
-        supervisorOutput: null,
-      },
-    };
-  }
-
-  // 「换个类型」没有 effect：它的语义就是"等用户说新的需求"。
-  if (optionId === CLARIFICATION_OPTION.CHANGE_TARGET) {
-    return {
-      kind: 'resolved',
-      resolution: {
-        goal: previousGoal,
-        conversationMode: 'continue_current_goal',
-        supervisorOutput: null,
-        clarifyingQuestion: {
-          reason: '用户选择更换搜索目标。',
-          question: '想换成什么？直接说菜品或菜系，例如「牛排」「川菜」。',
-          allowFreeText: true,
-        },
-      },
-    };
-  }
-
-  const patchedGoal = applyClarificationOptionToGoal(previousGoal, pendingQuestion, optionId);
-  if (patchedGoal) {
-    return {
-      kind: 'resolved',
-      resolution: {
-        goal: patchedGoal,
-        conversationMode: 'patch_current_goal',
-        supervisorOutput: null,
-      },
-    };
-  }
-
-  // 没有 effect 的选项：模型写的「火锅」「日料」这类，本质是替用户预填的
-  // 一句回答。把 label 当自由文本交给 Supervisor——语义判断仍归模型。
-  const label = clarificationOptionLabel(pendingQuestion, optionId);
-  if (!label) {
-    throw new AgentError(
-      `Clarification option has no label: ${optionId}`,
-      'INVALID_OPTION',
-      false
-    );
-  }
-
-  return { kind: 'delegate_to_model', answer: label };
 }
 
 /**
@@ -802,81 +727,6 @@ async function getGoalUnderstandingOutput(
     preferenceSummary: input.preferenceSummary,
     attempts: input.runtimeState?.attempts,
   });
-}
-
-function inferRuntimeConversationMode(
-  input: AgentInput,
-  output: Awaited<ReturnType<typeof runGoalUnderstandingAgent>>
-): ConversationMode {
-  if (!input.runtimeState?.goal) {
-    return 'start_new_goal';
-  }
-
-  if (output.patch) {
-    return 'patch_current_goal';
-  }
-
-  if (output.conversationMode) {
-    return output.conversationMode;
-  }
-
-  if (!output.goal) {
-    return 'continue_current_goal';
-  }
-
-  if (primaryTargetSignature(input.runtimeState.goal) !== primaryTargetSignature(output.goal)) {
-    return 'start_new_goal';
-  }
-
-  return deriveGoalSignature(input.runtimeState.goal) === deriveGoalSignature(output.goal)
-    ? 'continue_current_goal'
-    : 'patch_current_goal';
-}
-
-function deriveSearchStateResetPlan(
-  invalidationPlan: ContextInvalidationPlan,
-  conversationMode: ConversationMode
-): SearchStateResetPlan {
-  if (conversationMode === 'start_new_goal') {
-    return {
-      clearAttempts: true,
-      clearCandidates: true,
-      clearActionHistory: true,
-      clearObservations: true,
-      reason: 'start_new_goal',
-    };
-  }
-
-  if (invalidationPlan.primaryTargetChanged) {
-    return {
-      clearAttempts: true,
-      clearCandidates: true,
-      clearActionHistory: true,
-      clearObservations: true,
-      reason: 'primary_target_changed',
-    };
-  }
-
-  if (
-    invalidationPlan.hardConstraintsChanged
-    || invalidationPlan.exclusionsChanged
-    || invalidationPlan.locationChanged
-  ) {
-    return {
-      clearAttempts: true,
-      clearCandidates: false,
-      clearActionHistory: true,
-      clearObservations: true,
-      reason: invalidationPlan.reasons[0] ?? 'context_changed',
-    };
-  }
-
-  return {
-    clearAttempts: false,
-    clearCandidates: false,
-    clearActionHistory: false,
-    clearObservations: false,
-  };
 }
 
 function createInitialContext(input: AgentInput, goal: UserGoal, resetPlan: SearchStateResetPlan): AgentV3Context {
@@ -969,12 +819,29 @@ function replacementTargetsComeFromMessage(patch: GoalPatch, message: string): b
   return replacementTargets.every((target) => messageTargetSet.has(target));
 }
 
-function primaryTargetSignature(goal: UserGoal): string {
-  return Array.from(new Set([
-    ...goal.primaryKeywords,
-    ...goal.requestedItems.map((item) => item.name),
-    ...goal.acceptableCategories.map((category) => category.name),
-  ].map((item) => item.trim()).filter(Boolean))).sort().join('|');
+/**
+ * 取本轮的会话模式。
+ *
+ * "这句话与上文什么关系"是语义判断，归 GoalUnderstandingAgent——它的
+ * normalize 恒会填这个字段。这里只处理它够不到的两种情况：没有历史目标
+ * （必然是新会话），以及给了 patch（按定义就是在改当前目标）。
+ *
+ * 此前这里还有一份完整的签名比较推导，与子 Agent 那份逻辑重复且不等价，
+ * 且因为上面两个分支永远先命中而从未执行过。
+ */
+function resolveConversationMode(
+  input: AgentInput,
+  output: Awaited<ReturnType<typeof runGoalUnderstandingAgent>>
+): ConversationMode {
+  if (!input.runtimeState?.goal) {
+    return 'start_new_goal';
+  }
+
+  if (output.patch) {
+    return 'patch_current_goal';
+  }
+
+  return output.conversationMode ?? 'continue_current_goal';
 }
 
 function getInitialClarifyingQuestion(goal: UserGoal): PendingQuestion | null {
@@ -1674,15 +1541,8 @@ function recordTurnMetrics(context: AgentV3Context, outcome: 'final' | 'paused')
   });
 }
 
-/** 连续追问上限：到顶就收敛，不再把同一类问题继续抛给用户。 */
-const MAX_CONSECUTIVE_ASK_TURNS = 3;
-
 /**
- * 追问，或者在原地打转时收敛。
- *
- * Agent loop 的基本要求是每一轮可度量地前进。同一个问题连问两次说明这一轮
- * 什么都没推进——线上就是这样把用户锁死的：降级追问反复重发，前端到达追问
- * 上限后又只留下一个后端消费不了的按钮。
+ * 执行 policy 的追问/收敛决策。
  *
  * 收敛时给结果而不是报错：报错会让会话卡在待答状态，用户依然出不去。
  */
@@ -1691,31 +1551,29 @@ function askOrConverge(
   question: PendingQuestion,
   emit: EmitAgentEvent
 ): AgentFinalResult {
-  const fingerprint = buildQuestionFingerprint(question);
-  const askTurns = context.consecutiveAskTurns ?? 0;
-  const repeated = context.lastQuestionFingerprint === fingerprint;
+  const decision = decideAskOrConverge(context, question);
 
-  if (repeated || askTurns >= MAX_CONSECUTIVE_ASK_TURNS) {
+  if (decision.kind === 'converge') {
     appendTrace(context, 'runtime_decision', {
       output: {
         kind: 'clarification_stalled',
-        repeated,
-        consecutiveAskTurns: askTurns,
+        repeated: decision.repeated,
+        consecutiveAskTurns: decision.consecutiveAskTurns,
         question: question.question,
       },
     });
     context.lastQuestionFingerprint = undefined;
     context.consecutiveAskTurns = 0;
 
-    const action = buildFinishAction(context, 'CLARIFICATION_STALLED', 0.5);
+    const action = buildFinishAction(context, decision.reason, 0.5);
     appendAction(context, action, emit);
     return finish(context, action, emit, { allowClarification: false });
   }
 
-  context.lastQuestionFingerprint = fingerprint;
-  context.consecutiveAskTurns = askTurns + 1;
-  appendAction(context, { type: 'ask_user', question }, emit);
-  return buildPausedResult(context, question);
+  context.lastQuestionFingerprint = decision.nextState.lastQuestionFingerprint;
+  context.consecutiveAskTurns = decision.nextState.consecutiveAskTurns;
+  appendAction(context, { type: 'ask_user', question: decision.question }, emit);
+  return buildPausedResult(context, decision.question);
 }
 
 function finish(

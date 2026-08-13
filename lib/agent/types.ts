@@ -414,6 +414,29 @@ export interface AgentInput {
   runtimeState?: AgentRuntimeState;
 }
 
+/**
+ * 做策略判断所需的最小搜索状态。
+ *
+ * 放在 types 而不是 orchestrator/policy：规则库（guards 等）也要按这个形状
+ * 做校验，若从 policy 导入就成了"规则层反向依赖编排层"。
+ * AgentContext 与 AgentV3Context 均结构性满足。
+ */
+export interface PolicyContext {
+  goal: UserGoal;
+  attempts: SearchAttempt[];
+  candidates: RestaurantCandidate[];
+  location: Location;
+  targetCount: number;
+  maxSearchCalls: number;
+  /**
+   * 本轮是否发生过候选验证失败。
+   *
+   * 验证失败不再合成 unverified 候选，所以这个标记同时意味着"再搜也没用"：
+   * 搜到的东西没人能验证，继续扩搜只会重复调用高德。
+   */
+  evaluationFailed?: boolean;
+}
+
 export interface AgentContext extends AgentInput {
   goal: UserGoal;
   attempts: SearchAttempt[];

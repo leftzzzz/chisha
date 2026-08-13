@@ -38,6 +38,16 @@ export function primaryTargetSetSignature(goal: UserGoal): string {
   ].map((item) => item.trim()).filter(Boolean))).sort().join('|');
 }
 
+/** 用户明确要求且不允许放宽的最大距离；没有则 undefined。 */
+export function getStrictDistanceMaxMeters(goal: UserGoal): number | undefined {
+  const strictDistance = goal.hardConstraints.find(
+    (constraint) => constraint.kind === 'distance' && constraint.strict
+  );
+
+  return strictDistance?.maxMeters
+    ?? (typeof strictDistance?.value === 'number' ? strictDistance.value : undefined);
+}
+
 export function hasPrimaryTargets(goal: UserGoal): boolean {
   return [
     ...goal.primaryKeywords,
