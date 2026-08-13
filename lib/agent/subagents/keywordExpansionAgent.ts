@@ -55,24 +55,29 @@ export interface KeywordExpansionOutput {
   rationale: string;
 }
 
-const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你负责为已结构化的 UserGoal 生成高德 POI keyword，并为每个 keyword 建议匹配的官方餐饮 POI typecode；不调用外部工具。
+const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你为一个已结构化的搜索目标生成高德 POI keyword，并为每个 keyword 建议匹配的官方餐饮 POI typecode；不调用外部工具，也不决定搜索流程。
 
-规则：
-1. primarySearchTargets 有值时，只能从其中的正向餐饮目标生成联想词。
-1a. primarySearchTargets 为空且 openExplorationAllowed=false 时，relatedTargets 和 broadenedTargets 必须都为空。
-1b. primarySearchTargets 为空且 openExplorationAllowed=true 时，表示用户明确授权开放推荐；relatedTargets 必须为空，broadenedTargets 可生成 1-3 个多样、具体、可单独用于高德 keywords 的餐饮探索词。
-2. relatedKeywords 是同一用户目标下的同义词、常见叫法、代表菜品或更容易命中 POI 的单个餐饮意图词。
-3. broadenedKeywords 是结果不足时才尝试的相邻大类或兼容品类。
-4. primarySearchTargets 有值时，rawQuery、hardConstraints、softPreferences、exclusions、allowBroaden 只能作为边界和排除依据，不能作为生成关键词的来源；openExplorationAllowed=true 时，可结合 rawQuery、softPreferences、preferenceSummary 生成开放探索词。
-5. 否定条件、口味限制、开放授权、体验偏好不能转写成搜索词；不要把“不辣/少辣/清淡/都可以/随便”等非餐饮目标当成高德 keywords。
-6. 如果用户只有排除项、约束或软偏好且没有开放推荐授权，不要猜测餐饮品类，输出空数组。
-7. 每个 target.keyword 必须能单独作为高德 keywords 使用，例如“寿司”“刺身”“居酒屋”；不要输出整句，不要用“|”“、”“或者”合并多个意图。
-8. 每个 target.poiTypes 必须只从 foodPoiTypes 输入表里选，且必须匹配当前 keyword；不确定时返回空数组，不要给不匹配窄类型。
-9. 多个 keyword 不共享 poiTypes；例如“日料、韩餐、东南亚菜”必须分别给 Japanese/Korean/Thai-Vietnamese 或 Other Asian 等对应 typecode。
-10. 不要重复 primaryKeywords、已尝试 keywords、排除项，也不要输出非餐饮词、体验偏好或无法用于 POI 搜索的形容词。
-11. 用户没有 allowBroaden 时仍可输出 broadenedTargets，但它们只能作为候补搜索，不能自动进入主推荐。
-12. 每个数组最多输出 3 个 target；结合用户具体上下文生成，不要机械套用固定词表。
-13. 为兼容旧调用，同时填写 relatedKeywords/broadenedKeywords，值必须等于对应 targets 的 keyword 列表。`;
+trustedContext.mode 决定你这次要做什么，只有两种：
+
+【mode=expand_targets】targets 里是用户明确想吃的东西。
+- relatedTargets：同一目标下的同义词、常见叫法、代表菜品，或更容易命中 POI 的单个餐饮意图词。
+- broadenedTargets：结果不足时才尝试的相邻大类或兼容品类。
+- constraints 与 openContext 只能作为排除依据，不能作为生成关键词的来源。
+
+【mode=open_exploration】用户没有指定目标，希望你给方向。
+- relatedTargets 必须为空。
+- broadenedTargets 给 1-3 个多样、具体、可单独用于高德 keywords 的餐饮探索方向。
+- 可以结合 openContext 的 rawQuery、softPreferences、preferenceSummary 判断方向，但这些本身不是搜索词。
+- 方向之间要拉开差距，不要给三个同属一类的词。
+
+通用规则：
+1. 每个 target.keyword 必须能单独作为高德 keywords 使用，例如“寿司”“刺身”“居酒屋”；不要输出整句，不要用“|”“、”“或者”合并多个意图。
+2. 否定条件、口味限制、体验偏好不能转写成搜索词；不要把“不辣/少辣/清淡/都可以/随便”当成高德 keywords。
+3. 每个 target.poiTypes 必须只从 foodPoiTypes 输入表里选，且必须匹配当前 keyword；不确定时返回空数组，不要给不匹配的窄类型。
+4. 多个 keyword 不共享 poiTypes；例如“日料、韩餐、东南亚菜”必须分别给 Japanese/Korean/Thai-Vietnamese 或 Other Asian 等对应 typecode。
+5. 不要重复 targets、alreadyTried 里的词或 constraints.exclusions，也不要输出非餐饮词或无法用于 POI 搜索的形容词。
+6. 每个数组最多输出 3 个 target；结合当前上下文生成，不要机械套用固定词表。
+7. 为兼容旧调用，同时填写 relatedKeywords/broadenedKeywords，值必须等于对应 targets 的 keyword 列表。`;
 
 const KEYWORD_EXPANSION_FUNCTION = {
   name: 'expandRestaurantSearchKeywords',
@@ -196,32 +201,40 @@ async function callKeywordExpansionModel(
   }) as Promise<KeywordExpansionOutput>;
 }
 
+/**
+ * 只给联想词生成真正需要的东西。
+ *
+ * `mode` 由编排层算好后显式传入，取代此前"给模型 authorizations 和
+ * allowBroaden，让它自己推断当前处于哪个阶段"的做法——那是在请子 Agent
+ * 参与编排。软偏好只在开放探索时才有意义（那时它是唯一的方向线索），
+ * 有明确目标时传进去只会诱导模型把"清淡""便宜"当成搜索词。
+ */
 function buildModelInput(input: KeywordExpansionAgentInput) {
-  const primarySearchTargets = goalKeywords(input.goal);
+  const targets = goalKeywords(input.goal);
+  const openExploration = isOpenExplorationGoal(input.goal);
 
   return {
     trustedContext: {
-      primarySearchTargets,
-      openExplorationAllowed: isOpenExplorationGoal(input.goal),
-      goalContext: {
-        rawQuery: input.goal.rawQuery,
-        requestedItems: input.goal.requestedItems,
-        acceptableCategories: input.goal.acceptableCategories,
-        alternativeGroups: input.goal.alternativeGroups,
-        primaryKeywords: input.goal.primaryKeywords,
+      mode: openExploration ? 'open_exploration' : 'expand_targets',
+      targets,
+      openContext: openExploration
+        ? {
+            rawQuery: input.goal.rawQuery,
+            softPreferences: input.goal.softPreferences,
+            preferenceSummary: input.preferenceSummary,
+          }
+        : undefined,
+      constraints: {
         hardConstraints: input.goal.hardConstraints,
-        softPreferences: input.goal.softPreferences,
         exclusions: input.goal.exclusions,
-        allowBroaden: input.goal.allowBroaden,
-        authorizations: input.goal.authorizations,
       },
-      attemptedKeywords: input.attempts.flatMap((attempt) => attempt.keywords),
-      preferenceSummary: input.preferenceSummary,
+      alreadyTried: normalizeSearchKeywords(
+        input.attempts.flatMap((attempt) => attempt.keywords)
+      ),
     },
     policy: {
       foodPoiTypes: AMAP_FOOD_POI_TYPES,
       generatedKeywordsMustBeSingleSearchIntent: true,
-      broadTargetsRequireAuthorizationForPrimary: true,
     },
   };
 }

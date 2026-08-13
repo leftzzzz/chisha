@@ -162,8 +162,10 @@ describe('KeywordExpansionAgent', () => {
       expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
       expect(requestBody.max_completion_tokens).toBe(4096);
       expect(requestBody.messages[0].role).toBe('system');
-      expect(modelInput.trustedContext.openExplorationAllowed).toBe(true);
-      expect(modelInput.trustedContext.goalContext.rawQuery).toBe('随意，你来选择');
+      expect(modelInput.trustedContext.mode).toBe('open_exploration');
+      expect(modelInput.trustedContext.openContext.rawQuery).toBe('随意，你来选择');
+      // 编排状态不得出现在子 Agent 的输入里。
+      expect(modelInput.trustedContext.goalContext).toBeUndefined();
       expect(expansion.relatedKeywords).toEqual([]);
       expect(expansion.broadenedKeywords).toEqual(['简餐', '面馆', '小吃']);
       expect(expansion.broadenedTargets?.map((target) => [target.keyword, target.poiTypes])).toEqual([

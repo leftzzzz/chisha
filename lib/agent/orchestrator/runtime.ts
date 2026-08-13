@@ -11,7 +11,7 @@ import {
   clarificationNeedToPendingQuestion,
 } from '../goal';
 import { runGoalUnderstandingAgent } from '../subagents/goalUnderstandingAgent';
-import { runSearchReplan } from '../subagents/replanAgent';
+import { runSearchReplan, summarizeExhaustedSearch } from '../subagents/replanAgent';
 import { evaluateSearchResult, mergeCandidates } from '../evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from '../guards';
 import { isPrimaryRecommendationAllowed } from '../finalGuard';
@@ -498,12 +498,7 @@ async function applyReplan(
     message: context.query,
     goal: context.goal,
     messages: context.messages ?? [],
-    attempts: context.attempts,
-    observations: context.observations,
-    exhausted: {
-      triedKeywords: Array.from(new Set(context.attempts.flatMap((attempt) => attempt.keywords))),
-      triedIntents: Array.from(new Set(context.attempts.map((attempt) => attempt.searchIntent))),
-    },
+    exhausted: summarizeExhaustedSearch(context.attempts, context.observations),
     preferenceSummary: context.preferenceSummary,
   });
 
@@ -725,7 +720,6 @@ async function getGoalUnderstandingOutput(
     pendingQuestion: input.runtimeState?.pendingQuestion,
     messages: input.messages,
     preferenceSummary: input.preferenceSummary,
-    attempts: input.runtimeState?.attempts,
   });
 }
 

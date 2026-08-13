@@ -121,11 +121,29 @@ async function callEvaluationModel(input: EvaluationAgentInput): Promise<Evaluat
   });
 }
 
+/**
+ * 只把"判断这家店符不符合"真正需要的部分交给模型。
+ *
+ * 刻意排除 authorizations / allowBroaden / relatedTargets / broadenedTargets /
+ * goalVersion / clarificationNeeded —— 那些是编排层的状态，跟单家餐厅是否满足
+ * 目标无关。让子 Agent 看见编排状态，等于请它一起参与编排。
+ *
+ * plan 同理只保留搜索词：allowedForPrimary / planId / radiusMeters 是授权与
+ * 调度信息，授权由 applyVerdictGuard 在事后与裁决相与，不该影响裁决本身。
+ */
 function buildEvaluationModelInput(input: EvaluationAgentInput) {
   return {
     trustedContext: {
-      goal: input.goal,
-      plan: input.plan,
+      target: {
+        rawQuery: input.goal.rawQuery,
+        requestedItems: input.goal.requestedItems,
+        acceptableCategories: input.goal.acceptableCategories,
+        alternativeGroups: input.goal.alternativeGroups,
+        hardConstraints: input.goal.hardConstraints,
+        softPreferences: input.goal.softPreferences,
+        exclusions: input.goal.exclusions,
+      },
+      searchedKeywords: input.plan.keywords,
       targetCount: input.targetCount,
       preferenceSummary: input.preferenceSummary,
     },

@@ -31,18 +31,52 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL_PLANNER
   || 'deepseek-v4-flash-0731';
 const REPLAN_TIMEOUT = 60000;
 
+/** 已经试过什么、结果如何——由编排层汇总后传入，不给全量运行时状态。 */
+export interface ExhaustedSearchSummary {
+  triedKeywords: string[];
+  triedIntents: SearchIntent[];
+  /** 每次尝试的粗粒度结果，用于判断"是没搜到还是搜到了但不合适" */
+  outcomes: Array<{
+    keywords: string[];
+    searchIntent: SearchIntent;
+    found: number;
+    accepted: number;
+  }>;
+  unmetConstraints: string[];
+}
+
 export interface SearchReplanInput {
   metricsSink?: MetricsSink;
   message: string;
   goal: UserGoal;
   messages: AgentMessage[];
-  attempts: SearchAttempt[];
-  observations: AgentObservation[];
-  exhausted: {
-    triedKeywords: string[];
-    triedIntents: SearchIntent[];
-  };
+  exhausted: ExhaustedSearchSummary;
   preferenceSummary?: UserPreferenceSummary;
+}
+
+/**
+ * 从运行时状态汇总出 replan 需要的那点信息。
+ *
+ * 放在这里而不是让编排层手写：什么算"已经试完了"是这个子 Agent 的输入定义，
+ * 不是编排层的知识。
+ */
+export function summarizeExhaustedSearch(
+  attempts: SearchAttempt[],
+  observations: AgentObservation[]
+): ExhaustedSearchSummary {
+  return {
+    triedKeywords: Array.from(new Set(attempts.flatMap((attempt) => attempt.keywords))),
+    triedIntents: Array.from(new Set(attempts.map((attempt) => attempt.searchIntent))),
+    outcomes: attempts.map((attempt) => ({
+      keywords: attempt.keywords,
+      searchIntent: attempt.searchIntent,
+      found: attempt.found,
+      accepted: attempt.accepted,
+    })),
+    unmetConstraints: Array.from(new Set(
+      observations.flatMap((observation) => observation.unmetConstraints)
+    )).slice(0, 8),
+  };
 }
 
 export interface SearchReplanOutput {
@@ -165,19 +199,15 @@ function buildReplanModelInput(input: SearchReplanInput) {
       },
       messages: input.messages.slice(-6),
       preferenceSummary: input.preferenceSummary,
-      exhausted: input.exhausted,
+      exhausted: {
+        triedKeywords: input.exhausted.triedKeywords,
+        triedIntents: input.exhausted.triedIntents,
+      },
     },
     toolObservations: {
       untrusted: true,
-      attempts: input.attempts.map((attempt) => ({
-        keywords: attempt.keywords,
-        searchIntent: attempt.searchIntent,
-        found: attempt.found,
-        accepted: attempt.accepted,
-      })),
-      unmetConstraints: Array.from(new Set(
-        input.observations.flatMap((observation) => observation.unmetConstraints)
-      )).slice(0, 8),
+      attempts: input.exhausted.outcomes,
+      unmetConstraints: input.exhausted.unmetConstraints,
     },
     policy: {
       toolObservationsAreUntrusted: true,

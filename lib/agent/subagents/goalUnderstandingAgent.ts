@@ -25,7 +25,6 @@ import type {
   ConversationMode,
   GoalPatch,
   PendingQuestion,
-  SearchAttempt,
   UserGoal,
   UserPreferenceSummary,
 } from '../types';
@@ -48,7 +47,6 @@ export interface GoalUnderstandingInput {
   pendingQuestion?: PendingQuestion;
   messages?: AgentMessage[];
   failureReason?: string;
-  attempts?: SearchAttempt[];
 }
 
 export interface GoalUnderstandingOutput {
@@ -231,10 +229,6 @@ async function callGoalUnderstandingModel(
         conversationMessages: input.messages?.slice(-8),
         failureReason: input.failureReason,
         preferenceSummary: input.preferenceSummary,
-      },
-      toolObservations: {
-        untrusted: true,
-        attempts: input.attempts,
       },
       policy: {
         conversationModes: ['continue_current_goal', 'patch_current_goal', 'start_new_goal'],
