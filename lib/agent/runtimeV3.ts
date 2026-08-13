@@ -3,6 +3,7 @@ import {
   applyClarificationOptionToGoal,
   applyGoalPatch,
   clarificationNeedToPendingQuestion,
+  clarificationOptionLabel,
   createActionRecord,
   hasClarificationOption,
   runSearchReplan,
@@ -527,12 +528,18 @@ async function resolveTurnGoal(
   input: AgentInput,
   metricsSink: MetricsSink
 ): Promise<TurnGoalResolution> {
-  const optionResolution = resolveClarificationOptionTurn(input);
-  if (optionResolution) {
-    return optionResolution;
+  const optionOutcome = resolveClarificationOptionTurn(input);
+  if (optionOutcome.kind === 'resolved') {
+    return optionOutcome.resolution;
   }
 
-  const supervisorOutput = await getSupervisorPlannerOutput(input, metricsSink);
+  // 选项没有带 effect（模型生成的选项通常如此）：它的 label 就是用户用自然
+  // 语言给出的回答，交给 Supervisor 理解。代码依旧不猜语义，只是把话转过去。
+  const effectiveInput = optionOutcome.kind === 'delegate_to_model'
+    ? { ...input, query: optionOutcome.answer, optionId: undefined }
+    : input;
+
+  const supervisorOutput = await getSupervisorPlannerOutput(effectiveInput, metricsSink);
 
   // 模型只提问、不给目标是合法输出（"这句话还不够，我得先问清楚"）。
   // 此时用一个空目标承载本轮上下文——不做任何关键词猜测。
@@ -582,15 +589,21 @@ function buildPlaceholderGoal(query: string): UserGoal {
 }
 
 /**
- * 追问选项的确定性处理。
+ * 追问选项的处理结果。
  *
- * 全程不调用模型：选项是后端自己定义的状态转移，语义已经写死在 effect 里，
- * 再交给模型判断只会引入不确定性（也是模型不可用时的又一个失败点）。
+ * 带 effect 的选项（policy 自己构造的授权/放宽类）是确定性状态转移，
+ * 不调模型；模型生成的选项通常只有文案没有 effect——那本质上是一句
+ * 预置好的用户回答，仍然要交给 Supervisor 理解。
  */
-function resolveClarificationOptionTurn(input: AgentInput): TurnGoalResolution | null {
+type ClarificationOptionOutcome =
+  | { kind: 'none' }
+  | { kind: 'resolved'; resolution: TurnGoalResolution }
+  | { kind: 'delegate_to_model'; answer: string };
+
+function resolveClarificationOptionTurn(input: AgentInput): ClarificationOptionOutcome {
   const optionId = input.optionId?.trim();
   if (!optionId) {
-    return null;
+    return { kind: 'none' };
   }
 
   const previousGoal = input.runtimeState?.goal;
@@ -609,40 +622,56 @@ function resolveClarificationOptionTurn(input: AgentInput): TurnGoalResolution |
   // 整个会话的搜索结果被 start_new_goal 清空。
   if (optionId === CLARIFICATION_OPTION.RETRY_TURN) {
     return {
-      goal: previousGoal,
-      conversationMode: 'continue_current_goal',
-      supervisorOutput: null,
+      kind: 'resolved',
+      resolution: {
+        goal: previousGoal,
+        conversationMode: 'continue_current_goal',
+        supervisorOutput: null,
+      },
     };
   }
 
   // 「换个类型」没有 effect：它的语义就是"等用户说新的需求"。
   if (optionId === CLARIFICATION_OPTION.CHANGE_TARGET) {
     return {
-      goal: previousGoal,
-      conversationMode: 'continue_current_goal',
-      supervisorOutput: null,
-      clarifyingQuestion: {
-        reason: '用户选择更换搜索目标。',
-        question: '想换成什么？直接说菜品或菜系，例如「牛排」「川菜」。',
-        allowFreeText: true,
+      kind: 'resolved',
+      resolution: {
+        goal: previousGoal,
+        conversationMode: 'continue_current_goal',
+        supervisorOutput: null,
+        clarifyingQuestion: {
+          reason: '用户选择更换搜索目标。',
+          question: '想换成什么？直接说菜品或菜系，例如「牛排」「川菜」。',
+          allowFreeText: true,
+        },
       },
     };
   }
 
   const patchedGoal = applyClarificationOptionToGoal(previousGoal, pendingQuestion, optionId);
-  if (!patchedGoal) {
+  if (patchedGoal) {
+    return {
+      kind: 'resolved',
+      resolution: {
+        goal: patchedGoal,
+        conversationMode: 'patch_current_goal',
+        supervisorOutput: null,
+      },
+    };
+  }
+
+  // 没有 effect 的选项：模型写的「火锅」「日料」这类，本质是替用户预填的
+  // 一句回答。把 label 当自由文本交给 Supervisor——语义判断仍归模型。
+  const label = clarificationOptionLabel(pendingQuestion, optionId);
+  if (!label) {
     throw new AgentError(
-      `Clarification option has no effect: ${optionId}`,
+      `Clarification option has no label: ${optionId}`,
       'INVALID_OPTION',
       false
     );
   }
 
-  return {
-    goal: patchedGoal,
-    conversationMode: 'patch_current_goal',
-    supervisorOutput: null,
-  };
+  return { kind: 'delegate_to_model', answer: label };
 }
 
 /**

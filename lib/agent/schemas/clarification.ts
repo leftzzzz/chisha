@@ -27,10 +27,18 @@ const PendingQuestionOptionSchema = z.object({
   label: z.string().min(1).max(32),
 });
 
+/**
+ * 上限取 5 而不是 4。
+ *
+ * 线上实测模型会给「火锅/日料/川菜/西餐/随便你推荐」这样 5 个选项，
+ * 而"随便你推荐"恰恰排在最后——按 4 截断会把最有用的出口截掉。
+ */
+const MAX_CLARIFICATION_OPTIONS = 5;
+
 const PendingQuestionOptionsSchema = z
   .array(PendingQuestionOptionSchema)
   .min(2)
-  .max(4)
+  .max(MAX_CLARIFICATION_OPTIONS)
   .optional()
   .catch(undefined);
 
@@ -145,7 +153,9 @@ export const PendingQuestionSchema = z.preprocess((value) => {
 
   const record = raw as Record<string, unknown>;
   const options = normalizeOptions(record.options);
-  const usableOptions = options.length >= 2 ? options.slice(0, 4) : [];
+  const usableOptions = options.length >= 2
+    ? options.slice(0, MAX_CLARIFICATION_OPTIONS)
+    : [];
 
   return {
     ...record,

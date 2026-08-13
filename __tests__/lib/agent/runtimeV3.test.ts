@@ -622,6 +622,59 @@ describe('runSearchAgentV3', () => {
     expect(searchPlaces).not.toHaveBeenCalled();
   });
 
+  // 模型生成的选项通常只有文案没有 effect。这条锁住"点这类选项要把 label
+  // 当用户回答交给模型"，而不是报 INVALID_OPTION——线上正是这么挂的。
+  it('delegates an effect-less option to the Supervisor as the user answer', async () => {
+    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    const defaultSupervisor = supervisorMock.getMockImplementation();
+    supervisorMock.mockClear();
+    supervisorMock.mockImplementationOnce(async (plannerInput: { message: string }) => ({
+      goal: goal({
+        rawQuery: plannerInput.message,
+        requestedItems: [{ name: plannerInput.message, required: true, aliases: [] }],
+        primaryKeywords: [plannerInput.message],
+      }),
+      conversationMode: 'patch_current_goal',
+      nextAction: 'plan',
+    }));
+
+    try {
+      const result = await runSearchAgentV3(
+        {
+          query: '',
+          optionId: 'opt_1',
+          location,
+          runtimeState: {
+            goal: goal({ primaryKeywords: [], requestedItems: [] }),
+            attempts: [],
+            candidates: [],
+            actions: [],
+            observations: [],
+            pendingQuestion: {
+              question: '你想吃点什么类型的呢？',
+              options: [
+                { id: 'opt_1', label: '火锅' },
+                { id: 'opt_2', label: '日料' },
+              ],
+              allowFreeText: true,
+            },
+          },
+        },
+        () => undefined,
+        async () => [restaurant('r1', '老灶火锅', '火锅', 300)]
+      );
+
+      // 选项文案作为用户回答送进了理解环节。
+      expect(supervisorMock.mock.calls[0][0].message).toBe('火锅');
+      expect(result.paused).not.toBe(true);
+    } finally {
+      supervisorMock.mockReset();
+      if (defaultSupervisor) {
+        supervisorMock.mockImplementation(defaultSupervisor);
+      }
+    }
+  });
+
   // 死循环的直接不变量：同一个问题不能连问两次。线上就是靠这条缺失，
   // 把用户锁在「想吃点什么？」上出不去的。
   it('converges instead of asking the same question twice', async () => {
