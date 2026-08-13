@@ -3,6 +3,13 @@
 > 上一轮 `docs/agent-harness-review-2026-08.md` 审的是 harness 的**工程质量**（双写、观测、降级、清理），P0/P1 已基本落地（见 `44c5dbf`…`f9060f1`）。
 > 本轮不重复那些结论，只审一个问题：**这个 loop 的形态对不对**——模型和代码的分工是否放在了正确的位置。
 
+> **后续**：本文的 M1–M4 已落地。文中"顺序策略实现份数 3→1"的问题在
+> `conversationMode` 上再次复发，且子 Agent 反向吸收了策略——下一轮针对
+> **职责边界**的评审与方案见
+> `docs/Agent-职责边界重构-需求文档-2026-08.md` 与
+> `docs/Agent-职责边界重构-技术方案-2026-08.md`。
+> 文中的 `runtimeV3.ts` / `supervisorPlanner.ts` / `supervisor.ts` 已不存在。
+
 评审日期：2026-08-12
 评审范围：`lib/agent/runtimeV3.ts`、`lib/agent/policy.ts`、`lib/agent/supervisorPlanner.ts`、`lib/agent/supervisor.ts`、`lib/agent/guards.ts`、`lib/agent/finalGuard.ts`、`lib/agent/evaluator.ts`、`lib/agent/subagents/**`、`lib/agent/modelClient.ts`、`app/api/agent/chat/route.ts`
 

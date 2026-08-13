@@ -6,6 +6,12 @@
 制定日期：2026-08-12
 落地状态：M1–M4 + M6a 已合入（见文末「落地记录」）；M5 与 M6b 未启动。
 
+> 📁 **文件路径已变更（2026-08-13）。** 本文的 `runtimeV3.ts` / `policy.ts` /
+> `supervisorPlanner.ts` / `supervisor.ts` 已随职责边界重构搬迁到
+> `orchestrator/` 与 `subagents/`。本文确立的"模型只做代码枚举不了的事"
+> 仍然成立并被进一步强化——决策全部收敛到 `orchestrator/policy.ts`。
+> 见 `docs/Agent-职责边界重构-技术方案-2026-08.md`。
+
 ---
 
 ## 1. 背景与目标
