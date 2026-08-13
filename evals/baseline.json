@@ -1,12 +1,12 @@
 {
   "updatedAt": "2026-08-13",
   "totals": {
-    "searchRounds": 22,
+    "searchRounds": 23,
     "searchSteps": 20,
-    "searchCalls": 23,
+    "searchCalls": 28,
     "plannerModelCalls": 0,
-    "evaluationCalls": 22,
-    "evaluatedSlots": 67,
+    "evaluationCalls": 23,
+    "evaluatedSlots": 66,
     "duplicateEvaluations": 6,
     "modelCalls": 0,
     "serialModelSteps": 0,
@@ -100,9 +100,9 @@
     "open-anything": {
       "passed": true,
       "searchSteps": 1,
-      "searchRounds": 1,
+      "searchRounds": 2,
       "duplicateEvaluations": 0,
-      "primaryCount": 5
+      "primaryCount": 4
     },
     "open-vague-browsing": {
       "passed": true,

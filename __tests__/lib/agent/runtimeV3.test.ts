@@ -619,7 +619,12 @@ describe('runSearchAgentV3', () => {
 
     expect(result.paused).toBe(true);
     expect(result.question?.question).toContain('具体想吃什么');
-    expect(searchPlaces).not.toHaveBeenCalled();
+    // 追问前会探一次路（拿附近品类分布），但它只用于生成选项：
+    // 不记 attempts、不产生推荐。
+    expect(searchPlaces).toHaveBeenCalledTimes(1);
+    expect(searchPlaces.mock.calls[0][0].reason).toContain('探路');
+    expect(result.runtimeState?.attempts ?? []).toEqual([]);
+    expect(result.restaurants).toEqual([]);
   });
 
   // 模型生成的选项通常只有文案没有 effect。这条锁住"点这类选项要把 label
@@ -782,8 +787,10 @@ describe('runSearchAgentV3', () => {
       !(plannerInput.goal && plannerInput.limits)
     );
     expect(goalPlannerCalls).toHaveLength(1);
-    expect(searchedPlans.some((plan) => plan.searchIntent === 'fallback')).toBe(true);
-    expect(searchedPlans[0].keywords).toEqual(['餐厅']);
+    // 开放推荐铺开的是具体探索方向，不再是一个通用词「餐厅」——
+    // 只搜通用词等于把转盘的品类分布交给高德排序。
+    expect(searchedPlans.every((plan) => plan.searchIntent === 'fallback')).toBe(true);
+    expect(searchedPlans[0].keywords[0]).not.toBe('餐厅');
     expect(result.restaurants.length).toBeGreaterThan(0);
 
     // 单关键词约束已前移到 SearchPlanSchema，Runtime 不再靠 guard 事后拆词，

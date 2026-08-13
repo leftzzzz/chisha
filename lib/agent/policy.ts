@@ -206,13 +206,32 @@ export function planSearchBatch(
   }
 
   if (isOpenExplorationContext(ctx) && !hasTriedIntent(ctx, 'fallback')) {
+    // 开放推荐优先铺开 KeywordExpansion 给的探索词（规则 1b 把它们放在
+    // broadenedTargets）。只搜一个通用词「餐厅」等于把选择权交给高德排序，
+    // 转盘的品类分布全看运气。
+    const exploration = untriedTargets(ctx, 'broadened');
+    if (exploration.length > 0) {
+      const explorationPlans = buildPlanBatch(
+        ctx,
+        exploration,
+        'fallback',
+        () => true,
+        budget,
+        '开放推荐：并发尝试多个探索方向，保证品类多样性。'
+      );
+
+      if (explorationPlans.length > 0) {
+        return explorationPlans;
+      }
+    }
+
     return buildPlanBatch(
       ctx,
       [{ keyword: nextFallbackKeyword(ctx) }],
       'fallback',
       () => true,
       1,
-      '开放需求下先使用通用餐饮兜底搜索。'
+      '开放需求下没有可用的探索词，使用通用餐饮兜底搜索。'
     );
   }
 

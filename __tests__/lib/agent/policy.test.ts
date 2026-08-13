@@ -403,21 +403,40 @@ describe('policy 决策', () => {
     expect(decision.kind).toBe('ask');
   });
 
-  it('starts an open-exploration goal with a generic fallback search', () => {
+  // 开放推荐要铺开具体的探索方向。只搜一个通用词等于把品类分布交给
+  // 高德排序，转盘多样性全靠运气。
+  it('fans out concrete exploration targets for an open-recommendation goal', () => {
     const decision = decideNextAction(context({
       goal: goal({
         rawQuery: '你看着办',
         primaryKeywords: [],
-        broadenedTargets: [{ keyword: '日料' }],
+        broadenedTargets: [{ keyword: '日料' }, { keyword: '火锅' }, { keyword: '烧烤' }],
         allowBroaden: true,
       }),
     }));
 
     expect(decision.kind).toBe('search');
     if (decision.kind === 'search') {
-      // 通用兜底排在具体探索词之前
+      expect(decision.plans.map((plan) => plan.keywords[0])).toEqual(['日料', '火锅', '烧烤']);
+      // 开放授权覆盖 fallback 意图，这些结果可以直接进主推荐
+      expect(decision.plans.every((plan) => plan.searchIntent === 'fallback')).toBe(true);
+      expect(decision.plans.every((plan) => plan.allowedForPrimary)).toBe(true);
+    }
+  });
+
+  it('falls back to a generic search when there is no exploration target', () => {
+    const decision = decideNextAction(context({
+      goal: goal({
+        rawQuery: '你看着办',
+        primaryKeywords: [],
+        broadenedTargets: [],
+        allowBroaden: true,
+      }),
+    }));
+
+    expect(decision.kind).toBe('search');
+    if (decision.kind === 'search') {
       expect(decision.plans.map((plan) => plan.keywords[0])).toEqual(['餐厅']);
-      expect(decision.plans[0].searchIntent).toBe('fallback');
       expect(decision.plans[0].allowedForPrimary).toBe(true);
     }
   });

@@ -21,14 +21,22 @@ import {
   CLARIFICATION_OPTION,
 } from './clarificationOptions';
 import {
+  buildFallbackPrimaryEffect,
   buildNoPrimaryQuestion,
+  buildSearchPlan,
   decideNextAction,
+  hasPositiveFoodTarget,
   hasPrimaryCandidates,
   inferPoiTypesForGoalKeyword,
+  isOpenExplorationContext,
   planSearchBatch,
   primaryCandidates,
   type PolicyDecision,
 } from './policy';
+import {
+  buildNearbyCategoryQuestion,
+  summarizeNearbyCategories,
+} from './nearbyCategories';
 import {
   hasPromotedBroadenedPrimaryCandidates,
   promoteAuthorizedBroadenedResults,
@@ -98,6 +106,8 @@ const DEFAULT_AGENT_EVALUATION_CONCURRENCY = parsePositiveInt(process.env.AGENT_
 const CONFIGURED_AGENT_EVALUATION_LIMIT = parseOptionalPositiveInt(process.env.AGENT_EVALUATION_LIMIT);
 const MAX_HARD_REJECTED_REASON_DETAILS = 6;
 const MAX_HARD_REJECTED_OBSERVATIONS = 20;
+/** 追问前探路用的通用词：只为看清附近有哪些品类，不产生推荐。 */
+const SCOUTING_KEYWORD = '餐厅';
 
 /**
  * 执行一轮 Agent 搜索。
@@ -186,7 +196,13 @@ async function runAgentTurn(
     ?? getInitialClarifyingQuestion(context.goal);
 
   if (clarifyingQuestion) {
-    return askOrConverge(context, clarifyingQuestion, emit);
+    const groundedQuestion = await groundQuestionInNearbyCategories(
+      context,
+      clarifyingQuestion,
+      searchPlaces,
+      emit
+    );
+    return askOrConverge(context, groundedQuestion, emit);
   }
 
   const promotion = promoteAuthorizedBroadenedResults(context);
@@ -235,6 +251,59 @@ async function runAgentTurn(
 }
 
 /**
+ * 用附近实际的品类分布替换追问选项。
+ *
+ * 追问发生在搜索之前，模型对"这一带有什么"一无所知，只能复述自己 prompt
+ * 里的例子（线上实测三次都是「火锅/日料/川菜/西餐」）。这里先花一次搜索
+ * 探路，把选项换成真实存在的品类——顺序反过来：先观察，再提问。
+ *
+ * 探路失败不影响追问：拿不到数据就用模型原来的问题，绝不让追问因此报错。
+ */
+async function groundQuestionInNearbyCategories(
+  context: AgentV3Context,
+  question: PendingQuestion,
+  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
+  emit: EmitAgentEvent
+): Promise<PendingQuestion> {
+  // 只在"用户没有任何正向目标"时探路。已经说了想吃什么就不必问品类了。
+  if (hasPositiveFoodTarget(context.goal)) {
+    return question;
+  }
+
+  emit({ type: 'status', message: '正在看看附近都有什么...' });
+
+  try {
+    const plan = buildSearchPlan(
+      context,
+      { keyword: SCOUTING_KEYWORD },
+      'fallback',
+      false,
+      '追问前探路：了解附近实际的餐厅品类分布。'
+    );
+    const restaurants = await searchPlaces(plan);
+    const categories = summarizeNearbyCategories(restaurants);
+    const grounded = buildNearbyCategoryQuestion(categories, buildFallbackPrimaryEffect());
+
+    appendTrace(context, 'runtime_decision', {
+      output: {
+        kind: 'scout_nearby_categories',
+        found: restaurants.length,
+        categories,
+        grounded: Boolean(grounded),
+      },
+    });
+
+    return grounded ?? question;
+  } catch (error) {
+    createTurnLogger(context.sessionId, context.turnId).warn(
+      'Nearby category scouting failed; keeping the model question',
+      { error: error instanceof Error ? error.message : String(error) }
+    );
+    return question;
+  }
+}
+
+/**
  * 联想搜索词，并把不依赖它的首批搜索并发跑掉。
  *
  * 首批计划来自用户明确表达的目标（或开放授权下的通用兜底），完全不依赖联想词——
@@ -261,7 +330,10 @@ async function expandKeywordsAlongsideFirstSearch(
     preferenceSummary: context.preferenceSummary,
   });
 
-  const firstBatch = concurrentFirstSearchEnabled()
+  // 开放推荐要等联想词：它的首批计划本来就应该是模型给的多样化探索词
+  // （火锅/日料/烧烤），并发跑会让首批退化成一个通用词「餐厅」，
+  // 转盘的品类分布就只剩高德排序的运气。
+  const firstBatch = concurrentFirstSearchEnabled() && !isOpenExplorationContext(context)
     ? keepValidPlans(planSearchBatch(context), context, emit)
     : [];
   if (firstBatch.length > 0) {
