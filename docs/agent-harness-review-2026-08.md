@@ -2,6 +2,8 @@
 
 > 对照业界 Agent Harness 最佳实践，审计当前 `lib/agent/**` 主链路，给出问题清单与优化优先级。
 > 本文取代 `docs/agent-architecture-review.md`（2026-05-29）——那份审计的 P0 项已基本落地，结论已过期。
+> **后续**：本文的 P0/P1 已落地（`44c5dbf`…`f9060f1`）。下一轮针对 **loop 形态**（模型与代码的分工位置）的评审见
+> `docs/agent-loop-shape-review-2026-08.md`，配套方案 `docs/Agent-Loop-形态重构技术方案-2026-08.md`。
 
 审计日期：2026-08-12
 审计范围：`app/api/agent/chat/route.ts`、`app/api/agent/search/route.ts`、`app/api/agent/session/[id]/route.ts`、`lib/agent/runtimeV3.ts`、`lib/agent/supervisor.ts`、`lib/agent/supervisorPlanner.ts`、`lib/agent/modelClient.ts`、`lib/agent/guards.ts`、`lib/agent/finalGuard.ts`、`lib/agent/evaluator.ts`、`lib/agent/session.ts`、`lib/agent/d1SessionStore.ts`、`lib/agent/subagents/**`、`lib/agent/schemas/**`、`lib/api.ts`、`lib/logger.ts`、`lib/monitoring.ts`、`hooks/useRestaurantSearch.ts`
