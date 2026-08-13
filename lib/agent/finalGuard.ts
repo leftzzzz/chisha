@@ -147,11 +147,18 @@ function randomRecommendationSeed(context: AgentContext): string {
   ].filter(Boolean).join('|');
 }
 
+/**
+ * 开放推荐的候选排序：先按探索方向轮转，方向内再随机。
+ *
+ * 只随机不轮转的话，候选基数大的方向会把转盘吃满——线上实测「随便推荐」
+ * 并发搜了火锅/甜品/小吃，结果 8 个格子里 5 个火锅 3 个甜品，小吃一家没进。
+ * 用户要的是"帮我挑几个方向"，不是"哪个方向搜到的多就给哪个"。
+ */
 function seededShuffleCandidates(
   candidates: RestaurantCandidate[],
   seed: string
 ): RestaurantCandidate[] {
-  return dedupeCandidatesForRecommendation(candidates)
+  const shuffled = dedupeCandidatesForRecommendation(candidates)
     .map((candidate, index) => ({
       candidate,
       index,
@@ -159,6 +166,46 @@ function seededShuffleCandidates(
     }))
     .sort((left, right) => left.key - right.key || left.index - right.index)
     .map((item) => item.candidate);
+
+  return interleaveBySearchDirection(shuffled);
+}
+
+/**
+ * 按来源 attempt（即搜索方向）轮转取候选。
+ *
+ * 方向内顺序保持传入顺序（已随机），方向之间轮流出一个，直到取完。
+ */
+function interleaveBySearchDirection(
+  candidates: RestaurantCandidate[]
+): RestaurantCandidate[] {
+  const buckets = new Map<number, RestaurantCandidate[]>();
+
+  for (const candidate of candidates) {
+    const bucket = buckets.get(candidate.sourceAttempt);
+    if (bucket) {
+      bucket.push(candidate);
+    } else {
+      buckets.set(candidate.sourceAttempt, [candidate]);
+    }
+  }
+
+  if (buckets.size <= 1) {
+    return candidates;
+  }
+
+  const queues = Array.from(buckets.values());
+  const interleaved: RestaurantCandidate[] = [];
+
+  for (let round = 0; interleaved.length < candidates.length; round += 1) {
+    for (const queue of queues) {
+      const candidate = queue[round];
+      if (candidate) {
+        interleaved.push(candidate);
+      }
+    }
+  }
+
+  return interleaved;
 }
 
 function hashString(value: string): number {

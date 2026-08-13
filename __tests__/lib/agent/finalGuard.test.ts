@@ -18,7 +18,12 @@ function restaurant(id: string, name: string, cuisineType = '餐饮', distance =
   };
 }
 
-function candidate(id: string, name: string, score: number): RestaurantCandidate {
+function candidate(
+  id: string,
+  name: string,
+  score: number,
+  sourceAttempt = 1
+): RestaurantCandidate {
   return {
     restaurant: restaurant(id, name),
     score,
@@ -34,7 +39,7 @@ function candidate(id: string, name: string, score: number): RestaurantCandidate
       warnings: [],
       confidence: 0.9,
     },
-    sourceAttempt: 1,
+    sourceAttempt,
   };
 }
 
@@ -100,6 +105,26 @@ describe('FinalGuard random recommendations', () => {
     expect(first).toEqual(second);
     expect(first).toEqual(['r2', 'r3', 'r1', 'r4']);
     expect(first).not.toEqual(['r1', 'r2', 'r3', 'r4']);
+  });
+
+  // 开放推荐并发搜多个方向时，候选多的方向不能吃满转盘。
+  it('interleaves open recommendations across search directions', () => {
+    const guarded = applyFinalGuard(context({
+      attempts: [
+        fallbackAttempt({ keywords: ['火锅'] }),
+        fallbackAttempt({ keywords: ['甜品'] }),
+      ],
+      candidates: [
+        candidate('h1', '火锅一', 100, 1),
+        candidate('h2', '火锅二', 99, 1),
+        candidate('h3', '火锅三', 98, 1),
+        candidate('d1', '甜品一', 60, 2),
+      ],
+    }));
+
+    const sources = guarded.primaryCandidates.map((item) => item.sourceAttempt);
+    // 第二个方向必须在第二位就出场，而不是被三家火锅挤到最后。
+    expect(sources.slice(0, 2).sort()).toEqual([1, 2]);
   });
 
   it('keeps score ordering for explicit primary targets', () => {
