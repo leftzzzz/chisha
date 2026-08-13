@@ -1,0 +1,70 @@
+[
+  {
+    "id": "exact-hotpot",
+    "description": "明确菜品：想吃火锅",
+    "turns": [
+      {
+        "message": "想吃火锅",
+        "stubGoal": { "primaryKeywords": ["火锅"], "requestedItems": ["火锅"] },
+        "stubExpansion": { "related": ["川菜", "麻辣烫"], "broadened": ["烧烤"] },
+        "expect": {
+          "shouldAsk": false,
+          "minPrimary": 3,
+          "anyCuisine": ["火锅"],
+          "maxSearchRounds": 4
+        }
+      }
+    ]
+  },
+  {
+    "id": "exact-steak",
+    "description": "明确菜品：想吃牛排，联想词与主目标结果重叠",
+    "turns": [
+      {
+        "message": "想吃牛排",
+        "stubGoal": { "primaryKeywords": ["牛排"], "requestedItems": ["牛排"] },
+        "stubExpansion": { "related": ["西餐", "铁板烧"], "broadened": [] },
+        "expect": {
+          "shouldAsk": false,
+          "minPrimary": 2,
+          "anyCuisine": ["西餐"],
+          "maxSearchRounds": 4
+        }
+      }
+    ]
+  },
+  {
+    "id": "exact-sushi",
+    "description": "明确菜品：寿司，联想到日料",
+    "turns": [
+      {
+        "message": "想吃寿司",
+        "stubGoal": { "primaryKeywords": ["寿司"], "requestedItems": ["寿司"] },
+        "stubExpansion": { "related": ["日料"], "broadened": [] },
+        "expect": {
+          "shouldAsk": false,
+          "minPrimary": 2,
+          "anyCuisine": ["日料"],
+          "maxSearchRounds": 4
+        }
+      }
+    ]
+  },
+  {
+    "id": "exact-category",
+    "description": "明确菜系：吃川菜",
+    "turns": [
+      {
+        "message": "吃川菜吧",
+        "stubGoal": { "primaryKeywords": ["川菜"], "acceptableCategories": ["川菜"] },
+        "stubExpansion": { "related": ["火锅"], "broadened": ["中餐"] },
+        "expect": {
+          "shouldAsk": false,
+          "minPrimary": 3,
+          "anyCuisine": ["川菜"],
+          "maxSearchRounds": 4
+        }
+      }
+    ]
+  }
+]

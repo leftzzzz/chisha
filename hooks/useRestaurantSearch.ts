@@ -52,6 +52,34 @@ export interface UseRestaurantSearchReturn {
   answerQuestion: (answer: string, onError?: (errorCode: string) => void) => Promise<void>;
 }
 
+/** 一步之内单个搜索计划的进度。 */
+interface StepPlanProgress {
+  keywords: string[];
+  found?: number;
+  restaurants?: SearchResultRestaurant[];
+}
+
+function collectStepKeywords(plans: Map<string, StepPlanProgress>): string[] {
+  return Array.from(new Set(
+    Array.from(plans.values()).flatMap((plan) => plan.keywords)
+  ));
+}
+
+function sumStepFound(plans: Map<string, StepPlanProgress>): number {
+  return Array.from(plans.values()).reduce((total, plan) => total + (plan.found ?? 0), 0);
+}
+
+function collectStepRestaurants(plans: Map<string, StepPlanProgress>): SearchResultRestaurant[] {
+  const byId = new Map<string, SearchResultRestaurant>();
+  for (const plan of plans.values()) {
+    for (const restaurant of plan.restaurants ?? []) {
+      byId.set(restaurant.id, restaurant);
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
 function isSameQuestion(left?: AgentQuestion | null, right?: AgentQuestion | null): boolean {
   if (!left || !right) {
     return false;
@@ -128,6 +156,14 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
   const activeQuestionRef = useRef<AgentQuestion | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const questionCountRef = useRef(0);
+  /**
+   * 当前这一步里同时在跑的搜索计划。
+   *
+   * 开启并行 fan-out 后一步会有多个计划，事件交错到达。按 planId 聚合，
+   * 否则关键词会互相覆盖、found/total 会来回跳。每次新的 search action
+   * 就是一步的边界，届时清空。
+   */
+  const stepPlansRef = useRef(new Map<string, StepPlanProgress>());
   const MAX_QUESTION_COUNT = 3;
 
   const setQuestionProgress = useCallback((question: AgentQuestion) => {
@@ -241,27 +277,44 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
             });
           },
 
-          onSearching: (keywords, round, searchIntent) => {
+          onSearching: (keywords, round, searchIntent, planId) => {
+            const plans = stepPlansRef.current;
+            const key = planId ?? keywords.join('|');
+            plans.set(key, { keywords, ...(plans.get(key) ?? {}) });
+            const activeKeywords = collectStepKeywords(plans);
+
             setProgress(prev => ({
               ...prev,
               status: 'searching',
-              message: `正在搜索「${keywords.join('、')}」...`,
-              currentKeywords: keywords,
+              message: `正在搜索「${activeKeywords.join('、')}」...`,
+              currentKeywords: activeKeywords,
               round,
               currentStage: searchIntent as SearchProgress['currentStage'],
             }));
           },
 
-          onSearchResult: (found, total, foundRestaurants) => {
+          // total 是单个计划的数量，这里改用批次累加，忽略它。
+          onSearchResult: (found, _total, foundRestaurants, planId) => {
+            const plans = stepPlansRef.current;
+            const key = planId ?? String(plans.size);
+            plans.set(key, {
+              keywords: plans.get(key)?.keywords ?? [],
+              found,
+              restaurants: foundRestaurants,
+            });
+
+            const stepTotal = sumStepFound(plans);
+            const stepRestaurants = collectStepRestaurants(plans);
+
             setProgress(prev => ({
               ...prev,
               status: 'searching',
-              message: found > 0
-                ? `已找到 ${total} 家餐厅，继续搜索...`
-                : `暂未找到，尝试其他类型...`,
-              found,
-              total,
-              foundRestaurants,
+              message: stepTotal > 0
+                ? `已找到 ${stepTotal} 家餐厅，继续搜索...`
+                : '暂未找到，尝试其他类型...',
+              found: stepTotal,
+              total: stepTotal,
+              foundRestaurants: stepRestaurants,
             }));
           },
 
@@ -294,15 +347,12 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
             }));
           },
 
-          onStrategyChange: (reason) => {
-            setProgress(prev => ({
-              ...prev,
-              status: 'searching',
-              message: `正在调整策略：${reason}`,
-            }));
-          },
-
           onAction: (summary, actionType) => {
+            if (actionType === 'search') {
+              // 新的一步开始，上一步的并行计划聚合结果作废。
+              stepPlansRef.current.clear();
+            }
+
             setProgress(prev => ({
               ...prev,
               status: actionType === 'search' ? 'searching' : prev.status,

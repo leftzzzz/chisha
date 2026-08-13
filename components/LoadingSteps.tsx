@@ -184,9 +184,12 @@ export const LoadingSteps: React.FC<LoadingStepsProps> = ({
           <h3 className="text-lg font-black tracking-tight text-dark">
             {getStatusLabel(status)}
           </h3>
-          <p className="mt-1 text-sm font-medium text-[#66594f]">
-            {message}
-          </p>
+          {/* 追问态下问题文案由下方问题区承载，避免同一句话渲染两次 */}
+          {message !== question?.question && (
+            <p className="mt-1 text-sm font-medium text-[#66594f]">
+              {message}
+            </p>
+          )}
         </div>
       </div>
 

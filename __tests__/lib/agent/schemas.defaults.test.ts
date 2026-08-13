@@ -2,7 +2,7 @@ import { AgentActionSchema } from '@/lib/agent/schemas/action';
 import { SearchSupervisorOutputSchema } from '@/lib/agent/schemas/clarification';
 import { UserGoalSchema } from '@/lib/agent/schemas/goal';
 import { KeywordExpansionOutputSchema } from '@/lib/agent/schemas/keywordExpansion';
-import { PlanningAgentOutputSchema, SearchPlanSchema } from '@/lib/agent/schemas/plan';
+import { SearchPlanSchema } from '@/lib/agent/schemas/plan';
 import { EvaluationAgentOutputSchema } from '@/lib/agent/schemas/verdict';
 
 describe('Agent schema defaults', () => {
@@ -81,7 +81,6 @@ describe('Agent schema defaults', () => {
       allowedForPrimary: true,
     }).reason).toBe('根据用户目标搜索。');
 
-    expect(PlanningAgentOutputSchema.parse({}).plans).toEqual([]);
   });
 
   it('tolerates common scalar fields in action and plan outputs', () => {

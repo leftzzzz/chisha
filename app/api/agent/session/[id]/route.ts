@@ -5,7 +5,7 @@ interface RouteContext {
   params: Promise<{ id: string }> | { id: string };
 }
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
   await configureCloudflareAgentSessionStore();
 
   const { id } = await context.params;
@@ -14,6 +14,9 @@ export async function GET(_request: Request, context: RouteContext) {
   if (!session) {
     return jsonResponse({ error: 'Session not found' }, 404);
   }
+
+  // trace 默认不返回（体积大），排障时用 ?include=trace 显式取。
+  const includeTrace = new URL(request.url).searchParams.get('include') === 'trace';
 
   return jsonResponse({
     id: session.id,
@@ -33,6 +36,8 @@ export async function GET(_request: Request, context: RouteContext) {
       : undefined,
     actionCount: session.actions.length,
     observationCount: session.observations.length,
+    traceCount: session.trace.length,
+    ...(includeTrace ? { trace: session.trace } : {}),
     actions: session.actions.map((action) => ({
       id: action.id,
       type: action.action.type,

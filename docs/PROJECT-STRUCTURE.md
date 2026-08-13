@@ -78,7 +78,7 @@ chisha/
 | `lib/apiResponse.ts` | 响应格式 | success(), error() |
 | `lib/logger.ts` | 日志 | logger.info() 等 |
 | `lib/withTimeout.ts` | 超时控制 | withTimeout(), fetchWithTimeout() |
-| `lib/llm.ts` | LLM 调用 | callOpenAI(), fallbackParse() |
+| `lib/agent/modelClient.ts` | 模型调用统一入口 | callJsonFunctionAgent() |
 | `lib/amap.ts` | 高德地图 | amapPoiSearch(), amapGeocode() |
 | `lib/osm.ts` | OSM | osmSearch() |
 | `lib/distance.ts` | 距离计算 | haversineDistance() |
@@ -135,7 +135,7 @@ app/api/**/route.ts
   ├─ lib/apiResponse.ts (响应格式)
   ├─ lib/logger.ts (日志)
   └─ 业务逻辑库
-      ├─ lib/llm.ts
+      ├─ lib/agent/modelClient.ts
       ├─ lib/amap.ts
       ├─ lib/osm.ts
       └─ lib/dataTransform.ts
@@ -144,7 +144,7 @@ app/api/**/route.ts
 ### 工具库依赖
 
 ```
-lib/llm.ts
+lib/agent/modelClient.ts
   ├─ lib/withTimeout.ts
   ├─ lib/logger.ts
   └─ lib/apiResponse.ts
@@ -200,7 +200,7 @@ app/api/understand/route.ts
   ↓ (验证)
 lib/validation.ts
   ↓ (理解)
-lib/llm.ts
+lib/agent/modelClient.ts
   ├─ callOpenAI() → OpenAI API
   └─ fallbackParse() (降级)
   ↓ (响应)

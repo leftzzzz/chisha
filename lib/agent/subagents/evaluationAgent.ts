@@ -4,8 +4,9 @@ import {
   JSON_FUNCTION_MAX_TOKENS,
   JSON_FUNCTION_RETRY_MAX_TOKENS,
 } from '../modelClient';
-import { deriveGoalSignature } from '../goalVersion';
+import type { MetricsSink } from '../metrics';
 import { EvaluationAgentOutputSchema } from '../schemas/verdict';
+import { AgentError } from '../types';
 import type {
   CandidateVerdict,
   EvaluationAgentOutput,
@@ -16,21 +17,14 @@ import type {
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
+const OPENAI_MODEL = process.env.OPENAI_MODEL_EVALUATION
+  || process.env.OPENAI_MODEL
+  || 'gpt-4o';
 const EVALUATION_TIMEOUT = 60000;
 const EVALUATION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const EVALUATION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
-const EVALUATION_CACHE_MAX_ENTRIES = 100;
-const EVALUATION_CACHE_TTL_MS = 5 * 60 * 1000;
-
-interface EvaluationCacheEntry {
-  createdAt: number;
-  output: EvaluationAgentOutput;
-}
-
-const evaluationCache = new Map<string, EvaluationCacheEntry>();
-
 export interface EvaluationAgentInput {
+  metricsSink?: MetricsSink;
   goal: UserGoal;
   plan: SearchPlan;
   restaurants: Restaurant[];
@@ -99,29 +93,19 @@ const EVALUATION_FUNCTION = {
 
 export async function runEvaluationAgent(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
   if (!OPENAI_API_KEY) {
-    throw new Error('EvaluationAgent requires OPENAI_API_KEY');
+    throw new AgentError('EvaluationAgent requires OPENAI_API_KEY', 'CONFIG_MISSING', false);
   }
 
-  const cacheKey = evaluationCacheKey(input);
-  const cached = getCachedEvaluation(cacheKey);
-  if (cached) {
-    return {
-      ...cloneEvaluationOutput(cached),
-      source: 'cache',
-    };
-  }
-
-  const output = {
+  return {
     ...await callEvaluationModel(input),
     source: 'model' as const,
   };
-  setCachedEvaluation(cacheKey, output);
-  return cloneEvaluationOutput(output);
 }
 
 async function callEvaluationModel(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
   return callJsonFunctionAgent({
     agentName: 'EvaluationAgent',
+    metricsSink: input.metricsSink,
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
     model: OPENAI_MODEL,
@@ -186,67 +170,5 @@ function restaurantFactSummary(restaurant: Restaurant) {
   };
 }
 
-function evaluationCacheKey(input: EvaluationAgentInput): string {
-  return stableStringify({
-    model: OPENAI_MODEL,
-    goalSignature: input.goal.goalSignature ?? deriveGoalSignature(input.goal),
-    plan: {
-      keywords: input.plan.keywords,
-      radiusMeters: input.plan.radiusMeters,
-      poiType: input.plan.poiType,
-      searchIntent: input.plan.searchIntent,
-      allowedForPrimary: input.plan.allowedForPrimary,
-    },
-    restaurants: input.restaurants.map(restaurantFactSummary),
-    existingCandidates: buildEvaluationModelInput(input).toolObservations.existingCandidates,
-    preferenceSummary: input.preferenceSummary,
-  });
-}
 
-function getCachedEvaluation(cacheKey: string): EvaluationAgentOutput | null {
-  const entry = evaluationCache.get(cacheKey);
-  if (!entry) {
-    return null;
-  }
 
-  if (Date.now() - entry.createdAt > EVALUATION_CACHE_TTL_MS) {
-    evaluationCache.delete(cacheKey);
-    return null;
-  }
-
-  return entry.output;
-}
-
-function setCachedEvaluation(cacheKey: string, output: EvaluationAgentOutput): void {
-  if (evaluationCache.size >= EVALUATION_CACHE_MAX_ENTRIES) {
-    const oldestKey = evaluationCache.keys().next().value as string | undefined;
-    if (oldestKey) {
-      evaluationCache.delete(oldestKey);
-    }
-  }
-
-  evaluationCache.set(cacheKey, {
-    createdAt: Date.now(),
-    output: cloneEvaluationOutput(output),
-  });
-}
-
-function cloneEvaluationOutput(output: EvaluationAgentOutput): EvaluationAgentOutput {
-  return JSON.parse(JSON.stringify(output)) as EvaluationAgentOutput;
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
-  }
-
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value)
-      .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
-      .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
-      .join(',')}}`;
-  }
-
-  return JSON.stringify(value);
-}

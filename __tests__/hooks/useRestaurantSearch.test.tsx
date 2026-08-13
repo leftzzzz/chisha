@@ -163,4 +163,92 @@ describe('useRestaurantSearch', () => {
       question: '你想找哪类餐厅？',
     }));
   });
+
+  /**
+   * 并行 fan-out 下同一步会有多个搜索计划，事件交错到达。
+   * 没有按 planId 聚合的话，后到的事件会覆盖先到的：用户只看得见最后一个
+   * 关键词，found/total 还会来回跳。
+   */
+  describe('并行搜索进度聚合', () => {
+    interface ProgressCallbacks {
+      onAction?: (summary: string, actionType: string) => void;
+      onSearching?: (keywords: string[], round: number, intent?: string, planId?: string) => void;
+      onSearchResult?: (found: number, total: number, restaurants: unknown[], planId?: string) => void;
+    }
+
+    function restaurant(id: string, name: string) {
+      return { id, name, cuisineType: '火锅', distance: 300 };
+    }
+
+    /**
+     * 搜索结束时 progress 会被 done 整体覆盖，所以要在事件发完、结果返回前
+     * 断言中间态：用一个闸门把 agentChat 卡在那一刻。
+     */
+    async function observeProgressDuringSearch(
+      emitEvents: (callbacks: ProgressCallbacks) => void
+    ) {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      (agentChat as jest.Mock).mockImplementation(async (
+        _message: string,
+        _location: Location,
+        callbacks: ProgressCallbacks
+      ) => {
+        emitEvents(callbacks);
+        await gate;
+        return { restaurants: [], candidates: [] };
+      });
+
+      const { result } = renderHook(() => useRestaurantSearch());
+      let searching: Promise<void> = Promise.resolve();
+
+      await act(async () => {
+        searching = result.current.search('想吃火锅', location);
+        await Promise.resolve();
+      });
+
+      const snapshot = result.current.progress;
+
+      await act(async () => {
+        release();
+        await searching;
+      });
+
+      return snapshot;
+    }
+
+    it('merges concurrent plans into one progress view', async () => {
+      const progress = await observeProgressDuringSearch((callbacks) => {
+        callbacks.onAction?.('搜索「火锅」', 'search');
+        callbacks.onSearching?.(['火锅'], 1, 'exact', 'plan-a');
+        callbacks.onSearching?.(['川菜'], 1, 'exact', 'plan-b');
+        callbacks.onSearchResult?.(2, 2, [restaurant('r1', '海底捞'), restaurant('r2', '小龙坎')], 'plan-a');
+        callbacks.onSearchResult?.(2, 2, [restaurant('r2', '小龙坎'), restaurant('r3', '眉州东坡')], 'plan-b');
+      });
+
+      expect(progress.currentKeywords).toEqual(['火锅', '川菜']);
+      expect(progress.found).toBe(4);
+      // 同一家店被两个关键词召回，展示时按 id 去重
+      expect(progress.foundRestaurants?.map((item) => item.id)).toEqual(['r1', 'r2', 'r3']);
+    });
+
+    it('resets the aggregate when the next search step starts', async () => {
+      const progress = await observeProgressDuringSearch((callbacks) => {
+        callbacks.onAction?.('搜索「火锅」', 'search');
+        callbacks.onSearching?.(['火锅'], 1, 'exact', 'plan-a');
+        callbacks.onSearchResult?.(2, 2, [restaurant('r1', '海底捞')], 'plan-a');
+
+        callbacks.onAction?.('搜索「烧烤」', 'search');
+        callbacks.onSearching?.(['烧烤'], 2, 'broadened', 'plan-c');
+        callbacks.onSearchResult?.(1, 1, [restaurant('r9', '很久以前')], 'plan-c');
+      });
+
+      expect(progress.currentKeywords).toEqual(['烧烤']);
+      expect(progress.found).toBe(1);
+      expect(progress.foundRestaurants?.map((item) => item.id)).toEqual(['r9']);
+    });
+  });
 });

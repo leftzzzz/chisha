@@ -134,6 +134,7 @@ import { runSearchAgentV3 } from '@/lib/agent/runtimeV3';
 import { runSupervisorPlanner } from '@/lib/agent/supervisorPlanner';
 import { runEvaluationAgent } from '@/lib/agent/subagents/evaluationAgent';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
+import { AgentError } from '@/lib/agent/types';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 
@@ -212,7 +213,7 @@ describe('runSearchAgentV3', () => {
     expect(events.some((event) => event.type === 'final')).toBe(true);
   });
 
-  it('records a replayable trace timeline for model, guard, tool, evaluation, and final steps', async () => {
+  it('records a replayable trace timeline for decision, tool, evaluation, and final steps', async () => {
     const result = await runSearchAgentV3(
       input(goal()),
       () => undefined,
@@ -223,8 +224,7 @@ describe('runSearchAgentV3', () => {
     expect(trace.map((item) => item.type)).toEqual(expect.arrayContaining([
       'user_message',
       'model_goal',
-      'model_action',
-      'guard_decision',
+      'runtime_decision',
       'tool_start',
       'tool_result',
       'evaluation',
@@ -232,8 +232,13 @@ describe('runSearchAgentV3', () => {
       'state_update',
       'final',
     ]));
-    expect(trace.find((item) => item.type === 'model_action')?.rawAction?.type).toBe('search');
-    expect(trace.find((item) => item.type === 'guard_decision')?.guardDecision?.type).toBe('allow');
+    // 常规轮次不再有 model_action / guard_decision：动作由 policy 生成，
+    // guard 只在拒绝时才写 trace。
+    expect(trace.some((item) => item.type === 'model_action')).toBe(false);
+    expect(trace.some((item) => item.type === 'guard_decision')).toBe(false);
+    expect(trace.find((item) => item.type === 'runtime_decision')?.output).toEqual(
+      expect.objectContaining({ kind: 'search', stage: 'first_batch', plans: ['日料'] })
+    );
     expect(trace.find((item) => item.type === 'tool_result')?.output).toEqual(
       expect.objectContaining({
         found: 1,
@@ -670,33 +675,29 @@ describe('runSearchAgentV3', () => {
     expect(searchedPlans[0].keywords).toEqual(['餐厅']);
     expect(result.restaurants.length).toBeGreaterThan(0);
 
+    // 单关键词约束已前移到 SearchPlanSchema，Runtime 不再靠 guard 事后拆词，
+    // 因此不应再出现 MULTI_INTENT_KEYWORDS 改写往返。
     const guardDecisions = result.runtimeState?.trace
       ?.filter((item) => item.type === 'guard_decision')
       .map((item) => item.guardDecision);
-    expect(guardDecisions).toEqual(expect.arrayContaining([
+    expect(guardDecisions).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
-        type: 'request_rewrite',
         violations: expect.arrayContaining([
           expect.objectContaining({ code: 'MULTI_INTENT_KEYWORDS' }),
         ]),
       }),
     ]));
-    expect(result.runtimeState?.trace).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: 'runtime_decision',
-        output: expect.objectContaining({ reason: 'guard_rewrite_exhausted' }),
-      }),
-    ]));
+    expect(searchedPlans.every((plan) => plan.keywords.length === 1)).toBe(true);
   });
 
-  it('does not infer an open recommendation goal if the Supervisor truncates', async () => {
+  it('pauses with a clarifying question instead of searching when the Supervisor truncates', async () => {
     const supervisorMock = runSupervisorPlanner as jest.Mock;
     supervisorMock.mockRejectedValueOnce(
       new Error('SupervisorPlannerAgent returned truncated function arguments')
     );
     const searchedPlans: SearchPlan[] = [];
 
-    await expect(runSearchAgentV3(
+    const result = await runSearchAgentV3(
       {
         query: '没有具体想吃的，你来选',
         location,
@@ -712,9 +713,44 @@ describe('runSearchAgentV3', () => {
         searchedPlans.push(plan);
         return [restaurant('r1', '社区餐厅', '餐饮', 300)];
       }
-    )).rejects.toThrow('SupervisorPlannerAgent returned truncated function arguments');
+    );
 
+    // 关键不变量：截断的理解结果不能被当成搜索目标。
     expect(searchedPlans).toEqual([]);
+    expect(result.paused).toBe(true);
+    expect(result.question?.question).toContain('想吃点什么');
+    expect(result.runtimeState?.trace).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'error',
+        error: expect.objectContaining({ code: 'SUPERVISOR_UNAVAILABLE' }),
+      }),
+    ]));
+  });
+
+  it('falls back to raw-query search when the Supervisor fails but the query names a dish', async () => {
+    const supervisorMock = runSupervisorPlanner as jest.Mock;
+    supervisorMock.mockRejectedValueOnce(new Error('SupervisorPlannerAgent API failed: 500'));
+    const searchedPlans: SearchPlan[] = [];
+
+    await runSearchAgentV3(
+      {
+        query: '想吃火锅',
+        location,
+        runtimeState: {
+          attempts: [],
+          candidates: [],
+          actions: [],
+          observations: [],
+        },
+      },
+      () => undefined,
+      async (plan) => {
+        searchedPlans.push(plan);
+        return [restaurant('r1', '老灶火锅', '火锅', 300)];
+      }
+    );
+
+    expect(searchedPlans[0]?.keywords).toEqual(['火锅']);
   });
 
   it('records the observed provider when search falls back to OSM results', async () => {
@@ -951,7 +987,10 @@ describe('runSearchAgentV3', () => {
   it('keeps EvaluationAgent failures out of primary recommendations and records a structured trace', async () => {
     const evaluationMock = runEvaluationAgent as jest.Mock;
     const defaultImplementation = evaluationMock.getMockImplementation();
-    evaluationMock.mockRejectedValue(new Error('429 too many requests'));
+    // 真实链路上 429 由 modelClient 抛成带码的 AgentError；这里照同一个契约来。
+    evaluationMock.mockRejectedValue(
+      new AgentError('429 too many requests', 'RATE_LIMITED', true)
+    );
 
     try {
       const result = await runSearchAgentV3(

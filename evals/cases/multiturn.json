@@ -1,0 +1,47 @@
+[
+  {
+    "id": "clarify-then-answer",
+    "description": "先追问，用户补充具体菜品后应直接搜索，不再重复追问",
+    "turns": [
+      {
+        "message": "附近有什么好吃的",
+        "stubGoal": { "clarifyingQuestion": "你想找哪类餐厅，或具体想吃什么？" },
+        "expect": { "shouldAsk": true }
+      },
+      {
+        "message": "火锅",
+        "stubGoal": { "primaryKeywords": ["火锅"], "requestedItems": ["火锅"] },
+        "stubExpansion": { "related": ["川菜"], "broadened": [] },
+        "expect": {
+          "shouldAsk": false,
+          "minPrimary": 3,
+          "anyCuisine": ["火锅"],
+          "maxSearchRounds": 4
+        }
+      }
+    ]
+  },
+  {
+    "id": "switch-target",
+    "description": "第二轮换目标：火锅换成日料，旧候选不能混进主推荐",
+    "turns": [
+      {
+        "message": "想吃火锅",
+        "stubGoal": { "primaryKeywords": ["火锅"], "requestedItems": ["火锅"] },
+        "stubExpansion": { "related": ["川菜"], "broadened": [] },
+        "expect": { "shouldAsk": false, "minPrimary": 3 }
+      },
+      {
+        "message": "还是换日料吧",
+        "stubGoal": { "primaryKeywords": ["日料"], "requestedItems": ["日料"] },
+        "stubExpansion": { "related": ["寿司"], "broadened": [] },
+        "expect": {
+          "shouldAsk": false,
+          "minPrimary": 2,
+          "anyCuisine": ["日料"],
+          "noCuisine": ["火锅"]
+        }
+      }
+    ]
+  }
+]

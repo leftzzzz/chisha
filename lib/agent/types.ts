@@ -1,4 +1,6 @@
 import type { Location, Restaurant } from '@/types';
+import type { FinishReason } from './finishReason';
+import type { ModelCallMetrics } from './metrics';
 
 export type SearchIntent = 'exact' | 'synonym' | 'broadened' | 'fallback';
 
@@ -153,24 +155,14 @@ export interface SearchPlan {
   searchIntent: SearchIntent;
   allowedForPrimary: boolean;
   reason: string;
+  /** Runtime 生成，用于并行搜索时区分交错事件；不进模型 schema。 */
+  planId?: string;
 }
 
 export interface SearchTarget {
   label: string;
   kind: 'dish' | 'cuisine' | 'restaurant_type' | 'generic';
   strictness: 'exact' | 'compatible' | 'broad';
-}
-
-export interface PlanningAgentPlan {
-  targets: SearchTarget[];
-  radiusMeters: number;
-  searchIntent: SearchIntent;
-  allowedForPrimary: boolean;
-  reason: string;
-}
-
-export interface PlanningAgentOutput {
-  plans: PlanningAgentPlan[];
 }
 
 export interface CandidateVerdict {
@@ -202,7 +194,6 @@ export interface EvaluationAgentOutput {
 export type GuardrailViolationCode =
   | 'SEARCH_BUDGET_EXCEEDED'
   | 'INVALID_PLAN_SCHEMA'
-  | 'MULTI_INTENT_KEYWORDS'
   | 'UNAUTHORIZED_BROADENING'
   | 'STRICT_DISTANCE_EXCEEDED'
   | 'DUPLICATE_PLAN'
@@ -312,6 +303,12 @@ export type AgentAction =
     }
   | {
       type: 'finish';
+      /**
+       * 结束原因。模型不输出该字段（缺省视为 MODEL_DECIDED）；
+       * Runtime / Planner 内部构造的 finish 必须显式给出，
+       * 用户文案由 describeFinish 统一映射。
+       */
+      reason?: FinishReason;
       selectedIds?: string[];
       candidateIds?: string[];
       explanation: string;
@@ -345,6 +342,7 @@ export type AgentTraceType =
   | 'user_message'
   | 'model_goal'
   | 'model_action'
+  | 'model_call'
   | 'guard_decision'
   | 'tool_start'
   | 'tool_result'
@@ -355,6 +353,21 @@ export type AgentTraceType =
   | 'question'
   | 'final'
   | 'error';
+
+/**
+ * Agent 结构化错误码。
+ *
+ * SSE `error` 事件与 `error` trace 都携带该码，客户端据此判断可恢复性，
+ * 不再依赖对错误文案做子串匹配。
+ */
+export type AgentErrorCode =
+  | 'SESSION_EXPIRED'
+  | 'CONFIG_MISSING'
+  | 'SUPERVISOR_UNAVAILABLE'
+  | 'EVALUATION_FAILED'
+  | 'SEARCH_PROVIDER_FAILED'
+  | 'RATE_LIMITED'
+  | 'UNKNOWN';
 
 export interface AgentTraceItem {
   id: string;
@@ -393,6 +406,10 @@ export interface AgentContext extends AgentInput {
   maxSteps: number;
   maxSearchCalls: number;
   targetCount: number;
+  /** 本轮模型调用指标；由 metrics.ts 填充。 */
+  modelCallMetrics?: ModelCallMetrics[];
+  /** 本轮是否发生过候选验证失败，用于区分"没搜到"与"验证服务不可用"。 */
+  evaluationDegraded?: boolean;
 }
 
 export interface AgentFinalResult {
@@ -402,7 +419,50 @@ export interface AgentFinalResult {
   unmetConstraints: string[];
   paused?: boolean;
   question?: PendingQuestion;
+  questionTraceId?: string;
   runtimeState?: AgentRuntimeState;
+}
+
+/**
+ * 带结构化错误码的 Agent 错误。
+ *
+ * 在**抛出点**决定错误码，而不是在消费端对 message 做正则猜测——
+ * 后者会把任何碰巧包含 "poi" 的信息判成数据源故障，而 recoverable
+ * 直接决定前端让不让用户重试。
+ */
+export class AgentError extends Error {
+  readonly cause?: unknown;
+
+  constructor(
+    message: string,
+    readonly code: AgentErrorCode,
+    readonly retryable: boolean,
+    options?: { cause?: unknown }
+  ) {
+    super(message);
+    this.name = 'AgentError';
+    this.cause = options?.cause;
+  }
+}
+
+export function isAgentError(error: unknown): error is AgentError {
+  return error instanceof AgentError;
+}
+
+/**
+ * Runtime 执行失败时抛出，携带失败前的运行状态，
+ * 便于 route 层把失败 turn 的 trace 一并落库。
+ */
+export class AgentRunError extends Error {
+  constructor(
+    message: string,
+    readonly code: AgentErrorCode,
+    readonly runtimeState?: AgentRuntimeState,
+    readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = 'AgentRunError';
+  }
 }
 
 export interface AgentRuntimeState {
@@ -417,11 +477,12 @@ export interface AgentRuntimeState {
 
 type AgentEventPayload =
   | { type: 'thinking'; message: string }
-  | { type: 'searching'; keywords: string[]; round: number; searchIntent?: string }
+  | { type: 'searching'; keywords: string[]; round: number; searchIntent?: string; planId?: string }
   | {
       type: 'search_result';
       found: number;
       total: number;
+      planId?: string;
       restaurants: Array<{
         id: string;
         name: string;
@@ -438,11 +499,12 @@ type AgentEventPayload =
       explanation?: string;
       unmetConstraints?: string[];
     }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; code?: AgentErrorCode; recoverable?: boolean }
   | { type: 'status'; message: string }
-  | { type: 'tool_start'; tool: string; args: unknown }
-  | { type: 'tool_result'; tool: string; summary: unknown }
-  | { type: 'strategy_change'; reason: string; next: SearchPlan }
+  // 流级心跳：客户端只用它重置"无事件超时"，不触发任何业务回调。
+  | { type: 'heartbeat'; at: number }
+  | { type: 'tool_start'; tool: string; args: unknown; planId?: string }
+  | { type: 'tool_result'; tool: string; summary: unknown; planId?: string }
   | { type: 'partial_results'; restaurants: Restaurant[] }
   | { type: 'action'; actionId: string; actionType: AgentAction['type']; summary: string }
   | { type: 'observation'; actionId: string; found: number; accepted: number; rejected: number }

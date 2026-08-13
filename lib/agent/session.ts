@@ -1,3 +1,4 @@
+import { persistableTrace } from './tracePersistence';
 import type {
   AgentMessage,
   AgentRuntimeState,
@@ -156,7 +157,7 @@ export function applyRuntimeStateToSession(
   session.candidates = state.candidates;
   session.actions = state.actions ?? [];
   session.observations = state.observations ?? [];
-  session.trace = state.trace ?? session.trace ?? [];
+  session.trace = persistableTrace(state.trace ?? session.trace);
   session.pendingQuestion = state.pendingQuestion;
   return saveAgentSession(session);
 }
@@ -172,7 +173,7 @@ export async function applyRuntimeStateToSessionAsync(
   session.candidates = state.candidates;
   session.actions = state.actions ?? [];
   session.observations = state.observations ?? [];
-  session.trace = state.trace ?? session.trace ?? [];
+  session.trace = persistableTrace(state.trace ?? session.trace);
   session.pendingQuestion = state.pendingQuestion;
   return saveAgentSessionAsync(session);
 }
