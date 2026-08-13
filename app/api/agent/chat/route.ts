@@ -31,7 +31,7 @@ import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
 import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
 import { logger } from '@/lib/logger';
 import { osmSearch } from '@/lib/osm';
-import { getClientIP, rateLimit } from '@/lib/rateLimit';
+import { checkRateLimit, getClientIP } from '@/lib/rateLimit';
 
 const AGENT_POI_PAGES_PER_SEARCH = parsePositiveInt(process.env.AGENT_POI_PAGES_PER_SEARCH, 2);
 const AGENT_DETAIL_ENRICH_LIMIT = parsePositiveInt(process.env.AGENT_DETAIL_ENRICH_LIMIT, 6);
@@ -139,11 +139,20 @@ function sendSessionUpdated(
 export async function POST(request: Request) {
   await configureCloudflareAgentSessionStore();
 
+  // 这是整个应用最贵的入口：一次请求会跑完整个 agent loop，用的是部署者自己的
+  // OPENAI_API_KEY。两道闸门——按 IP 挡普通滥用，按常量 key 的总量闸门挡轮换
+  // IP 的脚本，后者才是真正给账单封顶的那道。
   const ip = getClientIP(request);
-  const rateLimitResult = rateLimit(ip, 6, 60 * 1000);
+  const [perIp, global] = await Promise.all([
+    checkRateLimit('agentChatPerIp', ip),
+    checkRateLimit('agentChatGlobal', 'all'),
+  ]);
 
-  if (!rateLimitResult.success) {
-    return jsonResponse({ error: '请求过于频繁，请稍后再试' }, 429);
+  const rejected = !perIp.success ? perIp : (!global.success ? global : null);
+  if (rejected) {
+    return jsonResponse({ error: '请求过于频繁，请稍后再试' }, 429, {
+      'Retry-After': String(rejected.retryAfterSeconds),
+    });
   }
 
   let requestData: z.infer<typeof AgentChatRequestSchema>;
@@ -378,10 +387,14 @@ export async function GET() {
   return jsonResponse({ error: 'Method not allowed' }, 405);
 }
 
-function jsonResponse(body: unknown, status: number): Response {
+function jsonResponse(
+  body: unknown,
+  status: number,
+  extraHeaders: Record<string, string> = {}
+): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
   });
 }
 

@@ -27,6 +27,32 @@
 	"build": {
 		"command": "npm run wrangler:build"
 	},
+	// 限流。额度必须和 lib/rateLimit.ts 的 RATE_LIMITS 表一致，
+	// 由 __tests__/lib/rateLimit.config.test.ts 强制。
+	// 没有这几个 binding 时代码会退回进程内存计数——在 Workers 上等于没有限流，
+	// 公网部署千万别少配。namespace_id 只要在本 worker 内唯一即可。
+	"ratelimits": [
+		{
+			"name": "RL_AGENT_CHAT",
+			"namespace_id": "1001",
+			"simple": { "limit": 6, "period": 60 }
+		},
+		{
+			"name": "RL_AGENT_CHAT_ALL",
+			"namespace_id": "1002",
+			"simple": { "limit": 60, "period": 60 }
+		},
+		{
+			"name": "RL_AMAP_PROXY",
+			"namespace_id": "1003",
+			"simple": { "limit": 300, "period": 60 }
+		},
+		{
+			"name": "RL_GEOCODE",
+			"namespace_id": "1004",
+			"simple": { "limit": 3, "period": 60 }
+		}
+	],
 	// Fork 之后必须换成你自己账号下的 database_id，下面这个你访问不了：
 	//   npx wrangler d1 create chisha
 	// 这个文件必须留在仓库里——Cloudflare Workers Builds 从仓库克隆代码构建，

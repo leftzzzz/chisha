@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { logger } from '@/lib/logger';
-import { rateLimit, getClientIP } from '@/lib/rateLimit';
+import { checkRateLimit, getClientIP, type RateLimitResult } from '@/lib/rateLimit';
 
 const AMAP_SECURITY_CODE = process.env.AMAP_SECURITY_CODE;
 
@@ -29,14 +29,6 @@ const ALLOWED_PATHS = [
 
 /** 只需回 204 的埋点路径，不转发给高德 */
 const LOG_PATHS = ['v3/log/', 'v4/log/'] as const;
-
-/**
- * 地图瓦片请求密集：一次首屏加载就可能拉几十张瓦片，平移还会继续拉。
- * 所以这里的额度要比业务接口（3 次/分钟）宽松得多，目的是挡住脚本化滥用，
- * 而不是精确计费。
- */
-const PROXY_RATE_LIMIT = 300;
-const PROXY_RATE_WINDOW_MS = 60 * 1000;
 
 function isLogPath(pathStr: string): boolean {
   return LOG_PATHS.some((prefix) => pathStr.startsWith(prefix));
@@ -62,15 +54,15 @@ function notFound(pathStr: string, method: string): NextResponse {
   return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
-function tooManyRequests(resetTime: number): NextResponse {
+function tooManyRequests(limit: RateLimitResult): NextResponse {
   return NextResponse.json(
     { error: 'Too many requests' },
     {
       status: 429,
       headers: {
         'X-RateLimit-Remaining': '0',
-        'X-RateLimit-Reset': String(resetTime),
-        'Retry-After': String(Math.ceil((resetTime - Date.now()) / 1000)),
+        'X-RateLimit-Reset': String(limit.resetTime),
+        'Retry-After': String(limit.retryAfterSeconds),
       },
     }
   );
@@ -111,9 +103,9 @@ export async function GET(
     return notFound(pathStr, 'GET');
   }
 
-  const limit = rateLimit(getClientIP(request), PROXY_RATE_LIMIT, PROXY_RATE_WINDOW_MS);
+  const limit = await checkRateLimit('amapProxyPerIp', getClientIP(request));
   if (!limit.success) {
-    return tooManyRequests(limit.resetTime);
+    return tooManyRequests(limit);
   }
 
   const url = buildTargetUrl(pathStr, request.nextUrl.searchParams);
@@ -160,9 +152,9 @@ export async function POST(
     return notFound(pathStr, 'POST');
   }
 
-  const limit = rateLimit(getClientIP(request), PROXY_RATE_LIMIT, PROXY_RATE_WINDOW_MS);
+  const limit = await checkRateLimit('amapProxyPerIp', getClientIP(request));
   if (!limit.success) {
-    return tooManyRequests(limit.resetTime);
+    return tooManyRequests(limit);
   }
 
   const body = await request.text();

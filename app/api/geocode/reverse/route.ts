@@ -9,12 +9,12 @@ import { ReverseGeocodeRequestSchema } from '@/lib/validation';
 import { success, error, errorFromException, ErrorCode } from '@/lib/apiResponse';
 import { logger } from '@/lib/logger';
 import { amapReverseGeocode } from '@/lib/amap';
-import { rateLimit, getClientIP } from '@/lib/rateLimit';
+import { checkRateLimit, getClientIP } from '@/lib/rateLimit';
 
 export async function POST(request: NextRequest) {
-  // 限流检查：每分钟3次
+  // 限流检查：额度见 RATE_LIMITS.geocodePerIp
   const ip = getClientIP(request);
-  const rateLimitResult = rateLimit(ip, 3, 60 * 1000);
+  const rateLimitResult = await checkRateLimit('geocodePerIp', ip);
 
   if (!rateLimitResult.success) {
     logger.warn('Rate limit exceeded', { ip });
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
         headers: {
           'X-RateLimit-Remaining': '0',
           'X-RateLimit-Reset': String(rateLimitResult.resetTime),
-          'Retry-After': String(Math.ceil((rateLimitResult.resetTime - Date.now()) / 1000)),
+          'Retry-After': String(rateLimitResult.retryAfterSeconds),
         },
       }
     );

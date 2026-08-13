@@ -625,7 +625,40 @@ pm2 restart chisha
 
 4. **访问控制**
    - 配置 CORS
-   - API 限流
+   - API 限流（见下方「Cloudflare 限流配置」）
+
+## Cloudflare 限流配置
+
+`lib/rateLimit.ts` 优先使用 Cloudflare Workers 原生 Rate Limiting binding，拿不到
+binding 时退回进程内存计数。**内存计数在 Workers 上等于没有限流**：每个请求可能
+落在不同的隔离实例里，内存不共享。
+
+binding 在 `wrangler.jsonc` 的 `ratelimits` 段声明，四个命名空间对应四个限流域：
+
+| binding | 保护的入口 | 额度 |
+|---|---|---|
+| `RL_AGENT_CHAT` | `/api/agent/chat` 按 IP | 6 次/分钟 |
+| `RL_AGENT_CHAT_ALL` | `/api/agent/chat` 总量闸门 | 60 次/分钟 |
+| `RL_AMAP_PROXY` | `/_AMapService` 代理按 IP | 300 次/分钟 |
+| `RL_GEOCODE` | `/api/geocode/*` 按 IP | 3 次/分钟 |
+
+额度必须与 `lib/rateLimit.ts` 的 `RATE_LIMITS` 表一致，两边漂移会被
+`__tests__/lib/rateLimit.config.test.ts` 判红。Cloudflare 的 `period` 只接受 10 或
+60 秒。
+
+限流额度不需要在 Dashboard 里创建任何资源，`namespace_id` 只要在本 worker 内唯一
+即可；也不额外收费，只算 Workers 请求与 CPU。
+
+部署后确认 binding 真的生效——配漏了不会报错，只会在日志里留一条：
+
+```
+Rate limit binding missing on a serverless runtime; falling back to in-process memory
+```
+
+### 部署到 Vercel 或自托管 Node
+
+这套 binding 只在 Cloudflare Workers 上存在，其他平台会退回内存计数。要挂公开
+站点需要自己接一个跨实例的方案（Redis/Upstash 等），入口是 `checkRateLimit`。
 
 ## Cloudflare D1 会话存储与迁移
 

@@ -28,6 +28,12 @@ import { TextDecoder, TextEncoder } from 'util';
 jest.mock('@/lib/rateLimit', () => ({
   getClientIP: jest.fn(() => '127.0.0.1'),
   rateLimit: jest.fn(() => ({ success: true })),
+  checkRateLimit: jest.fn(async () => ({
+    success: true,
+    remaining: null,
+    resetTime: 0,
+    retryAfterSeconds: 60,
+  })),
 }));
 
 jest.mock('@/lib/amap', () => ({
