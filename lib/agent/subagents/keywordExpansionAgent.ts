@@ -1,4 +1,3 @@
-import { logger } from '@/lib/logger';
 import {
   callJsonFunctionAgent,
   JSON_FUNCTION_MAX_TOKENS,
@@ -24,21 +23,6 @@ const KEYWORD_EXPANSION_TIMEOUT = 60000;
 const KEYWORD_EXPANSION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
 const KEYWORD_EXPANSION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
 const KEYWORD_EXPANSION_LIMIT = 3;
-const OPEN_EXPLORATION_FALLBACK_TARGETS: SearchKeywordTarget[] = [
-  { keyword: '小吃', poiTypes: ['050310'], confidence: 0.7 },
-  { keyword: '中餐', poiTypes: ['050100'], confidence: 0.65 },
-  { keyword: '快餐', poiTypes: ['050300'], confidence: 0.62 },
-];
-const OPEN_EXPLORATION_DEMOTED_KEYWORDS = new Set([
-  '日料',
-  '日本料理',
-  '日本菜',
-  '寿司',
-  '刺身',
-  '拉面',
-  '日式拉面',
-  '居酒屋',
-]);
 
 export interface KeywordExpansionAgentInput {
   metricsSink?: MetricsSink;
@@ -131,18 +115,14 @@ export async function runKeywordExpansionAgent(
     };
   }
 
+  // 显式的确定性路径：测试开关或压根没配 key。这不是"降级"，是另一条明路。
   if (!OPENAI_API_KEY || process.env.AGENT_DETERMINISTIC === '1') {
     return deterministicKeywordExpansion(input.goal, input.attempts);
   }
 
-  try {
-    return sanitizeExpansion(await callKeywordExpansionModel(input), input.goal, input.attempts);
-  } catch (error) {
-    logger.warn('KeywordExpansionAgent unavailable, using taxonomy fallback', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return deterministicKeywordExpansion(input.goal, input.attempts);
-  }
+  // 模型挂了就报错，不静默换本地词表。静默降级会让"模型不可用"这个事实对
+  // 运维完全不可见——上一次线上事故正是这样被掩盖了两天。
+  return sanitizeExpansion(await callKeywordExpansionModel(input), input.goal, input.attempts);
 }
 
 export function deterministicKeywordExpansion(
@@ -153,7 +133,7 @@ export function deterministicKeywordExpansion(
   const expansion = expandPoiSearchKeywords(seeds);
   return {
     ...sanitizeExpansion(expansion, goal, attempts),
-    rationale: 'KeywordExpansionAgent 降级为本地餐饮 taxonomy 生成搜索联想词。',
+    rationale: 'KeywordExpansionAgent 走确定性 taxonomy 生成搜索联想词。',
   };
 }
 
@@ -267,7 +247,7 @@ function sanitizeExpansion(
     ? broadenedTargets
     : broadenedKeywords.map((keyword) => buildTarget(keyword));
   const stableBroadenedTargets = isOpenExplorationGoal(goal)
-    ? stabilizeOpenExplorationTargets(normalizedBroadenedTargets, attempts)
+    ? dropAttemptedTargets(normalizedBroadenedTargets, attempts)
     : normalizedBroadenedTargets;
 
   return KeywordExpansionOutputSchema.parse({
@@ -279,7 +259,14 @@ function sanitizeExpansion(
   });
 }
 
-function stabilizeOpenExplorationTargets(
+/**
+ * 开放探索时去掉已经搜过的方向。
+ *
+ * 此前这里还会把 [小吃, 中餐, 快餐] 无条件补进模型输出，并把日料相关的 8 个词
+ * 强制降权。两者都是无语义依据地指定搜索方向——拿常量冒充判断，正是
+ * CLAUDE.md 明令禁止的那类兜底。方向该由模型给，给不出就报错。
+ */
+function dropAttemptedTargets(
   targets: SearchKeywordTarget[],
   attempts: SearchAttempt[]
 ): SearchKeywordTarget[] {
@@ -287,8 +274,7 @@ function stabilizeOpenExplorationTargets(
     attempts.flatMap((attempt) => normalizeSearchKeywords(attempt.keywords))
   );
   const seen = new Set<string>();
-  const preferred: SearchKeywordTarget[] = [];
-  const demoted: SearchKeywordTarget[] = [];
+  const kept: SearchKeywordTarget[] = [];
 
   for (const target of targets) {
     const [keyword] = normalizeSearchKeywords([target.keyword]);
@@ -297,31 +283,10 @@ function stabilizeOpenExplorationTargets(
     }
 
     seen.add(keyword);
-    const normalizedTarget = buildTarget(keyword, target);
-    if (isDemotedOpenExplorationKeyword(keyword)) {
-      demoted.push(normalizedTarget);
-    } else {
-      preferred.push(normalizedTarget);
-    }
+    kept.push(buildTarget(keyword, target));
   }
 
-  const fallbackTargets = OPEN_EXPLORATION_FALLBACK_TARGETS
-    .map((target) => buildTarget(target.keyword, target))
-    .filter((target) => !attemptedKeywords.has(target.keyword))
-    .filter((target) => !seen.has(target.keyword));
-
-  return [
-    ...preferred,
-    ...fallbackTargets,
-    ...demoted,
-  ].slice(0, KEYWORD_EXPANSION_LIMIT);
-}
-
-function isDemotedOpenExplorationKeyword(keyword: string): boolean {
-  const normalizedKeywords = normalizeSearchKeywords([keyword]);
-  return normalizedKeywords.some((normalizedKeyword) =>
-    OPEN_EXPLORATION_DEMOTED_KEYWORDS.has(normalizedKeyword)
-  );
+  return kept.slice(0, KEYWORD_EXPANSION_LIMIT);
 }
 
 function sanitizeTargets(

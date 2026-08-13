@@ -744,6 +744,13 @@ describe('runSearchAgentV3', () => {
         requestedItems: [],
         acceptableCategories: [],
         primaryKeywords: [],
+        // 站位于 KeywordExpansionAgent 的产出：开放推荐的探索方向只能来自模型，
+        // 确定性模式下它不产出方向（那两张硬编码词表已随阶段 4 删除）。
+        broadenedTargets: [
+          { keyword: '火锅', poiTypes: ['050117'] },
+          { keyword: '烧烤', poiTypes: ['050118'] },
+        ],
+        broadenedKeywords: ['火锅', '烧烤'],
         softPreferences: [{ name: '默认多样性', weight: 1, verifiable: true }],
         allowBroaden: true,
         authorizations: [{

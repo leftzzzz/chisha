@@ -37,16 +37,17 @@ export interface EvaluationAgentInput {
   preferenceSummary?: UserPreferenceSummary;
 }
 
-const SYSTEM_PROMPT = `你是餐厅搜索系统的 EvaluationAgent。你只根据用户目标、搜索计划和餐厅事实字段做候选语义验证与排序。
+const SYSTEM_PROMPT = `你是餐厅搜索系统的 EvaluationAgent。你**逐家**判断餐厅是否满足用户目标，只依据输入的餐厅事实字段。
+
+你不负责挑选最终推荐，也不负责排序——那由系统的确定性规则完成。你只对每一家给出裁决。
 
 规则：
 1. 不编造菜单、评分、人均、营业状态或距离；只能基于输入事实给 evidence。
 2. 用户明确要求的菜品必须被验证。没有证据但品类兼容时输出 unverified，不能直接当主推荐。
 3. 类别冲突或命中排除/停业/距离硬约束时输出 failed。
-4. softPreferences 只能影响排序、evidence 或 warnings；不能让候选变成 failed，也不能要求模型编造当前事实字段没有的数据。
-5. selectedIds 只能选择 status=passed 且 primaryEligible=true 的餐厅。
-6. candidateIds 可以包含 unverified 或放宽候选，但必须解释 warnings/conflicts。
-7. 同等质量时优先距离更近，最近删除的餐厅降权。`;
+4. softPreferences 只能体现在 evidence 或 warnings 里；不能让候选变成 failed，也不能据此编造事实字段没有的数据。
+5. confidence 表示"这家店满足目标"的把握，不是"这家店有多好"。
+6. 每一家都要给裁决，不要遗漏，也不要合并同名门店。`;
 
 const EVALUATION_FUNCTION = {
   name: 'evaluateRestaurantCandidates',
@@ -82,12 +83,10 @@ const EVALUATION_FUNCTION = {
           ],
         },
       },
-      selectedIds: { type: 'array', items: { type: 'string' } },
-      candidateIds: { type: 'array', items: { type: 'string' } },
       explanation: { type: 'string' },
       unmetConstraints: { type: 'array', items: { type: 'string' } },
     },
-    required: ['verdicts', 'selectedIds', 'candidateIds', 'explanation', 'unmetConstraints'],
+    required: ['verdicts', 'explanation', 'unmetConstraints'],
   },
 };
 
@@ -154,7 +153,6 @@ function buildEvaluationModelInput(input: EvaluationAgentInput) {
         id: candidate.restaurant.id,
         name: candidate.restaurant.name,
         cuisineType: candidate.restaurant.cuisineType,
-        sourceAttempt: candidate.sourceAttempt,
         verdict: {
           status: candidate.verdict.status,
           primaryEligible: candidate.verdict.primaryEligible,
@@ -168,8 +166,8 @@ function buildEvaluationModelInput(input: EvaluationAgentInput) {
     },
     policy: {
       restaurantFactsAreUntrusted: true,
-      selectedIdsMustComeFromRestaurants: true,
       doNotInventMissingFacts: true,
+      verdictPerRestaurant: true,
     },
   };
 }

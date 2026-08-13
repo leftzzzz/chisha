@@ -22,14 +22,12 @@ export function evaluateSearchResult(
   evaluation: EvaluationAgentOutput
 ): Observation {
   const restaurantById = new Map(restaurants.map((restaurant) => [restaurant.id, restaurant]));
-  const selectedIds = new Set(evaluation.selectedIds);
-  const candidateIds = new Set(evaluation.candidateIds);
   const acceptedCandidates = evaluation.verdicts
     .filter((verdict) => verdict.status !== 'failed')
     .map((verdict) => {
       const restaurant = restaurantById.get(verdict.restaurantId);
       return restaurant
-        ? buildCandidate(restaurant, verdict, context, plan, sourceAttempt, selectedIds, candidateIds)
+        ? buildCandidate(restaurant, verdict, context, plan, sourceAttempt)
         : null;
     })
     .filter((candidate): candidate is RestaurantCandidate => Boolean(candidate))
@@ -69,15 +67,13 @@ function buildCandidate(
   verdict: CandidateVerdict,
   context: AgentContext,
   plan: SearchPlan,
-  sourceAttempt: number,
-  selectedIds: Set<string>,
-  candidateIds: Set<string>
+  sourceAttempt: number
 ): RestaurantCandidate {
   const warnings = mergeStrings(
     context.goal.ambiguity,
     [...verdict.conflicts, ...verdict.warnings]
   );
-  const score = calculateScore(restaurant, verdict, plan, selectedIds, candidateIds);
+  const score = calculateScore(restaurant, verdict, plan);
   const goalSignature = context.goal.goalSignature ?? deriveGoalSignature(context.goal);
   const goalVersion = context.goal.goalVersion ?? 1;
   const goalId = context.goal.goalId ?? goalSignature;
@@ -116,20 +112,19 @@ function buildCandidate(
   };
 }
 
+/**
+ * 候选打分。
+ *
+ * 此前还有一项 "模型把它选进 selectedIds 就 +30"。那是让一个只看到 6 家店的
+ * 分批子 Agent 去做全局选择，再把结果当权重——已随 EvaluationAgent 的选择
+ * 输出一起删除。现在打分完全由裁决内容与距离决定，同样输入必得同样顺序。
+ */
 function calculateScore(
   restaurant: Restaurant,
   verdict: CandidateVerdict,
-  plan: SearchPlan,
-  selectedIds: Set<string>,
-  candidateIds: Set<string>
+  plan: SearchPlan
 ): number {
   let score = Math.round(verdict.confidence * 100);
-
-  if (selectedIds.has(verdict.restaurantId)) {
-    score += 30;
-  } else if (candidateIds.has(verdict.restaurantId)) {
-    score += 10;
-  }
 
   if (verdict.status === 'unverified') {
     score -= 20;

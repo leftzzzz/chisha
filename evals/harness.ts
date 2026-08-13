@@ -304,18 +304,12 @@ export function evaluationStub(input: EvaluationStubInput) {
     };
   });
 
-  const selectedIds = verdicts
-    .filter((verdict) => verdict.status === 'passed' && verdict.primaryEligible)
-    .slice(0, input.targetCount)
-    .map((verdict) => verdict.restaurantId);
-  const selectedIdSet = new Set(selectedIds);
-
+  // 只出逐家裁决：EvaluationAgent 不再做全局选择与排序（阶段 4）。
+  // 桩必须跟着契约变，否则 eval 会用旧行为掩盖新行为的差异。
   return Promise.resolve({
     verdicts,
-    selectedIds,
-    candidateIds: verdicts
-      .filter((verdict) => !selectedIdSet.has(verdict.restaurantId) && verdict.status !== 'failed')
-      .map((verdict) => verdict.restaurantId),
+    selectedIds: [],
+    candidateIds: [],
     explanation: 'eval stub evaluation',
     unmetConstraints: verdicts.flatMap((verdict) => verdict.conflicts),
     source: 'model' as const,

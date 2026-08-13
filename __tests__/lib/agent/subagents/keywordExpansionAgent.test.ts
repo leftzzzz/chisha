@@ -183,7 +183,7 @@ describe('KeywordExpansionAgent', () => {
     }
   });
 
-  it('demotes Japanese-cuisine targets for open recommendations', async () => {
+  it('keeps the model-chosen exploration directions instead of injecting a fixed word list', async () => {
     const originalDeterministic = process.env.AGENT_DETERMINISTIC;
     const originalApiKey = process.env.OPENAI_API_KEY;
     delete process.env.AGENT_DETERMINISTIC;
@@ -227,8 +227,11 @@ describe('KeywordExpansionAgent', () => {
       });
 
       expect(expansion.relatedKeywords).toEqual([]);
-      expect(expansion.broadenedKeywords).toEqual(['小吃', '中餐', '快餐']);
-      expect(expansion.broadenedKeywords[0]).not.toBe('日料');
+      // 此前这里会把 [小吃, 中餐, 快餐] 无条件补进来，并把日料相关词强制降到
+      // 末尾。两张表都是无语义依据地指定搜索方向——拿常量冒充判断。删掉之后，
+      // 方向完全由模型决定；模型给不出方向就该报错或退回通用词，而不是由代码
+      // 悄悄替它选三个。
+      expect(expansion.broadenedKeywords).toEqual(['日料', '寿司']);
     } finally {
       if (originalDeterministic === undefined) {
         delete process.env.AGENT_DETERMINISTIC;
