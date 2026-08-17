@@ -54,6 +54,12 @@ class FakeD1PreparedStatement implements D1PreparedStatement {
   }
 
   async run<T = unknown>(): Promise<D1Result<T>> {
+    this.database.runAttempts += 1;
+    const error = this.database.runErrors.shift();
+    if (error) {
+      throw error;
+    }
+
     if (this.query.includes('INSERT INTO agent_sessions')) {
       const [
         id,
@@ -107,6 +113,8 @@ class FakeD1PreparedStatement implements D1PreparedStatement {
 
 class FakeD1Database implements D1Database {
   readonly rows = new Map<string, AgentSessionD1Row>();
+  readonly runErrors: Error[] = [];
+  runAttempts = 0;
 
   prepare(query: string): D1PreparedStatement {
     return new FakeD1PreparedStatement(this, query);
@@ -175,6 +183,73 @@ describe('D1AgentSessionStore', () => {
     }
 
     expect(await store.getAsync(expiredSession.id)).toBeNull();
+    expect(db.rows.has(expiredSession.id)).toBe(true);
+
+    await store.createAsync('创建新会话时清理', location);
+
     expect(db.rows.has(expiredSession.id)).toBe(false);
+  });
+
+  it('retries transient D1 write errors with bounded backoff', async () => {
+    const db = new FakeD1Database();
+    const initialStore = new D1AgentSessionStore(db);
+    const session = await initialStore.createAsync('重试保存', location);
+    db.runAttempts = 0;
+    db.runErrors.push(
+      new Error(
+        'D1_ERROR: Internal error while starting up D1 DB storage caused object to be reset; reference = test'
+      ),
+      new Error('D1_ERROR: Network connection lost')
+    );
+    const delays: number[] = [];
+    const store = new D1AgentSessionStore(db, {
+      random: () => 0.5,
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+      },
+    });
+
+    await store.saveAsync(session);
+
+    expect(db.runAttempts).toBe(3);
+    expect(delays).toEqual([38, 75]);
+    expect(db.rows.has(session.id)).toBe(true);
+  });
+
+  it('does not retry non-transient D1 errors', async () => {
+    const db = new FakeD1Database();
+    const initialStore = new D1AgentSessionStore(db);
+    const session = await initialStore.createAsync('保存失败', location);
+    db.runAttempts = 0;
+    db.runErrors.push(new Error('D1_ERROR: no such table: agent_sessions'));
+    const store = new D1AgentSessionStore(db, {
+      sleep: async () => {
+        throw new Error('sleep should not be called');
+      },
+    });
+
+    await expect(store.saveAsync(session)).rejects.toThrow('no such table');
+    expect(db.runAttempts).toBe(1);
+  });
+
+  it('stops retrying after the configured attempt limit', async () => {
+    const db = new FakeD1Database();
+    const initialStore = new D1AgentSessionStore(db);
+    const session = await initialStore.createAsync('持续失败', location);
+    db.runAttempts = 0;
+    const persistentError = new Error('D1_ERROR: Network connection lost');
+    db.runErrors.push(persistentError, persistentError, persistentError);
+    const delays: number[] = [];
+    const store = new D1AgentSessionStore(db, {
+      maxAttempts: 3,
+      random: () => 0,
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+      },
+    });
+
+    await expect(store.saveAsync(session)).rejects.toBe(persistentError);
+    expect(db.runAttempts).toBe(3);
+    expect(delays).toEqual([25, 50]);
   });
 });

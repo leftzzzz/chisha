@@ -6,11 +6,15 @@ import {
   agentSessionToD1Row,
   type AgentSessionD1Row,
 } from './d1SessionSchema';
+import { withD1Retry, type D1RetryOptions } from './d1Retry';
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
 export class D1AgentSessionStore implements AgentSessionStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(
+    private readonly db: D1Database,
+    private readonly retryOptions: D1RetryOptions = {}
+  ) {}
 
   create(): AgentSession {
     throw new Error('D1AgentSessionStore requires async session methods');
@@ -30,6 +34,9 @@ export class D1AgentSessionStore implements AgentSessionStore {
 
   async createAsync(message: string, location: Location): Promise<AgentSession> {
     const now = Date.now();
+    // Keep cleanup off the read path; D1 can automatically retry the SELECT in getAsync.
+    await this.cleanupExpiredSessions(now);
+
     const session: AgentSession = {
       id: createSessionId(),
       version: 4,
@@ -54,7 +61,6 @@ export class D1AgentSessionStore implements AgentSessionStore {
   }
 
   async getAsync(sessionId: string): Promise<AgentSession | null> {
-    await this.cleanupExpiredSessions();
     const row = await this.db
       .prepare('SELECT * FROM agent_sessions WHERE id = ? AND expires_at > ?')
       .bind(sessionId, Date.now())
@@ -72,60 +78,69 @@ export class D1AgentSessionStore implements AgentSessionStore {
     };
     const row = agentSessionToD1Row(updatedSession);
 
-    await this.db
-      .prepare(`
-        INSERT INTO agent_sessions (
-          id,
-          version,
-          location_json,
-          messages_json,
-          runtime_state_json,
-          pending_question_json,
-          created_at,
-          updated_at,
-          expires_at
+    await withD1Retry(
+      () => this.db
+        .prepare(`
+          INSERT INTO agent_sessions (
+            id,
+            version,
+            location_json,
+            messages_json,
+            runtime_state_json,
+            pending_question_json,
+            created_at,
+            updated_at,
+            expires_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            version = excluded.version,
+            location_json = excluded.location_json,
+            messages_json = excluded.messages_json,
+            runtime_state_json = excluded.runtime_state_json,
+            pending_question_json = excluded.pending_question_json,
+            updated_at = excluded.updated_at,
+            expires_at = excluded.expires_at
+        `)
+        .bind(
+          row.id,
+          row.version,
+          row.location_json,
+          row.messages_json,
+          row.runtime_state_json,
+          row.pending_question_json,
+          row.created_at,
+          row.updated_at,
+          row.expires_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          version = excluded.version,
-          location_json = excluded.location_json,
-          messages_json = excluded.messages_json,
-          runtime_state_json = excluded.runtime_state_json,
-          pending_question_json = excluded.pending_question_json,
-          updated_at = excluded.updated_at,
-          expires_at = excluded.expires_at
-      `)
-      .bind(
-        row.id,
-        row.version,
-        row.location_json,
-        row.messages_json,
-        row.runtime_state_json,
-        row.pending_question_json,
-        row.created_at,
-        row.updated_at,
-        row.expires_at
-      )
-      .run();
+        .run(),
+      this.retryOptions
+    );
 
     Object.assign(session, updatedSession);
     return session;
   }
 
   async deleteAsync(sessionId: string): Promise<boolean> {
-    const result = await this.db
-      .prepare('DELETE FROM agent_sessions WHERE id = ?')
-      .bind(sessionId)
-      .run();
+    const result = await withD1Retry(
+      () => this.db
+        .prepare('DELETE FROM agent_sessions WHERE id = ?')
+        .bind(sessionId)
+        .run(),
+      this.retryOptions
+    );
 
     return (result.meta.changes ?? 0) > 0;
   }
 
-  private async cleanupExpiredSessions(): Promise<void> {
-    await this.db
-      .prepare('DELETE FROM agent_sessions WHERE expires_at <= ?')
-      .bind(Date.now())
-      .run();
+  private async cleanupExpiredSessions(now: number): Promise<void> {
+    await withD1Retry(
+      () => this.db
+        .prepare('DELETE FROM agent_sessions WHERE expires_at <= ?')
+        .bind(now)
+        .run(),
+      this.retryOptions
+    );
   }
 }
 
