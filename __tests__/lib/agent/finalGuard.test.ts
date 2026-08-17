@@ -1,5 +1,5 @@
 import { applyFinalGuard } from '@/lib/agent/finalGuard';
-import { finalizeRecommendations } from '@/lib/agent/resultAssembler';
+import { assembleRecommendations } from '@/lib/agent/resultAssembler';
 import type { AgentContext, RestaurantCandidate, SearchAttempt, UserGoal } from '@/lib/agent/types';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
 import type { Location, Restaurant } from '@/types';
@@ -97,18 +97,21 @@ function context(overrides: Partial<AgentContext> = {}): AgentContext {
   };
 }
 
-describe('FinalGuard random recommendations', () => {
-  it('shuffles eligible primary candidates for open fallback recommendations', () => {
-    const first = applyFinalGuard(context()).primaryCandidates.map((item) => item.restaurant.id);
-    const second = applyFinalGuard(context()).primaryCandidates.map((item) => item.restaurant.id);
+describe('FinalGuard publication boundary', () => {
+  it('preserves the proposed primary order', () => {
+    const guarded = applyFinalGuard(context(), {
+      selectedIds: ['r3', 'r1', 'r4', 'r2'],
+      candidateIds: [],
+      explanation: 'proposal',
+      confidence: 0.9,
+    });
 
-    expect(first).toEqual(second);
-    expect(first).toEqual(['r2', 'r3', 'r1', 'r4']);
-    expect(first).not.toEqual(['r1', 'r2', 'r3', 'r4']);
+    expect(guarded.primaryCandidates.map((item) => item.restaurant.id))
+      .toEqual(['r3', 'r1', 'r4', 'r2']);
+    expect(guarded.verdict).toBe('accepted');
   });
 
-  // 开放推荐并发搜多个方向时，候选多的方向不能吃满转盘。
-  it('interleaves open recommendations across search directions', () => {
+  it('does not fill primary recommendations from unselected backup ids', () => {
     const guarded = applyFinalGuard(context({
       attempts: [
         fallbackAttempt({ keywords: ['火锅'] }),
@@ -120,14 +123,49 @@ describe('FinalGuard random recommendations', () => {
         candidate('h3', '火锅三', 98, 1),
         candidate('d1', '甜品一', 60, 2),
       ],
-    }));
+    }), {
+      selectedIds: ['h1'],
+      candidateIds: ['d1', 'h2', 'h3'],
+      explanation: 'proposal',
+      confidence: 0.9,
+    });
 
-    const sources = guarded.primaryCandidates.map((item) => item.sourceAttempt);
-    // 第二个方向必须在第二位就出场，而不是被三家火锅挤到最后。
-    expect(sources.slice(0, 2).sort()).toEqual([1, 2]);
+    expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['h1']);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id))
+      .toEqual(['d1', 'h2', 'h3']);
   });
 
-  it('keeps score ordering for explicit primary targets', () => {
+  it('does not promote candidateIds when selectedIds is omitted', () => {
+    const guarded = applyFinalGuard(context(), {
+      candidateIds: ['r2', 'r1'],
+      explanation: 'proposal',
+      confidence: 0.9,
+    });
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id))
+      .toEqual(['r2', 'r1']);
+  });
+
+  it('marks selected candidates above targetCount as filtered backups', () => {
+    const guarded = applyFinalGuard(context({ targetCount: 2 }), {
+      selectedIds: ['r3', 'r1', 'r4'],
+      candidateIds: [],
+      explanation: 'proposal',
+      confidence: 0.9,
+    });
+
+    expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['r3', 'r1']);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['r4']);
+    expect(guarded.verdict).toBe('filtered');
+    expect(guarded.violations).toContainEqual(expect.objectContaining({
+      code: 'PRIMARY_LIMIT_EXCEEDED',
+      candidateId: 'r4',
+      disposition: 'backup',
+    }));
+  });
+
+  it('keeps Runtime candidate order when the current workflow omits ids', () => {
     const guarded = applyFinalGuard(context({
       goal: goal({
         rawQuery: '想吃牛排',
@@ -243,7 +281,7 @@ describe('FinalGuard random recommendations', () => {
   });
 
   it('includes scoped authorization reasons in recommendation warnings', () => {
-    const final = finalizeRecommendations(context({
+    const assemblyContext = context({
       targetCount: 1,
       goal: goal({
         requestedItems: [{ name: '炸鸡', required: true, aliases: [] }],
@@ -262,7 +300,15 @@ describe('FinalGuard random recommendations', () => {
         keywords: ['小吃'],
         allowedForPrimary: true,
       })],
-    }));
+    });
+    const proposal = {
+      selectedIds: ['r1'],
+      candidateIds: ['r2', 'r3', 'r4'],
+      explanation: '已根据授权返回结果。',
+      confidence: 0.9,
+    };
+    const guarded = applyFinalGuard(assemblyContext, proposal);
+    const final = assembleRecommendations(assemblyContext, guarded, proposal);
 
     expect(final.restaurants).toHaveLength(1);
     expect(final.restaurants[0].recommendationWarnings?.join('')).toContain(
@@ -271,12 +317,7 @@ describe('FinalGuard random recommendations', () => {
   });
 });
 
-/**
- * POI 事实字段里没有菜单，所以「这家有柠檬茶」这种菜品级断言除非店名写着，
- * 否则永远验证不出来。严格准入在这类目标上构造性不可达——线上表现是广东出
- * 结果、成都武汉全军覆没。这里锁的就是那条补位路径。
- */
-describe('FinalGuard category-compatible backfill', () => {
+describe('FinalGuard evidence monotonicity', () => {
   function unverifiedCandidate(
     id: string,
     name: string,
@@ -307,7 +348,7 @@ describe('FinalGuard category-compatible backfill', () => {
     allowedForPrimary: true,
   });
 
-  it('promotes category-compatible candidates when strict admission finds nothing', () => {
+  it('keeps category-compatible unverified candidates in backup', () => {
     const guarded = applyFinalGuard(context({
       goal: lemonTeaGoal,
       attempts: [exactAttempt],
@@ -317,41 +358,93 @@ describe('FinalGuard category-compatible backfill', () => {
         unverifiedCandidate('c2', '蜜雪冰城', 90),
         unverifiedCandidate('c3', 'CoCo都可', 80),
       ],
-    }));
+    }), {
+      selectedIds: ['c1', 'c2', 'c3'],
+      candidateIds: [],
+      explanation: 'proposal',
+      confidence: 0.7,
+    });
 
-    expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['c1', 'c2', 'c3']);
-    expect(guarded.unmetConstraints.join('')).toContain('按品类匹配推荐');
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id))
+      .toEqual(['c1', 'c2', 'c3']);
+    expect(guarded.verdict).toBe('rejected');
+    expect(guarded.violations.map((item) => item.code))
+      .toEqual(['UNVERIFIED_EVIDENCE', 'UNVERIFIED_EVIDENCE', 'UNVERIFIED_EVIDENCE']);
   });
 
-  it('prefers strictly verified candidates and only backfills the shortfall', () => {
-    const verified = candidate('v1', '柠季·手打柠檬茶', 50);
-    verified.verification.itemMatches = [
-      { requestedItem: '柠檬茶', matchedBy: 'name', confidence: 0.95 },
-    ];
+  it('keeps the unverified backup warning ahead of ordinary warnings', () => {
+    const unverified = unverifiedCandidate('c1', '喜茶', 100);
+    unverified.verification.warnings = ['w1', 'w2', 'w3', 'w4', 'w5'];
+    const assemblyContext = context({
+      goal: lemonTeaGoal,
+      attempts: [exactAttempt],
+      targetCount: 1,
+      candidates: [unverified],
+    });
+    const proposal = {
+      selectedIds: ['c1'],
+      candidateIds: [],
+      explanation: 'proposal',
+      confidence: 0.7,
+    };
+    const guarded = applyFinalGuard(assemblyContext, proposal);
+    const final = assembleRecommendations(assemblyContext, guarded, proposal);
 
+    expect(final.candidates[0].recommendationWarnings?.[0])
+      .toContain('未验证为主推荐');
+  });
+
+  it('does not replace a rejected selection with a valid unselected candidate', () => {
+    const verified = candidate('v1', '柠季·手打柠檬茶', 100);
+    verified.verification.itemMatches = [{
+      requestedItem: '柠檬茶',
+      matchedBy: 'name',
+      confidence: 0.95,
+    }];
     const guarded = applyFinalGuard(context({
       goal: lemonTeaGoal,
       attempts: [exactAttempt],
-      targetCount: 2,
-      candidates: [verified, unverifiedCandidate('c1', '喜茶', 100)],
-    }));
+      targetCount: 1,
+      candidates: [unverifiedCandidate('c1', '喜茶', 90), verified],
+    }), {
+      selectedIds: ['c1'],
+      candidateIds: ['v1'],
+      explanation: 'proposal',
+      confidence: 0.7,
+    });
 
-    // 严格通过的排在前面，即便分数更低。
-    expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['v1', 'c1']);
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['c1', 'v1']);
   });
 
-  it('does not promote candidates without any category match', () => {
+  it('preserves the relative order of selected candidates that survive filtering', () => {
+    const rejected = unverifiedCandidate('c1', '喜茶', 100);
+    const first = candidate('v2', '第二个被提议但先展示', 20);
+    const second = candidate('v1', '第一个高分候选但后展示', 200);
+    first.verification.itemMatches = [{
+      requestedItem: '柠檬茶', matchedBy: 'name', confidence: 0.9,
+    }];
+    second.verification.itemMatches = [{
+      requestedItem: '柠檬茶', matchedBy: 'name', confidence: 0.9,
+    }];
     const guarded = applyFinalGuard(context({
       goal: lemonTeaGoal,
       attempts: [exactAttempt],
       targetCount: 3,
-      candidates: [unverifiedCandidate('c1', '某川菜馆', 100, [])],
-    }));
+      candidates: [second, rejected, first],
+    }), {
+      selectedIds: ['v2', 'c1', 'v1'],
+      candidateIds: [],
+      explanation: 'proposal',
+      confidence: 0.7,
+    });
 
-    expect(guarded.primaryCandidates).toHaveLength(0);
+    expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['v2', 'v1']);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['c1']);
   });
 
-  it('never promotes candidates carrying hard-constraint failures', () => {
+  it('removes candidates carrying hard-constraint failures from both partitions', () => {
     const blocked = unverifiedCandidate('c1', '喜茶', 100);
     blocked.verification.hardFailures = [
       { constraint: '距离', message: '超出步行距离', severity: 'error' },
@@ -362,12 +455,87 @@ describe('FinalGuard category-compatible backfill', () => {
       attempts: [exactAttempt],
       targetCount: 3,
       candidates: [blocked],
-    }));
+    }), {
+      selectedIds: ['c1'],
+      candidateIds: [],
+      explanation: 'proposal',
+      confidence: 0.7,
+    });
 
     expect(guarded.primaryCandidates).toHaveLength(0);
+    expect(guarded.backupCandidates).toHaveLength(0);
+    expect(guarded.violations[0]).toEqual(expect.objectContaining({
+      code: 'HARD_CONSTRAINT_FAILED',
+      disposition: 'removed',
+    }));
   });
 
-  it('never promotes candidates from an unauthorized broadened search', () => {
+  it('rechecks deterministic distance failures at publication time', () => {
+    const outside = candidate('far', '范围外餐厅', 100);
+    outside.restaurant.distance = 2500;
+
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        hardConstraints: [{
+          kind: 'distance',
+          label: '2 公里内',
+          value: 2000,
+          maxMeters: 2000,
+          strict: true,
+        }],
+      }),
+      candidates: [outside],
+    }), {
+      selectedIds: ['far'],
+      candidateIds: [],
+      explanation: 'proposal',
+      confidence: 0.7,
+    });
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toEqual([]);
+    expect(guarded.violations[0]).toEqual(expect.objectContaining({
+      code: 'HARD_CONSTRAINT_FAILED',
+      disposition: 'removed',
+    }));
+  });
+
+  it('downgrades a strict deterministic constraint with missing evidence to backup', () => {
+    const unknownDistance = candidate('unknown', '距离未知餐厅', 100);
+    unknownDistance.restaurant.distance = undefined;
+
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        hardConstraints: [{
+          kind: 'distance',
+          label: '2 公里内',
+          value: 2000,
+          maxMeters: 2000,
+          strict: true,
+        }],
+      }),
+      candidates: [unknownDistance],
+    }), {
+      selectedIds: ['unknown'],
+      candidateIds: [],
+      explanation: 'proposal',
+      confidence: 0.7,
+    });
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['unknown']);
+    expect(guarded.violations[0]).toEqual(expect.objectContaining({
+      code: 'UNVERIFIED_EVIDENCE',
+      disposition: 'backup',
+    }));
+  });
+
+  it('keeps safe candidates from an unauthorized broadened search in backup', () => {
+    const broadened = candidate('c1', '喜茶', 100);
+    broadened.verification.primaryEligible = false;
+    broadened.verification.itemMatches = [{
+      requestedItem: '柠檬茶', matchedBy: 'name', confidence: 0.9,
+    }];
     const guarded = applyFinalGuard(context({
       goal: { ...lemonTeaGoal, allowBroaden: false, authorizations: [] },
       attempts: [fallbackAttempt({
@@ -376,9 +544,32 @@ describe('FinalGuard category-compatible backfill', () => {
         allowedForPrimary: false,
       })],
       targetCount: 3,
-      candidates: [unverifiedCandidate('c1', '喜茶', 100)],
-    }));
+      candidates: [broadened],
+    }), {
+      selectedIds: ['c1'],
+      candidateIds: [],
+      explanation: 'proposal',
+      confidence: 0.7,
+    });
 
     expect(guarded.primaryCandidates).toHaveLength(0);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['c1']);
+    expect(guarded.violations[0].code).toBe('UNAUTHORIZED_PRIMARY_SCOPE');
+  });
+
+  it('reports unobserved and duplicate ids without selecting replacements', () => {
+    const guarded = applyFinalGuard(context(), {
+      selectedIds: ['r2', 'missing', 'r2'],
+      candidateIds: ['r1'],
+      explanation: 'proposal',
+      confidence: 0.7,
+    });
+
+    expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['r2']);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['r1']);
+    expect(guarded.violations.map((item) => item.code)).toEqual(expect.arrayContaining([
+      'UNOBSERVED_CANDIDATE_ID',
+      'DUPLICATE_CANDIDATE',
+    ]));
   });
 });

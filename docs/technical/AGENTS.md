@@ -16,6 +16,8 @@ rg -n "组件名|方案|权衡|迁移" docs/technical docs \
 - [Agent 架构根治决策（2026-08）](./agent-architecture-root-decision-2026-08.md) -
   orchestrator-workers、Claude Code 风格 Handler、Runtime、自然语言地点搜索、证据模型
   和迁移方案。
+- [Runtime FinalGuard 与结果装配](./runtime-final-guard.md) - Runtime 完成协议、单调
+  FinalGuard、纯 ResultAssembler、UI 发布边界和迁移期实现方案。
 
 历史 review、实施方案和完成报告继续保留在 `docs/` 与 `docs/archive/`，用于理解当前代码
 来源；文件顶部的状态说明决定其是否仍可作为实现依据。

@@ -315,6 +315,37 @@ export interface FinishRecommendation {
   confidence: number;
 }
 
+export type FinalGuardVerdict = 'accepted' | 'filtered' | 'rejected';
+
+export type FinalGuardViolationCode =
+  | 'UNOBSERVED_CANDIDATE_ID'
+  | 'DUPLICATE_CANDIDATE'
+  | 'STALE_CANDIDATE'
+  | 'HARD_CONSTRAINT_FAILED'
+  | 'VERIFICATION_FAILED'
+  | 'UNVERIFIED_EVIDENCE'
+  | 'PRIMARY_INELIGIBLE'
+  | 'PRIMARY_LIMIT_EXCEEDED'
+  | 'MISSING_SOURCE_ATTEMPT'
+  | 'UNAUTHORIZED_PRIMARY_SCOPE'
+  | 'REQUIRED_ITEM_UNSUPPORTED';
+
+export interface FinalGuardViolation {
+  code: FinalGuardViolationCode;
+  candidateId: string;
+  field: 'selectedIds' | 'candidateIds';
+  disposition: 'backup' | 'removed';
+  message: string;
+}
+
+export interface FinalGuardResult {
+  verdict: FinalGuardVerdict;
+  primaryCandidates: RestaurantCandidate[];
+  backupCandidates: RestaurantCandidate[];
+  unmetConstraints: string[];
+  violations: FinalGuardViolation[];
+}
+
 export type AgentAction =
   | {
       type: 'search';

@@ -69,16 +69,16 @@
   },
   {
     "id": "exact-dish-unverifiable",
-    "description": "菜品级目标，POI 无菜单字段：品类兼容的店必须能进主推荐，而不是追问",
+    "description": "菜品级目标，POI 无菜单字段：品类兼容但未核验的店只能作为候补并追问",
     "turns": [
       {
         "message": "我想喝柠檬茶",
         "stubGoal": { "primaryKeywords": ["柠檬茶"], "requestedItems": ["柠檬茶"] },
         "stubExpansion": { "related": ["奶茶"], "broadened": [] },
         "expect": {
-          "shouldAsk": false,
-          "minPrimary": 3,
-          "anyCuisine": ["冷饮店"],
+          "shouldAsk": true,
+          "maxPrimary": 0,
+          "minBackup": 3,
           "maxSearchRounds": 4
         }
       }

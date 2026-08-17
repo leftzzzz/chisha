@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-08-13",
+  "updatedAt": "2026-08-17",
   "totals": {
     "searchRounds": 25,
     "searchSteps": 22,
@@ -10,7 +10,7 @@
     "duplicateEvaluations": 11,
     "modelCalls": 0,
     "serialModelSteps": 0,
-    "askRate": 0.278
+    "askRate": 0.333
   },
   "cases": {
     "strict-distance-hotpot": {
@@ -88,7 +88,7 @@
       "searchSteps": 2,
       "searchRounds": 2,
       "duplicateEvaluations": 5,
-      "primaryCount": 5
+      "primaryCount": 0
     },
     "clarify-then-answer": {
       "passed": true,

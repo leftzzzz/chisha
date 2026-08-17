@@ -105,4 +105,11 @@ describe('agent 分层依赖方向', () => {
     );
     expect(describeEdges(violations)).toEqual([]);
   });
+
+  it('ResultAssembler 不反向拥有 FinalGuard', () => {
+    const violations = edges.filter((edge) =>
+      edge.from === 'resultAssembler.ts' && edge.to.startsWith('finalGuard')
+    );
+    expect(describeEdges(violations)).toEqual([]);
+  });
 });

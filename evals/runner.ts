@@ -228,6 +228,10 @@ function checkExpectations(
     failures.push(`主推荐 ${metrics.primaryCount} 家，多于允许的 ${expectation.maxPrimary} 家`);
   }
 
+  if (expectation.minBackup !== undefined && metrics.backupCount < expectation.minBackup) {
+    failures.push(`候补 ${metrics.backupCount} 家，少于要求的 ${expectation.minBackup} 家`);
+  }
+
   if (
     expectation.anyCuisine
     && !expectation.anyCuisine.some((cuisine) => cuisines.includes(cuisine))

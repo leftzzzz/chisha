@@ -11,8 +11,8 @@
  */
 
 import { AppState, AppAction, Restaurant } from '@/types';
-import { getRestaurantIdentityKeys, getRestaurantBrand } from '@/lib/restaurantIdentity';
-import { MAX_TURNTABLE_OPTIONS, MIN_TURNTABLE_OPTIONS, hasTurntableCapacity } from '@/lib/turntableOptions';
+import { getRestaurantIdentityKeys } from '@/lib/restaurantIdentity';
+import { MAX_TURNTABLE_OPTIONS, hasTurntableCapacity } from '@/lib/turntableOptions';
 
 /**
  * 初始状态
@@ -107,17 +107,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         action.payload.candidates,
         seenPrimaryKeys
       );
-      // 主推荐不足以转动转盘时，先用候补补到最低可转数量。
-      // 否则会出现"1 家推荐 + 20 家候补躺在旁边、转盘点了没反应"。
-      const turntableFill = dedupedTurntable.length >= MIN_TURNTABLE_OPTIONS
-        ? []
-        : dedupedCandidates.slice(0, MIN_TURNTABLE_OPTIONS - dedupedTurntable.length);
-      const filledTurntable = [...dedupedTurntable, ...turntableFill];
-      const turntable = filledTurntable.slice(0, MAX_TURNTABLE_OPTIONS);
+      const turntable = dedupedTurntable.slice(0, MAX_TURNTABLE_OPTIONS);
       const seenTurntableKeys = new Set<string>();
       addRestaurantIdentityKeys(turntable, seenTurntableKeys);
       const candidates = dedupeRestaurants(
-        [...filledTurntable.slice(MAX_TURNTABLE_OPTIONS), ...dedupedCandidates],
+        dedupedCandidates,
         seenTurntableKeys
       );
 
@@ -214,10 +208,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
      *
      * 逻辑:
      * 1. 删除指定索引的餐厅，移到 removedRestaurants
-     * 2. 如果候补池有餐厅，自动补位
-     * 3. 如果删除的是选中的餐厅,重置选中索引
-     * 4. 如果删除的餐厅在选中餐厅之前,选中索引-1
-     * 5. 如果餐厅数量不足,转移到 INPUT 状态
+     * 2. 如果删除的是选中的餐厅,重置选中索引
+     * 3. 如果删除的餐厅在选中餐厅之前,选中索引-1
+     * 4. 如果餐厅数量不足,转移到 INPUT 状态
      */
     case 'DELETE_RESTAURANT': {
       const indexToDelete = action.payload;
@@ -507,20 +500,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
 function dedupeRestaurants(restaurants: Restaurant[], seenKeys = new Set<string>()): Restaurant[] {
   const deduped: Restaurant[] = [];
-  const brandSeen = new Map<string, string>(); // brand → first restaurant id
 
   for (const restaurant of restaurants) {
     const keys = getRestaurantIdentityKeys(restaurant);
     if (keys.some((key) => seenKeys.has(key))) {
       continue;
-    }
-
-    const brand = getRestaurantBrand(restaurant);
-    if (brand) {
-      if (brandSeen.has(brand)) {
-        continue;
-      }
-      brandSeen.set(brand, restaurant.id);
     }
 
     deduped.push(restaurant);

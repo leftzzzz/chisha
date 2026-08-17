@@ -107,6 +107,29 @@ interface SubagentTaskSnapshot {
 - 硬距离、明确排除项、停业、安全与用户授权是 Runtime 可执行的确定性边界，任何
   Agent 和工具都不能绕过。
 
+## 最终推荐发布边界
+
+- 任何返回主推荐的正常完成、预算耗尽、收敛或部分结果路径，都必须由 Runtime 在
+  ResultAssembler 之前显式调用同一个 FinalGuard。不得让装配器反向拥有 Guard。
+- FinalGuard 是单调边界：只能删除、降级、分区和保序精确去重，不能自动补位、生成
+  替代候选、重新排序、随机打散、品牌折叠或改变 evidence verdict。
+- proposal 显式提供 `selectedIds` 时，主推荐只能从这些 id 中产生；过滤不合格 id 后
+  不得从其他候选自动补足。保留下来的候选维持 proposal 相对顺序。
+- FinalGuard 必须按当前餐厅事实重新计算可确定的距离、预算和营业状态硬约束，不能只
+  信任候选已有的 `hardFailures`。明确失败从发布结果删除；严格约束字段未知只能作为候补。
+- `unverified` 只能进入明确标注的不确定候补；`failed`、过期或明确违反硬约束的候选
+  不得对外发布。未授权 broaden 满足候补安全条件时只能作为候补。
+- Runtime 必须记录 FinalGuard verdict、实际主推荐/候补 id 和结构化 violations，最终
+  发布 trace 必须能与该 verdict 对照。
+- ResultAssembler 只接收 guarded result，执行字段映射和基于已有事实的展示格式处理；
+  不得调用 FinalGuard、推断搜索策略或改变候选集合和顺序。
+- UI reducer 可以裁剪固定展示上限和去除同一物理地点，但不能用候补补足转盘、按品牌
+  折叠不同门店或改变 primary/backup 分区，超出展示上限的 primary 也不得重标为 backup。
+  候补进入转盘必须来自显式用户动作。
+- 当前确定性 workflow 对不合格 finish proposal 执行上述单调降级，并复用现有追问/
+  安全结束逻辑。目标 model-tool loop 落地后，可修正的拒绝必须作为结构化 observation
+  回填同一 run；Runtime 不能代替 Lead Agent 选择修正动作。
+
 ## Domain Tool Contract
 
 Lead Agent 和 Search subagent 只接触少量、面向任务的高层 Domain tools。地点召回只

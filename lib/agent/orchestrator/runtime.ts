@@ -14,7 +14,10 @@ import { runGoalUnderstandingModel } from '../models/goalUnderstandingModel';
 import { runSearchReplan, summarizeExhaustedSearch } from '../models/searchReplanModel';
 import { evaluateSearchResult, mergeCandidates } from '../evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from '../guards';
-import { isPrimaryRecommendationEligible } from '../finalGuard';
+import {
+  applyFinalGuard,
+  isPrimaryRecommendationEligible,
+} from '../finalGuard';
 import { createTurnLogger } from '../turnLogger';
 import { summarizeTurnMetrics, type MetricsSink } from '../metrics';
 import { describeFinish, internalFinishNote, type FinishReason } from '../finishReason';
@@ -44,7 +47,7 @@ import {
   hasPromotedBroadenedPrimaryCandidates,
   promoteAuthorizedBroadenedResults,
 } from '../broadenAdmission';
-import { finalizeRecommendations } from '../resultAssembler';
+import { assembleRecommendations } from '../resultAssembler';
 import { isGenericSearchKeyword, normalizeSearchKeywords } from '../poiTaxonomy';
 import { applyKeywordExpansion, runKeywordExpansionModel } from '../models/keywordExpansionModel';
 import { runEvaluationModel, type EvaluationModelInput } from '../models/evaluationModel';
@@ -69,6 +72,8 @@ import type {
   ConversationMode,
   EmitAgentEvent,
   EvaluationModelOutput,
+  FinalGuardResult,
+  FinishRecommendation,
   GoalPatch,
   PendingQuestion,
   RestaurantCandidate,
@@ -552,6 +557,7 @@ function buildFinishAction(
     selectedIds: withSelectedIds
       ? context.candidates
           .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
+          .slice(0, context.targetCount)
           .map((candidate) => candidate.restaurant.id)
       : undefined,
     explanation: internalFinishNote(reason),
@@ -1258,8 +1264,7 @@ function commitSearchPlanResult(
   mergeCandidates(context, evaluated.acceptedCandidates);
 
   const verdicts = verdictGuard.output.verdicts;
-  // 口径与 finalGuard 一致：observation.accepted 是"会被当成主推荐展示的家数"。
-  // 用严格准入会在品类补位的场景下报 0，而实际展示了若干家——排障时极具误导性。
+  // 口径与 FinalGuard 严格准入一致：observation.accepted 是可进入主推荐的家数。
   const acceptedPrimaryIds = evaluated.acceptedCandidates
     .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
     .map((candidate) => candidate.restaurant.id);
@@ -1584,12 +1589,14 @@ function finish(
     total: context.candidates.length,
   });
 
-  const finalResult = finalizeRecommendations(context, {
+  const proposal: FinishRecommendation = {
     selectedIds: action.selectedIds,
     candidateIds: action.candidateIds,
     explanation: describeFinish(action.reason, action.explanation),
     confidence: action.confidence,
-  });
+  };
+  const guarded = runFinalGuard(context, proposal, 'final');
+  const finalResult = assembleRecommendations(context, guarded, proposal);
 
   if (finalResult.restaurants.length === 0 && options.allowClarification !== false) {
     return askOrConverge(context, buildNoPrimaryQuestion(context), emit);
@@ -1599,7 +1606,7 @@ function finish(
   context.lastQuestionFingerprint = undefined;
   context.consecutiveAskTurns = 0;
 
-  const warnings = buildFinalWarnings(context);
+  const warnings = buildFinalWarnings(context, guarded);
   const finalTrace = appendTrace(context, 'final', {
     output: {
       restaurantIds: finalResult.restaurants.map((restaurant) => restaurant.id),
@@ -1626,17 +1633,27 @@ function finish(
 }
 
 /** 结果可用但有瑕疵时的提示。 */
-function buildFinalWarnings(context: AgentV3Context): string[] {
-  return context.evaluationFailed
-    ? ['部分候选餐厅没能完成验证，已只保留通过验证的结果。']
-    : [];
+function buildFinalWarnings(
+  context: AgentV3Context,
+  guarded: FinalGuardResult
+): string[] {
+  return [
+    ...(context.evaluationFailed
+      ? ['部分候选餐厅没能完成验证，已只保留通过验证的结果。']
+      : []),
+    ...(guarded.verdict === 'accepted'
+      ? []
+      : ['部分提议候选未通过最终校验，已降为候补或移除。']),
+  ];
 }
 
 function buildPausedResult(context: AgentV3Context, question: PendingQuestion): AgentFinalResult {
-  const partialResult = finalizeRecommendations(context, {
+  const proposal: FinishRecommendation = {
     explanation: question.reason ?? '需要用户补充信息后继续搜索。',
     confidence: 0.4,
-  });
+  };
+  const guarded = runFinalGuard(context, proposal, 'partial');
+  const partialResult = assembleRecommendations(context, guarded, proposal);
   const questionTrace = appendTrace(context, 'question', {
     output: {
       question,
@@ -1657,6 +1674,29 @@ function buildPausedResult(context: AgentV3Context, question: PendingQuestion): 
       pendingQuestion: question,
     },
   };
+}
+
+function runFinalGuard(
+  context: AgentV3Context,
+  proposal: FinishRecommendation,
+  mode: 'final' | 'partial'
+): FinalGuardResult {
+  const guarded = applyFinalGuard(context, proposal);
+  appendTrace(context, 'guard_decision', {
+    input: {
+      kind: 'final',
+      mode,
+      selectedIds: proposal.selectedIds,
+      candidateIds: proposal.candidateIds,
+    },
+    output: {
+      verdict: guarded.verdict,
+      primaryIds: guarded.primaryCandidates.map((candidate) => candidate.restaurant.id),
+      backupIds: guarded.backupCandidates.map((candidate) => candidate.restaurant.id),
+      violations: guarded.violations,
+    },
+  });
+  return guarded;
 }
 
 function candidateToVerdict(candidate: RestaurantCandidate): CandidateVerdict {
