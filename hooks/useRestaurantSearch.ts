@@ -113,7 +113,7 @@ function translateStatusMessage(message: string): string {
   if (message.includes('KeywordExpansion')) {
     return '正在联想相关搜索词...';
   }
-  if (message.includes('EvaluationAgent')) {
+  if (message.includes('EvaluationModel')) {
     return '正在验证推荐结果...';
   }
   return message;

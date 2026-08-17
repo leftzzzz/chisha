@@ -19,7 +19,7 @@ export interface ChatCompletionFunctionResponse {
   }>;
 }
 
-export function parseModelJsonArguments(args: string, agentName: string): unknown {
+export function parseModelJsonArguments(args: string, modelRole: string): unknown {
   const candidates = Array.from(new Set([
     args.trim(),
     extractJsonObject(args.trim()),
@@ -35,7 +35,7 @@ export function parseModelJsonArguments(args: string, agentName: string): unknow
     }
   }
 
-  throw new Error(`${agentName} returned malformed function arguments JSON`);
+  throw new Error(`${modelRole} returned malformed function arguments JSON`);
 }
 
 export function extractModelFunctionArguments(

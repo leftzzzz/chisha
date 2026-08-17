@@ -200,10 +200,10 @@ export function normalizeStoredPendingQuestion(value: unknown): unknown {
 }
 
 /**
- * GoalUnderstandingAgent 的输出。
+ * GoalUnderstandingModel 的输出。
  *
  * 刻意不含 `nextAction`：下一步做什么由 orchestrator/policy 决定，
- * 子 Agent 说了不算。历史上它输出过该字段，但全仓没有任何消费点。
+ * 模型角色 说了不算。历史上它输出过该字段，但全仓没有任何消费点。
  */
 export const GoalUnderstandingOutputSchema = z.object({
   goal: UserGoalSchema.optional(),

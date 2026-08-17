@@ -1,9 +1,8 @@
 # Agent Architecture Review
 
-> ⚠️ **已过期，仅作演进记录。** 本文描述的 Agent 架构已被后续两轮改造取代：
-> 当前形态见 `docs/agent-loop-shape-review-2026-08.md` 与
-> `docs/Agent-Loop-形态重构技术方案-2026-08.md`。
-> 文中的 supervisorAction.ts 等文件已不存在。
+> **历史评审，仅作演进记录。** 文中的 `supervisorAction.ts` 等文件已不存在，后续
+> workflow 改造也不再是目标 Agent 架构。当前依据见
+> `docs/technical/agent-architecture-root-decision-2026-08.md`。
 
 > 基于当前代码的 Agent 架构审计与问题分析。本文重点回答：现有 Agent 为什么难以自主决策、上下文管理为什么脆弱、哪些 runtime 硬约束已经越界，以及下一步应如何治理。
 
@@ -589,4 +588,3 @@ P2：
 3. 修改 `/api/agent/chat`：只要 sessionId 有效就续跑，由 Supervisor 判断是 patch 旧 goal 还是 start new goal。
 
 这三项可以明显提升可调试性和多轮正确性，同时不会大幅影响现有 UI 和推荐流程。
-

@@ -71,7 +71,7 @@ const ExplanationSchema = z.preprocess((value) => {
   return typeof value === 'string' ? value : undefined;
 }, z.string().min(1).max(500).default('已完成候选评估。').catch('已完成候选评估。'));
 
-export const EvaluationAgentOutputSchema = z.object({
+export const EvaluationModelOutputSchema = z.object({
   verdicts: VerdictListSchema,
   selectedIds: StringArraySchema,
   candidateIds: StringArraySchema,

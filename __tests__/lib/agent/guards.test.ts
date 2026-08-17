@@ -1,5 +1,10 @@
-import { applyVerdictGuard } from '@/lib/agent/guards';
-import type { EvaluationAgentOutput, SearchPlan, UserGoal } from '@/lib/agent/types';
+import { applyVerdictGuard, validateSearchPlan } from '@/lib/agent/guards';
+import type {
+  EvaluationModelOutput,
+  PolicyContext,
+  SearchPlan,
+  UserGoal,
+} from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
 
 const location: Location = { lat: 31.2304, lng: 121.4737 };
@@ -44,9 +49,41 @@ const exactPlan: SearchPlan = {
   reason: 'exact',
 };
 
+describe('SearchAction authorization guard', () => {
+  it('rejects a tampered primary flag when Runtime derivation fails closed', () => {
+    const scopedGoal = goal({ goalId: 'goal_1' });
+    const plan: SearchPlan = {
+      keywords: ['日本料理'],
+      radiusMeters: 1800,
+      searchIntent: 'broadened',
+      allowedForPrimary: true,
+      reason: '扩大到日本料理。',
+      searchAction: {
+        id: 'action_1',
+        query: '日本料理',
+        supportsGoalIds: ['goal_1'],
+        relation: 'broader',
+        rationale: '扩大到日本料理。',
+      },
+    };
+    const context: PolicyContext = {
+      goal: scopedGoal,
+      attempts: [],
+      candidates: [],
+      location,
+      targetCount: 8,
+      maxSearchCalls: 4,
+    };
+
+    expect(validateSearchPlan(plan, context)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'UNAUTHORIZED_BROADENING' }),
+    ]));
+  });
+});
+
 describe('Runtime verdict guard', () => {
   it('does not correct failed Agent verdicts with deterministic semantic matching', () => {
-    const evaluation: EvaluationAgentOutput = {
+    const evaluation: EvaluationModelOutput = {
       verdicts: [{
         restaurantId: 'r1',
         status: 'failed',

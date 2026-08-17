@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
-  callJsonFunctionAgent,
-  parseJsonFunctionAgentResponse,
+  callStructuredModel,
+  parseStructuredModelResponse,
 } from '@/lib/agent/modelClient';
 import { fetchWithTimeout } from '@/lib/withTimeout';
 import { AgentError } from '@/lib/agent/types';
@@ -36,7 +36,7 @@ describe('modelClient', () => {
   });
 
   it('parses repairable truncated function arguments before surfacing an error', () => {
-    const parsed = parseJsonFunctionAgentResponse(
+    const parsed = parseStructuredModelResponse(
       {
         choices: [{
           finish_reason: 'length',
@@ -49,7 +49,7 @@ describe('modelClient', () => {
         }],
       },
       {
-        agentName: 'TestAgent',
+        modelRole: 'TestAgent',
         functionName: 'testFunction',
         schema: TestSchema,
       }
@@ -65,8 +65,8 @@ describe('modelClient', () => {
       .mockResolvedValueOnce(modelResponse('{"value":"first"', 'length'))
       .mockResolvedValueOnce(modelResponse('{"value":"retry"', 'length'));
 
-    const result = await callJsonFunctionAgent({
-      agentName: 'TestAgent',
+    const result = await callStructuredModel({
+      modelRole: 'TestAgent',
       apiKey: 'test-key',
       baseUrl: 'https://example.test/v1',
       model: 'test-model',
@@ -113,8 +113,8 @@ describe('modelClient', () => {
       .mockResolvedValueOnce(modelResponse('{}'))
       .mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
 
-    const result = await callJsonFunctionAgent({
-      agentName: 'TestAgent',
+    const result = await callStructuredModel({
+      modelRole: 'TestAgent',
       apiKey: 'test-key',
       baseUrl: 'https://example.test/v1',
       model: 'test-model',
@@ -143,8 +143,8 @@ describe('modelClient', () => {
   it('omits temperature for GPT-5 reasoning models', async () => {
     fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
 
-    await callJsonFunctionAgent({
-      agentName: 'TestAgent',
+    await callStructuredModel({
+      modelRole: 'TestAgent',
       apiKey: 'test-key',
       baseUrl: 'https://example.test/v1',
       model: 'gpt-5.2',
@@ -168,8 +168,8 @@ describe('modelClient', () => {
   it('disables Qwen thinking mode when forcing a tool call', async () => {
     fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
 
-    await callJsonFunctionAgent({
-      agentName: 'TestAgent',
+    await callStructuredModel({
+      modelRole: 'TestAgent',
       apiKey: 'test-key',
       baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       model: 'qwen3.6-flash-2026-04-16',
@@ -207,8 +207,8 @@ describe('modelClient', () => {
         },
       }));
 
-    await expect(callJsonFunctionAgent({
-      agentName: 'TestAgent',
+    await expect(callStructuredModel({
+      modelRole: 'TestAgent',
       apiKey: 'test-key',
       baseUrl: 'https://example.test/v1',
       model: 'test-model',
@@ -237,7 +237,7 @@ describe('modelClient', () => {
         errorResponse({ error: { message: 'Rate limit reached' } }, 429)
       );
 
-      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+      const error = await callStructuredModel(agentOptions()).catch((caught) => caught);
 
       expect(error).toBeInstanceOf(AgentError);
       expect(error.code).toBe('RATE_LIMITED');
@@ -249,7 +249,7 @@ describe('modelClient', () => {
         errorResponse({ error: { message: 'upstream exploded' } }, 500)
       );
 
-      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+      const error = await callStructuredModel(agentOptions()).catch((caught) => caught);
 
       expect(error).toBeInstanceOf(AgentError);
       expect(error.code).toBe('MODEL_UNAVAILABLE');
@@ -262,7 +262,7 @@ describe('modelClient', () => {
         errorResponse({ error: { message: 'Free quota exhausted' } }, 403)
       );
 
-      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+      const error = await callStructuredModel(agentOptions()).catch((caught) => caught);
 
       expect(error).toBeInstanceOf(AgentError);
       expect(error.code).toBe('MODEL_QUOTA_EXHAUSTED');
@@ -274,7 +274,7 @@ describe('modelClient', () => {
         errorResponse({ error: { message: 'invalid api key' } }, 401)
       );
 
-      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+      const error = await callStructuredModel(agentOptions()).catch((caught) => caught);
 
       expect(error).toBeInstanceOf(AgentError);
       expect(error.code).toBe('CONFIG_MISSING');
@@ -286,7 +286,7 @@ describe('modelClient', () => {
         errorResponse({ error: { message: 'bad request' } }, 400)
       );
 
-      const error = await callJsonFunctionAgent(agentOptions()).catch((caught) => caught);
+      const error = await callStructuredModel(agentOptions()).catch((caught) => caught);
 
       expect(error).toBeInstanceOf(AgentError);
       expect(error.retryable).toBe(false);
@@ -296,7 +296,7 @@ describe('modelClient', () => {
 
 function agentOptions() {
   return {
-    agentName: 'TestAgent',
+    modelRole: 'TestAgent',
     apiKey: 'test-key',
     baseUrl: 'https://example.test/v1',
     model: 'test-model',

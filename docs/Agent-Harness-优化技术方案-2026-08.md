@@ -5,6 +5,8 @@
 > guard 不再改写也不再请求重写。见
 > `docs/agent-loop-shape-review-2026-08.md` 与
 > `docs/Agent-Loop-形态重构技术方案-2026-08.md`。
+> 上述文件只解释当前 workflow 的形成过程；目标 Agent 架构见
+> `docs/technical/agent-architecture-root-decision-2026-08.md`。
 
 编制日期：2026-08-12
 依据文档：`docs/agent-harness-review-2026-08.md`

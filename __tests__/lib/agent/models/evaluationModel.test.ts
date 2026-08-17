@@ -86,7 +86,7 @@ function mockEvaluationResponses(responses: Array<{
   global.fetch = fetchMock as jest.Mock;
 }
 
-describe('EvaluationAgent', () => {
+describe('EvaluationModel', () => {
   beforeEach(() => {
     jest.resetModules();
     process.env.OPENAI_API_KEY = 'test-key';
@@ -129,8 +129,8 @@ describe('EvaluationAgent', () => {
       unmetConstraints: ['Agent 判定未验证到牛排。'],
     });
 
-    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
-    const output = await runEvaluationAgent({
+    const { runEvaluationModel } = await import('@/lib/agent/models/evaluationModel');
+    const output = await runEvaluationModel({
       goal: goal(),
       plan: exactPlan,
       restaurants: [
@@ -160,14 +160,14 @@ describe('EvaluationAgent', () => {
   it('requires OPENAI_API_KEY instead of falling back to hardcoded validation', async () => {
     delete process.env.OPENAI_API_KEY;
 
-    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
+    const { runEvaluationModel } = await import('@/lib/agent/models/evaluationModel');
 
-    await expect(runEvaluationAgent({
+    await expect(runEvaluationModel({
       goal: goal(),
       plan: exactPlan,
       restaurants: [restaurant('r1', '城中牛排馆', '西餐厅', 300)],
       targetCount: 8,
-    })).rejects.toThrow('EvaluationAgent requires OPENAI_API_KEY');
+    })).rejects.toThrow('EvaluationModel requires OPENAI_API_KEY');
   });
 
   it('defaults omitted verdict fields from model output instead of failing the whole response', async () => {
@@ -183,8 +183,8 @@ describe('EvaluationAgent', () => {
       selectedIds: ['r1'],
     });
 
-    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
-    const output = await runEvaluationAgent({
+    const { runEvaluationModel } = await import('@/lib/agent/models/evaluationModel');
+    const output = await runEvaluationModel({
       goal: goal(),
       plan: exactPlan,
       restaurants: [restaurant('r1', '城中牛排馆', '西餐厅', 300)],
@@ -229,8 +229,8 @@ describe('EvaluationAgent', () => {
       },
     ]);
 
-    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
-    const output = await runEvaluationAgent({
+    const { runEvaluationModel } = await import('@/lib/agent/models/evaluationModel');
+    const output = await runEvaluationModel({
       goal: goal(),
       plan: exactPlan,
       restaurants: [restaurant('r1', '城中牛排馆', '西餐厅', 300)],
@@ -267,7 +267,7 @@ describe('EvaluationAgent', () => {
       unmetConstraints: [],
     });
 
-    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
+    const { runEvaluationModel } = await import('@/lib/agent/models/evaluationModel');
     const request = {
       goal: goal(),
       plan: exactPlan,
@@ -275,8 +275,8 @@ describe('EvaluationAgent', () => {
       targetCount: 8,
     };
 
-    const first = await runEvaluationAgent(request);
-    const second = await runEvaluationAgent(request);
+    const first = await runEvaluationModel(request);
+    const second = await runEvaluationModel(request);
 
     expect(first.source).toBe('model');
     expect(second.source).toBe('model');
@@ -292,10 +292,10 @@ describe('EvaluationAgent', () => {
       unmetConstraints: [],
     });
 
-    const { runEvaluationAgent } = await import('@/lib/agent/subagents/evaluationAgent');
+    const { runEvaluationModel } = await import('@/lib/agent/models/evaluationModel');
     const metricsSink: { modelCallMetrics?: unknown[] } = {};
 
-    await runEvaluationAgent({
+    await runEvaluationModel({
       metricsSink,
       goal: goal(),
       plan: exactPlan,
@@ -305,7 +305,7 @@ describe('EvaluationAgent', () => {
 
     expect(metricsSink.modelCallMetrics).toHaveLength(1);
     expect(metricsSink.modelCallMetrics?.[0]).toEqual(
-      expect.objectContaining({ agentName: 'EvaluationAgent', ok: true, attempts: 1 })
+      expect.objectContaining({ modelRole: 'EvaluationModel', ok: true, attempts: 1 })
     );
   });
 });

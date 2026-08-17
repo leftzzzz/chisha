@@ -1,8 +1,8 @@
-jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
-  const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
+jest.mock('@/lib/agent/models/goalUnderstandingModel', () => {
+  const actual = jest.requireActual('@/lib/agent/models/goalUnderstandingModel');
   return {
     ...actual,
-    runGoalUnderstandingAgent: jest.fn(async (input: {
+    runGoalUnderstandingModel: jest.fn(async (input: {
       message: string;
       previousGoal?: import('@/lib/agent/types').UserGoal;
       pendingQuestion?: import('@/lib/agent/types').PendingQuestion;
@@ -10,7 +10,7 @@ jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
       limits?: unknown;
     }, context?: import('@/lib/agent/types').AgentContext) => {
       if (input.goal && input.limits) {
-        return actual.runGoalUnderstandingAgent(input, context);
+        return actual.runGoalUnderstandingModel(input, context);
       }
 
       if (input.previousGoal && input.pendingQuestion) {
@@ -86,8 +86,8 @@ jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
   };
 });
 
-jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
-  runEvaluationAgent: jest.fn(async (input: {
+jest.mock('@/lib/agent/models/evaluationModel', () => ({
+  runEvaluationModel: jest.fn(async (input: {
     plan: import('@/lib/agent/types').SearchPlan;
     restaurants: Restaurant[];
     targetCount: number;
@@ -131,8 +131,8 @@ jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
 }));
 
 import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
-import { runGoalUnderstandingAgent } from '@/lib/agent/subagents/goalUnderstandingAgent';
-import { runEvaluationAgent } from '@/lib/agent/subagents/evaluationAgent';
+import { runGoalUnderstandingModel } from '@/lib/agent/models/goalUnderstandingModel';
+import { runEvaluationModel } from '@/lib/agent/models/evaluationModel';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
 import { AgentError, AgentRunError } from '@/lib/agent/types';
 import type { AgentEvent, AgentInput, SearchPlan, UserGoal } from '@/lib/agent/types';
@@ -262,7 +262,7 @@ describe('runSearchAgentV3', () => {
     );
     expect(first.paused).not.toBe(true);
 
-    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    const supervisorMock = runGoalUnderstandingModel as jest.Mock;
     supervisorMock.mockResolvedValueOnce({
       patch: {
         addConstraints: [{
@@ -291,7 +291,7 @@ describe('runSearchAgentV3', () => {
       .toContain('当前目标不一致');
   });
 
-  it('limits EvaluationAgent candidates to the target count plus buffer by default', async () => {
+  it('limits EvaluationModel candidates to the target count plus buffer by default', async () => {
     await runSearchAgentV3(
       input(goal({
         rawQuery: 'pizza',
@@ -304,8 +304,8 @@ describe('runSearchAgentV3', () => {
       )
     );
 
-    expect(runEvaluationAgent).toHaveBeenCalledTimes(2);
-    const evaluationInputs = (runEvaluationAgent as jest.Mock).mock.calls.map((call) => call[0]);
+    expect(runEvaluationModel).toHaveBeenCalledTimes(2);
+    const evaluationInputs = (runEvaluationModel as jest.Mock).mock.calls.map((call) => call[0]);
     const evaluatedRestaurants = evaluationInputs.flatMap((item) => item.restaurants);
     expect(evaluationInputs.every((item) => item.restaurants.length <= 6)).toBe(true);
     expect(evaluatedRestaurants).toHaveLength(12);
@@ -314,7 +314,7 @@ describe('runSearchAgentV3', () => {
     );
   });
 
-  it('pre-filters deterministic hard constraint failures before EvaluationAgent runs', async () => {
+  it('pre-filters deterministic hard constraint failures before EvaluationModel runs', async () => {
     await runSearchAgentV3(
       input(goal({
         rawQuery: 'pizza nearby',
@@ -339,8 +339,8 @@ describe('runSearchAgentV3', () => {
       ]
     );
 
-    expect(runEvaluationAgent).toHaveBeenCalledTimes(2);
-    const evaluationInputs = (runEvaluationAgent as jest.Mock).mock.calls.map((call) => call[0]);
+    expect(runEvaluationModel).toHaveBeenCalledTimes(2);
+    const evaluationInputs = (runEvaluationModel as jest.Mock).mock.calls.map((call) => call[0]);
     const evaluatedRestaurants = evaluationInputs.flatMap((item) => item.restaurants);
     expect(evaluationInputs.every((item) => item.restaurants.length <= 6)).toBe(true);
     expect(evaluatedRestaurants).toHaveLength(12);
@@ -507,6 +507,13 @@ describe('runSearchAgentV3', () => {
         primaryKeywords: ['炸鸡'],
         broadenedKeywords: ['小吃'],
         allowBroaden: true,
+        authorizations: [{
+          id: 'auth_category_broaden_test',
+          kind: 'category_broaden',
+          createdAt: 1,
+          reason: '用户授权放宽到相邻品类。',
+          constraints: { allowedSearchIntents: ['broadened'] },
+        }],
       })),
       () => undefined,
       async (plan) => plan.searchIntent === 'broadened'
@@ -630,7 +637,7 @@ describe('runSearchAgentV3', () => {
   // 模型生成的选项通常只有文案没有 effect。这条锁住"点这类选项要把 label
   // 当用户回答交给模型"，而不是报 INVALID_OPTION——线上正是这么挂的。
   it('delegates an effect-less option to the Supervisor as the user answer', async () => {
-    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    const supervisorMock = runGoalUnderstandingModel as jest.Mock;
     const defaultSupervisor = supervisorMock.getMockImplementation();
     supervisorMock.mockClear();
     supervisorMock.mockImplementationOnce(async (plannerInput: { message: string }) => ({
@@ -683,7 +690,7 @@ describe('runSearchAgentV3', () => {
   // 死循环的直接不变量：同一个问题不能连问两次。线上就是靠这条缺失，
   // 把用户锁在「想吃点什么？」上出不去的。
   it('converges instead of asking the same question twice', async () => {
-    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    const supervisorMock = runGoalUnderstandingModel as jest.Mock;
     const defaultSupervisor = supervisorMock.getMockImplementation();
     supervisorMock.mockClear();
     const stuckQuestion = {
@@ -736,7 +743,7 @@ describe('runSearchAgentV3', () => {
   });
 
   it('uses fallback search when the Supervisor returns an open recommendation goal', async () => {
-    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    const supervisorMock = runGoalUnderstandingModel as jest.Mock;
     supervisorMock.mockClear();
     supervisorMock.mockResolvedValueOnce({
       goal: goal({
@@ -744,7 +751,7 @@ describe('runSearchAgentV3', () => {
         requestedItems: [],
         acceptableCategories: [],
         primaryKeywords: [],
-        // 站位于 KeywordExpansionAgent 的产出：开放推荐的探索方向只能来自模型，
+        // 站位于 KeywordExpansionModel 的产出：开放推荐的探索方向只能来自模型，
         // 确定性模式下它不产出方向（那两张硬编码词表已随阶段 4 删除）。
         broadenedTargets: [
           { keyword: '火锅', poiTypes: ['050117'] },
@@ -816,7 +823,7 @@ describe('runSearchAgentV3', () => {
   });
 
   it('fails the turn instead of guessing when the Supervisor is unavailable', async () => {
-    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    const supervisorMock = runGoalUnderstandingModel as jest.Mock;
     supervisorMock.mockRejectedValueOnce(
       new AgentError('Free quota exhausted', 'MODEL_QUOTA_EXHAUSTED', false)
     );
@@ -849,9 +856,9 @@ describe('runSearchAgentV3', () => {
   });
 
   it('does not fall back to raw-query search when the Supervisor fails', async () => {
-    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    const supervisorMock = runGoalUnderstandingModel as jest.Mock;
     supervisorMock.mockRejectedValueOnce(
-      new AgentError('GoalUnderstandingAgent API failed: 500', 'MODEL_UNAVAILABLE', true)
+      new AgentError('GoalUnderstandingModel API failed: 500', 'MODEL_UNAVAILABLE', true)
     );
     const searchedPlans: SearchPlan[] = [];
 
@@ -1081,6 +1088,13 @@ describe('runSearchAgentV3', () => {
           { keyword: '东南亚菜', poiTypes: ['050206', '050217'], confidence: 0.8 },
         ],
         allowBroaden: true,
+        authorizations: [{
+          id: 'auth_category_broaden_targets_test',
+          kind: 'category_broaden',
+          createdAt: 1,
+          reason: '用户授权放宽到相邻品类。',
+          constraints: { allowedSearchIntents: ['broadened'] },
+        }],
       })),
       (event) => events.push(event),
       async (plan) => {
@@ -1109,7 +1123,7 @@ describe('runSearchAgentV3', () => {
   });
 
   it('fails the turn when candidate verification is unavailable and nothing passed', async () => {
-    const evaluationMock = runEvaluationAgent as jest.Mock;
+    const evaluationMock = runEvaluationModel as jest.Mock;
     const defaultImplementation = evaluationMock.getMockImplementation();
     // 真实链路上 429 由 modelClient 抛成带码的 AgentError；这里照同一个契约来。
     evaluationMock.mockRejectedValue(
@@ -1163,7 +1177,7 @@ describe('runSearchAgentV3', () => {
     }));
 
     const searchedRadii: number[] = [];
-    const supervisorMock = runGoalUnderstandingAgent as jest.Mock;
+    const supervisorMock = runGoalUnderstandingModel as jest.Mock;
     supervisorMock.mockClear();
     const second = await runSearchAgentV3(
       {

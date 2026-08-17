@@ -95,11 +95,11 @@ export interface TurnMetricsSnapshot {
   maxConcurrentSearches: number;
   /** planner 走模型决策的次数（M3 后应为 0） */
   plannerModelCalls: number;
-  /** EvaluationAgent 被调用次数 */
+  /** EvaluationModel 被调用次数 */
   evaluationCalls: number;
-  /** 送进 EvaluationAgent 的餐厅条目总数（含重复） */
+  /** 送进 EvaluationModel 的餐厅条目总数（含重复） */
   evaluatedSlots: number;
-  /** 送进 EvaluationAgent 的不同餐厅数 */
+  /** 送进 EvaluationModel 的不同餐厅数 */
   evaluatedDistinct: number;
   /** evaluatedSlots - evaluatedDistinct，M2 后应为 0 */
   duplicateEvaluations: number;

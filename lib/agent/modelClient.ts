@@ -38,29 +38,29 @@ interface ChatCompletionRequestBody {
   enable_thinking?: boolean;
 }
 
-export interface JsonFunctionAgentInputEnvelope {
+export interface StructuredModelInputEnvelope {
   trustedContext?: unknown;
   userMessage?: unknown;
   toolObservations?: unknown;
   policy?: unknown;
 }
 
-export const JSON_FUNCTION_MAX_TOKENS = 4096;
-export const JSON_FUNCTION_RETRY_MAX_TOKENS = 8192;
+export const STRUCTURED_MODEL_MAX_TOKENS = 4096;
+export const STRUCTURED_MODEL_RETRY_MAX_TOKENS = 8192;
 const SCHEMA_REPAIR_PROMPT = `上一轮函数参数没有通过运行时 schema 校验。你必须重新调用同一个函数，只修复字段结构，不改变用户目标。
 - 不要省略 required 字段。
 - required 字符串字段必须是非空文本。
 - 如果输出追问，question.question 必须是一句可直接展示给用户的中文问题，不能留空或省略。`;
 
-export interface JsonFunctionAgentOptions<T> {
-  agentName: string;
+export interface StructuredModelOptions<T> {
+  modelRole: string;
   /** 可选指标容器；传入后每次模型调用都会记录耗时、token、重试与降级情况。 */
   metricsSink?: MetricsSink;
   apiKey: string;
   baseUrl: string;
   model: string;
   systemPrompt: string;
-  input: JsonFunctionAgentInputEnvelope | unknown;
+  input: StructuredModelInputEnvelope | unknown;
   functionDefinition: ChatFunctionDefinition;
   functionName: string;
   schema: z.ZodType<T, z.ZodTypeDef, unknown>;
@@ -70,32 +70,32 @@ export interface JsonFunctionAgentOptions<T> {
   timeoutMs: number;
 }
 
-export interface JsonFunctionParsingOptions<T> {
-  agentName: string;
+export interface StructuredModelParsingOptions<T> {
+  modelRole: string;
   functionName: string;
   schema: z.ZodType<T, z.ZodTypeDef, unknown>;
 }
 
-export interface JsonFunctionParseResult<T> {
+export interface StructuredModelParseResult<T> {
   ok: boolean;
   truncated: boolean;
   data?: T;
   error?: Error;
 }
 
-export async function callJsonFunctionAgent<T>(
-  options: JsonFunctionAgentOptions<T>
+export async function callStructuredModel<T>(
+  options: StructuredModelOptions<T>
 ): Promise<T> {
   const tracker = createMetricsTracker(options);
 
   try {
-    const result = await runJsonFunctionAgent(options, tracker);
+    const result = await runStructuredModelCall(options, tracker);
     tracker.finish(true);
     return result;
   } catch (error) {
     tracker.finish(false);
     // 走到这里还不是 AgentError 的，只可能是"模型可达但输出不合法/被截断"，
-    // 传输层异常已经在 requestJsonFunctionAgent 里定过码了。
+    // 传输层异常已经在 requestStructuredModel 里定过码了。
     throw isAgentError(error)
       ? error
       : new AgentError(
@@ -107,12 +107,12 @@ export async function callJsonFunctionAgent<T>(
   }
 }
 
-async function runJsonFunctionAgent<T>(
-  options: JsonFunctionAgentOptions<T>,
+async function runStructuredModelCall<T>(
+  options: StructuredModelOptions<T>,
   tracker: MetricsTracker
 ): Promise<T> {
-  const first = parseJsonFunctionAgentResponse(
-    tracker.track(await requestJsonFunctionAgent(options, options.maxTokens)),
+  const first = parseStructuredModelResponse(
+    tracker.track(await requestStructuredModel(options, options.maxTokens)),
     options
   );
 
@@ -121,19 +121,19 @@ async function runJsonFunctionAgent<T>(
   }
 
   if (shouldRetryTruncatedFunctionArguments(options, first)) {
-    logger.warn(`${options.agentName} response was truncated, retrying with a larger token budget`, {
+    logger.warn(`${options.modelRole} response was truncated, retrying with a larger token budget`, {
       maxTokens: options.maxTokens,
       retryMaxTokens: options.retryMaxTokens,
     });
 
-    const retry = parseJsonFunctionAgentResponse(
-      tracker.track(await requestJsonFunctionAgent(options, options.retryMaxTokens!)),
+    const retry = parseStructuredModelResponse(
+      tracker.track(await requestStructuredModel(options, options.retryMaxTokens!)),
       options
     );
 
     if (retry.ok) {
       if (retry.truncated) {
-        logger.warn(`${options.agentName} retry response was still truncated; using repaired function arguments`, {
+        logger.warn(`${options.modelRole} retry response was still truncated; using repaired function arguments`, {
           retryMaxTokens: options.retryMaxTokens,
         });
       }
@@ -141,22 +141,22 @@ async function runJsonFunctionAgent<T>(
     }
 
     if (first.ok) {
-      logger.warn(`${options.agentName} retry failed; using repaired first function arguments`, {
+      logger.warn(`${options.modelRole} retry failed; using repaired first function arguments`, {
         error: retry.error?.message,
       });
       return first.data as T;
     }
 
-    throw retry.error ?? first.error ?? truncatedFunctionArgumentsError(options.agentName);
+    throw retry.error ?? first.error ?? truncatedFunctionArgumentsError(options.modelRole);
   }
 
   if (shouldRetryInvalidFunctionArguments(first)) {
-    logger.warn(`${options.agentName} returned invalid function arguments, retrying with a schema repair instruction`, {
+    logger.warn(`${options.modelRole} returned invalid function arguments, retrying with a schema repair instruction`, {
       error: first.error?.message,
     });
 
-    const retry = parseJsonFunctionAgentResponse(
-      tracker.track(await requestJsonFunctionAgent(
+    const retry = parseStructuredModelResponse(
+      tracker.track(await requestStructuredModel(
         withSchemaRepairInstruction(options, first.error),
         options.maxTokens
       )),
@@ -167,14 +167,14 @@ async function runJsonFunctionAgent<T>(
       return retry.data as T;
     }
 
-    throw retry.error ?? first.error ?? new Error(`${options.agentName} returned invalid function arguments`);
+    throw retry.error ?? first.error ?? new Error(`${options.modelRole} returned invalid function arguments`);
   }
 
   if (first.ok) {
     return first.data as T;
   }
 
-  throw first.error ?? new Error(`${options.agentName} returned invalid function arguments`);
+  throw first.error ?? new Error(`${options.modelRole} returned invalid function arguments`);
 }
 
 interface MetricsTracker {
@@ -183,10 +183,10 @@ interface MetricsTracker {
   finish(ok: boolean): void;
 }
 
-function createMetricsTracker<T>(options: JsonFunctionAgentOptions<T>): MetricsTracker {
+function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTracker {
   const startedAt = Date.now();
   const state: Omit<ModelCallMetrics, 'durationMs' | 'ok'> = {
-    agentName: options.agentName,
+    modelRole: options.modelRole,
     model: options.model,
     startedAt,
     promptTokens: undefined,
@@ -225,10 +225,10 @@ function addTokens(current: number | undefined, next: number | undefined): numbe
   return (current ?? 0) + next;
 }
 
-export function parseJsonFunctionAgentResponse<T>(
+export function parseStructuredModelResponse<T>(
   data: ChatCompletionFunctionResponse,
-  options: JsonFunctionParsingOptions<T>
-): JsonFunctionParseResult<T> {
+  options: StructuredModelParsingOptions<T>
+): StructuredModelParseResult<T> {
   const args = extractModelFunctionArguments(data, options.functionName);
   const truncated = isModelFunctionOutputTruncated(data, args);
 
@@ -237,20 +237,20 @@ export function parseJsonFunctionAgentResponse<T>(
       ok: false,
       truncated,
       error: truncated
-        ? truncatedFunctionArgumentsError(options.agentName)
-        : new Error(`${options.agentName} returned no function arguments`),
+        ? truncatedFunctionArgumentsError(options.modelRole)
+        : new Error(`${options.modelRole} returned no function arguments`),
     };
   }
 
   let parsedArgs: unknown;
   try {
-    parsedArgs = parseModelJsonArguments(args, options.agentName);
+    parsedArgs = parseModelJsonArguments(args, options.modelRole);
   } catch (error) {
     return {
       ok: false,
       truncated,
       error: truncated
-        ? truncatedFunctionArgumentsError(options.agentName)
+        ? truncatedFunctionArgumentsError(options.modelRole)
         : asError(error),
     };
   }
@@ -261,8 +261,8 @@ export function parseJsonFunctionAgentResponse<T>(
       ok: false,
       truncated,
       error: truncated
-        ? truncatedFunctionArgumentsError(options.agentName)
-        : new Error(`${options.agentName} returned invalid schema: ${parsed.error.message}`),
+        ? truncatedFunctionArgumentsError(options.modelRole)
+        : new Error(`${options.modelRole} returned invalid schema: ${parsed.error.message}`),
     };
   }
 
@@ -279,8 +279,8 @@ interface RequestOutcome {
   attempts: number;
 }
 
-async function requestJsonFunctionAgent<T>(
-  options: JsonFunctionAgentOptions<T>,
+async function requestStructuredModel<T>(
+  options: StructuredModelOptions<T>,
   maxTokens: number
 ): Promise<RequestOutcome> {
   const modes = preferredToolCallModes();
@@ -295,9 +295,9 @@ async function requestJsonFunctionAgent<T>(
       return { data: await response.json(), mode, attempts };
     }
 
-    const error = await buildChatCompletionError(options.agentName, options.model, mode, response);
+    const error = await buildChatCompletionError(options.modelRole, options.model, mode, response);
     if (mode === 'tools' && response.status === 400 && modes.includes('functions')) {
-      logger.warn(`${options.agentName} modern tool call request failed; retrying legacy function_call format`, {
+      logger.warn(`${options.modelRole} modern tool call request failed; retrying legacy function_call format`, {
         error: error.message,
         model: options.model,
       });
@@ -308,7 +308,7 @@ async function requestJsonFunctionAgent<T>(
     throw error;
   }
 
-  throw lastError ?? new Error(`${options.agentName} API failed`);
+  throw lastError ?? new Error(`${options.modelRole} API failed`);
 }
 
 /**
@@ -318,7 +318,7 @@ async function requestJsonFunctionAgent<T>(
  * 不定码的话下游只能看到 UNKNOWN，无法判断该不该让用户重试。
  */
 async function requestChatCompletion<T>(
-  options: JsonFunctionAgentOptions<T>,
+  options: StructuredModelOptions<T>,
   maxTokens: number,
   mode: ChatToolCallMode
 ): Promise<Response> {
@@ -337,7 +337,7 @@ async function requestChatCompletion<T>(
     );
   } catch (error) {
     throw new AgentError(
-      `${options.agentName} API request failed: ${error instanceof Error ? error.message : String(error)}`,
+      `${options.modelRole} API request failed: ${error instanceof Error ? error.message : String(error)}`,
       'MODEL_UNAVAILABLE',
       true,
       { cause: error }
@@ -346,7 +346,7 @@ async function requestChatCompletion<T>(
 }
 
 function buildChatCompletionRequestBody<T>(
-  options: JsonFunctionAgentOptions<T>,
+  options: StructuredModelOptions<T>,
   maxTokens: number,
   mode: ChatToolCallMode
 ): ChatCompletionRequestBody {
@@ -406,7 +406,7 @@ function isReasoningChatModel(model: string): boolean {
   return /^o\d/.test(normalized) || normalized.startsWith('gpt-5');
 }
 
-function shouldDisableQwenThinkingForForcedTool<T>(options: JsonFunctionAgentOptions<T>): boolean {
+function shouldDisableQwenThinkingForForcedTool<T>(options: StructuredModelOptions<T>): boolean {
   const override = process.env.QWEN_ENABLE_THINKING?.toLowerCase();
   if (override === 'true') {
     return false;
@@ -428,7 +428,7 @@ function isQwenCompatibleRequest(model: string, baseUrl: string): boolean {
 }
 
 async function buildChatCompletionError(
-  agentName: string,
+  modelRole: string,
   model: string,
   mode: ChatToolCallMode,
   response: Response
@@ -447,7 +447,7 @@ async function buildChatCompletionError(
   const { code, retryable } = classifyChatCompletionStatus(response.status);
 
   return new AgentError(
-    `${agentName} API failed: ${response.status}${details ? ` - ${details}` : ''}`,
+    `${modelRole} API failed: ${response.status}${details ? ` - ${details}` : ''}`,
     code,
     retryable
   );
@@ -518,9 +518,9 @@ function extractApiErrorMessage(responseBody: string | null): string | undefined
   }
 }
 
-function normalizeAgentInput(input: JsonFunctionAgentInputEnvelope | unknown): JsonFunctionAgentInputEnvelope {
+function normalizeAgentInput(input: StructuredModelInputEnvelope | unknown): StructuredModelInputEnvelope {
   if (isRecord(input) && hasEnvelopeKeys(input)) {
-    return input as JsonFunctionAgentInputEnvelope;
+    return input as StructuredModelInputEnvelope;
   }
 
   return { trustedContext: input };
@@ -540,8 +540,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function shouldRetryTruncatedFunctionArguments<T>(
-  options: JsonFunctionAgentOptions<T>,
-  result: JsonFunctionParseResult<T>
+  options: StructuredModelOptions<T>,
+  result: StructuredModelParseResult<T>
 ): boolean {
   return result.truncated
     && typeof options.retryMaxTokens === 'number'
@@ -549,15 +549,15 @@ function shouldRetryTruncatedFunctionArguments<T>(
 }
 
 function shouldRetryInvalidFunctionArguments<T>(
-  result: JsonFunctionParseResult<T>
+  result: StructuredModelParseResult<T>
 ): boolean {
   return !result.ok && !result.truncated;
 }
 
 function withSchemaRepairInstruction<T>(
-  options: JsonFunctionAgentOptions<T>,
+  options: StructuredModelOptions<T>,
   error: Error | undefined
-): JsonFunctionAgentOptions<T> {
+): StructuredModelOptions<T> {
   return {
     ...options,
     systemPrompt: `${options.systemPrompt}\n\n${SCHEMA_REPAIR_PROMPT}`,
@@ -566,9 +566,9 @@ function withSchemaRepairInstruction<T>(
 }
 
 function buildSchemaRepairInput(
-  input: JsonFunctionAgentInputEnvelope | unknown,
+  input: StructuredModelInputEnvelope | unknown,
   error: Error | undefined
-): JsonFunctionAgentInputEnvelope {
+): StructuredModelInputEnvelope {
   const normalized = normalizeAgentInput(input);
   const previousPolicy = isRecord(normalized.policy) ? normalized.policy : {};
 
@@ -583,8 +583,8 @@ function buildSchemaRepairInput(
   };
 }
 
-function truncatedFunctionArgumentsError(agentName: string): Error {
-  return new Error(`${agentName} returned truncated function arguments`);
+function truncatedFunctionArgumentsError(modelRole: string): Error {
+  return new Error(`${modelRole} returned truncated function arguments`);
 }
 
 function asError(error: unknown): Error {

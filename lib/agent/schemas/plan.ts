@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SearchActionSchema } from './searchAction';
 
 function requiredArray<T extends z.ZodTypeAny>(schema: T) {
   return z.preprocess((value) => {
@@ -59,4 +60,5 @@ export const SearchPlanSchema = z.object({
   allowedForPrimary: BooleanSchema,
   reason: reasonWithDefault('根据用户目标搜索。'),
   planId: z.string().optional(),
+  searchAction: SearchActionSchema.optional(),
 });

@@ -1,15 +1,15 @@
 /**
  * 候选排序不再受模型的全局选择影响。
  *
- * 背景：EvaluationAgent 曾被要求输出 selectedIds，而它是**分批**调用的
- * （每批 6 家），也就是让一个只有局部视野的子 Agent 做全局选择，结果再被
+ * 背景：EvaluationModel 曾被要求输出 selectedIds，而它是**分批**调用的
+ * （每批 6 家），也就是让一个只有局部视野的模型角色 做全局选择，结果再被
  * 机械合并。这些 id 还真的生效——命中就 +30 分。阶段 4 把选择权收回确定性规则。
  */
 
 import { evaluateSearchResult } from '@/lib/agent/evaluator';
 import type {
   AgentContext,
-  EvaluationAgentOutput,
+  EvaluationModelOutput,
   SearchPlan,
   UserGoal,
 } from '@/lib/agent/types';
@@ -88,7 +88,7 @@ function verdict(restaurantId: string, confidence: number) {
   };
 }
 
-function evaluation(overrides: Partial<EvaluationAgentOutput> = {}): EvaluationAgentOutput {
+function evaluation(overrides: Partial<EvaluationModelOutput> = {}): EvaluationModelOutput {
   return {
     verdicts: [verdict('high', 0.9), verdict('low', 0.4)],
     selectedIds: [],

@@ -1,15 +1,15 @@
 /**
- * ReplanAgent：确定性关键词全部试完仍无主推荐时，重新构思搜索方向。
+ * ReplanModel：确定性关键词全部试完仍无主推荐时，重新构思搜索方向。
  *
- * 它是子 Agent，只回答"还有什么方向没试过"这一个问题；何时调用它、一轮调几次
+ * 它是一次结构化模型角色调用，只回答"还有什么方向没试过"这一个问题；何时调用它、一轮调几次
  * 由 orchestrator/policy 决定（当前一轮最多一次）。
  */
 
 import { logger } from '@/lib/logger';
 import {
-  callJsonFunctionAgent,
-  JSON_FUNCTION_MAX_TOKENS,
-  JSON_FUNCTION_RETRY_MAX_TOKENS,
+  callStructuredModel,
+  STRUCTURED_MODEL_MAX_TOKENS,
+  STRUCTURED_MODEL_RETRY_MAX_TOKENS,
 } from '../modelClient';
 import type { MetricsSink } from '../metrics';
 import { ReplanOutputSchema } from '../schemas/replan';
@@ -57,7 +57,7 @@ export interface SearchReplanInput {
 /**
  * 从运行时状态汇总出 replan 需要的那点信息。
  *
- * 放在这里而不是让编排层手写：什么算"已经试完了"是这个子 Agent 的输入定义，
+ * 放在这里而不是让编排层手写：什么算"已经试完了"是这个模型角色的输入定义，
  * 不是编排层的知识。
  */
 export function summarizeExhaustedSearch(
@@ -147,8 +147,8 @@ export async function runSearchReplan(
   }
 
   try {
-    const output = await callJsonFunctionAgent({
-      agentName: 'SearchReplanAgent',
+    const output = await callStructuredModel({
+      modelRole: 'SearchReplanModel',
       metricsSink: input.metricsSink,
       apiKey: OPENAI_API_KEY,
       baseUrl: OPENAI_BASE_URL,
@@ -159,14 +159,14 @@ export async function runSearchReplan(
       functionName: 'replanRestaurantSearch',
       schema: ReplanOutputSchema,
       temperature: 0.2,
-      maxTokens: JSON_FUNCTION_MAX_TOKENS,
-      retryMaxTokens: JSON_FUNCTION_RETRY_MAX_TOKENS,
+      maxTokens: STRUCTURED_MODEL_MAX_TOKENS,
+      retryMaxTokens: STRUCTURED_MODEL_RETRY_MAX_TOKENS,
       timeoutMs: REPLAN_TIMEOUT,
     });
 
     return sanitizeReplanOutput(output, input);
   } catch (error) {
-    logger.warn('SearchReplanAgent unavailable, falling back to a templated question', {
+    logger.warn('SearchReplanModel unavailable, falling back to a templated question', {
       error: error instanceof Error ? error.message : String(error),
     });
     return null;

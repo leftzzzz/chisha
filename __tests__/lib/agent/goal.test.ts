@@ -1,7 +1,7 @@
 /**
  * 目标代数：合并、打补丁、追问选项应用。
  *
- * 这些全是纯函数，此前和 GoalUnderstandingAgent 混在一个测试文件里。
+ * 这些全是纯函数，此前和 GoalUnderstandingModel 混在一个测试文件里。
  */
 
 import {

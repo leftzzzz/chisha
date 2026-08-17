@@ -10,8 +10,8 @@ import {
   applyGoalPatch,
   clarificationNeedToPendingQuestion,
 } from '../goal';
-import { runGoalUnderstandingAgent } from '../subagents/goalUnderstandingAgent';
-import { runSearchReplan, summarizeExhaustedSearch } from '../subagents/replanAgent';
+import { runGoalUnderstandingModel } from '../models/goalUnderstandingModel';
+import { runSearchReplan, summarizeExhaustedSearch } from '../models/searchReplanModel';
 import { evaluateSearchResult, mergeCandidates } from '../evaluator';
 import { applyHardConstraintGuard, applyVerdictGuard } from '../guards';
 import { isPrimaryRecommendationEligible } from '../finalGuard';
@@ -46,8 +46,8 @@ import {
 } from '../broadenAdmission';
 import { finalizeRecommendations } from '../resultAssembler';
 import { isGenericSearchKeyword, normalizeSearchKeywords } from '../poiTaxonomy';
-import { applyKeywordExpansion, runKeywordExpansionAgent } from '../subagents/keywordExpansionAgent';
-import { runEvaluationAgent, type EvaluationAgentInput } from '../subagents/evaluationAgent';
+import { applyKeywordExpansion, runKeywordExpansionModel } from '../models/keywordExpansionModel';
+import { runEvaluationModel, type EvaluationModelInput } from '../models/evaluationModel';
 import {
   deriveContextInvalidationPlan,
   markStaleCandidatesForContext,
@@ -68,7 +68,7 @@ import type {
   CandidateVerdict,
   ConversationMode,
   EmitAgentEvent,
-  EvaluationAgentOutput,
+  EvaluationModelOutput,
   GoalPatch,
   PendingQuestion,
   RestaurantCandidate,
@@ -308,7 +308,7 @@ async function expandKeywordsAlongsideFirstSearch(
 
   // 指标直接记到 context：它此刻已经存在，再走 turnMetrics 转一手会和
   // 并发首批里评估 agent 的记录互相覆盖。
-  const expansion = runKeywordExpansionAgent({
+  const expansion = runKeywordExpansionModel({
     metricsSink: context,
     goal: context.goal,
     attempts: context.attempts,
@@ -562,7 +562,7 @@ function buildFinishAction(
 interface TurnGoalResolution {
   goal: UserGoal;
   conversationMode: ConversationMode;
-  supervisorOutput: Awaited<ReturnType<typeof runGoalUnderstandingAgent>> | null;
+  supervisorOutput: Awaited<ReturnType<typeof runGoalUnderstandingModel>> | null;
   clarifyingQuestion?: PendingQuestion;
 }
 
@@ -617,7 +617,7 @@ async function resolveTurnGoal(
     };
   }
 
-  // entry.kind === 'understand'：交给子 Agent。带 effect 的选项走不到这里；
+  // entry.kind === 'understand'：交给模型角色。带 effect 的选项走不到这里；
   // 模型自己写的选项没有 effect，它的 label 就是一句预填的用户回答。
   const effectiveInput = entry.message === input.query
     ? input
@@ -692,7 +692,7 @@ function isRetryableAgentError(error: unknown, code: AgentErrorCode): boolean {
 
 function resolveSupervisorGoal(
   input: AgentInput,
-  output: Awaited<ReturnType<typeof runGoalUnderstandingAgent>>
+  output: Awaited<ReturnType<typeof runGoalUnderstandingModel>>
 ): UserGoal {
   if (output.goal) {
     return output.goal;
@@ -706,14 +706,14 @@ function resolveSupervisorGoal(
     );
   }
 
-  throw new AgentError('GoalUnderstandingAgent returned no goal or patch', 'SUPERVISOR_UNAVAILABLE', true);
+  throw new AgentError('GoalUnderstandingModel returned no goal or patch', 'SUPERVISOR_UNAVAILABLE', true);
 }
 
 async function getGoalUnderstandingOutput(
   input: AgentInput,
   metricsSink: MetricsSink
-): Promise<Awaited<ReturnType<typeof runGoalUnderstandingAgent>>> {
-  return runGoalUnderstandingAgent({
+): Promise<Awaited<ReturnType<typeof runGoalUnderstandingModel>>> {
+  return runGoalUnderstandingModel({
     metricsSink,
     message: input.query,
     previousGoal: input.runtimeState?.goal,
@@ -816,16 +816,16 @@ function replacementTargetsComeFromMessage(patch: GoalPatch, message: string): b
 /**
  * 取本轮的会话模式。
  *
- * "这句话与上文什么关系"是语义判断，归 GoalUnderstandingAgent——它的
+ * "这句话与上文什么关系"是语义判断，归 GoalUnderstandingModel——它的
  * normalize 恒会填这个字段。这里只处理它够不到的两种情况：没有历史目标
  * （必然是新会话），以及给了 patch（按定义就是在改当前目标）。
  *
- * 此前这里还有一份完整的签名比较推导，与子 Agent 那份逻辑重复且不等价，
+ * 此前这里还有一份完整的签名比较推导，与模型角色 那份逻辑重复且不等价，
  * 且因为上面两个分支永远先命中而从未执行过。
  */
 function resolveConversationMode(
   input: AgentInput,
-  output: Awaited<ReturnType<typeof runGoalUnderstandingAgent>>
+  output: Awaited<ReturnType<typeof runGoalUnderstandingModel>>
 ): ConversationMode {
   if (!input.runtimeState?.goal) {
     return 'start_new_goal';
@@ -898,15 +898,15 @@ interface SearchPlanResult {
   hardGuard: ReturnType<typeof applyHardConstraintGuard>;
   hardRejectedReasons: string[];
   evaluationRestaurants: Restaurant[];
-  agentEvaluation: EvaluationAgentOutput;
+  agentEvaluation: EvaluationModelOutput;
 }
 
 /** 一个搜索计划的候选验证结果，区分"这次真判了几家"与"复用了几家"。 */
 interface PlanEvaluation {
   /** 拿到裁决的餐厅，顺序与后续 verdicts 一一对应 */
   restaurants: Restaurant[];
-  output: EvaluationAgentOutput;
-  error?: EvaluationAgentOutput['error'];
+  output: EvaluationModelOutput;
+  error?: EvaluationModelOutput['error'];
   modelEvaluated: number;
   cacheHits: number;
 }
@@ -1044,7 +1044,7 @@ async function runSearchPlan(
  * 验证一个计划的候选。
  *
  * 先向本轮裁决缓存申领：已经判过的直接复用，正在被同批其他计划判的等待其结果，
- * 只有真正没人判过的才走模型。这样一轮之内同一家店最多进一次 EvaluationAgent，
+ * 只有真正没人判过的才走模型。这样一轮之内同一家店最多进一次 EvaluationModel，
  * 无论它被几个关键词召回。
  */
 async function evaluatePlanCandidates(
@@ -1072,8 +1072,8 @@ async function evaluatePlanCandidates(
   }
 
   const cache = context.verdictCache;
-  let error: EvaluationAgentOutput['error'];
-  const outputs: EvaluationAgentOutput[] = [];
+  let error: EvaluationModelOutput['error'];
+  const outputs: EvaluationModelOutput[] = [];
   let pending = shortlist;
 
   // 两轮：第一轮把同批其他计划正在判的餐厅让出去等结果；等完之后若某些餐厅
@@ -1093,7 +1093,7 @@ async function evaluatePlanCandidates(
       });
 
       try {
-        const output = await runBatchedEvaluationAgent({
+        const output = await runBatchedEvaluationModel({
           metricsSink: context,
           goal: context.goal,
           plan,
@@ -1157,8 +1157,8 @@ function combinePlanVerdicts(
   shortlist: Restaurant[],
   plan: SearchPlan,
   cache: VerdictCache,
-  modelOutput: EvaluationAgentOutput | undefined,
-  error: EvaluationAgentOutput['error']
+  modelOutput: EvaluationModelOutput | undefined,
+  error: EvaluationModelOutput['error']
 ): PlanEvaluation {
   const verdictById = new Map<string, CandidateVerdict>(
     (modelOutput?.verdicts ?? []).map((verdict) => [verdict.restaurantId, verdict])
@@ -1201,8 +1201,8 @@ function combinePlanVerdicts(
 function resolveEvaluationSource(
   modelEvaluated: number,
   cacheHits: number,
-  error: EvaluationAgentOutput['error']
-): NonNullable<EvaluationAgentOutput['source']> {
+  error: EvaluationModelOutput['error']
+): NonNullable<EvaluationModelOutput['source']> {
   if (error) {
     return 'error';
   }
@@ -1363,7 +1363,7 @@ function summarizeHardRejectedReasons(
   ];
 }
 
-function evaluationFailureFromError(error: unknown): NonNullable<EvaluationAgentOutput['error']> {
+function evaluationFailureFromError(error: unknown): NonNullable<EvaluationModelOutput['error']> {
   const message = error instanceof Error ? error.message : String(error);
 
   if (isAgentError(error)) {
@@ -1384,10 +1384,10 @@ function evaluationFailureFromError(error: unknown): NonNullable<EvaluationAgent
   };
 }
 
-async function runBatchedEvaluationAgent(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
+async function runBatchedEvaluationModel(input: EvaluationModelInput): Promise<EvaluationModelOutput> {
   const batchSize = Math.max(1, DEFAULT_AGENT_EVALUATION_BATCH_SIZE);
   if (input.restaurants.length <= batchSize) {
-    return runEvaluationAgent(input);
+    return runEvaluationModel(input);
   }
 
   const batches = chunkRestaurants(input.restaurants, batchSize);
@@ -1398,7 +1398,7 @@ async function runBatchedEvaluationAgent(input: EvaluationAgentInput): Promise<E
 
   try {
     const outputs = await mapWithConcurrency(batches, concurrency, (restaurants) =>
-      runEvaluationAgent({ ...input, restaurants })
+      runEvaluationModel({ ...input, restaurants })
     );
     return mergeEvaluationOutputs(outputs);
   } catch (error) {
@@ -1406,9 +1406,9 @@ async function runBatchedEvaluationAgent(input: EvaluationAgentInput): Promise<E
       throw error;
     }
 
-    const outputs: EvaluationAgentOutput[] = [];
+    const outputs: EvaluationModelOutput[] = [];
     for (const restaurants of batches) {
-      outputs.push(await runEvaluationAgent({ ...input, restaurants }));
+      outputs.push(await runEvaluationModel({ ...input, restaurants }));
     }
     return mergeEvaluationOutputs(outputs);
   }
@@ -1442,9 +1442,9 @@ async function mapWithConcurrency<T, R>(
 }
 
 function mergeEvaluationOutputs(
-  outputs: EvaluationAgentOutput[],
-  error?: EvaluationAgentOutput['error']
-): EvaluationAgentOutput {
+  outputs: EvaluationModelOutput[],
+  error?: EvaluationModelOutput['error']
+): EvaluationModelOutput {
   return {
     verdicts: outputs.flatMap((output) => output.verdicts),
     selectedIds: uniqueStrings(outputs.flatMap((output) => output.selectedIds)),

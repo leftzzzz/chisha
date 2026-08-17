@@ -1,7 +1,7 @@
 /**
  * 评测桩与计数器。
  *
- * 三个模型 agent 在 offline 模式下被替换成确定性桩，高德被 fixture 替换，
+ * 三个模型角色在 offline 模式下被替换成确定性桩，高德被 fixture 替换，
  * 于是每一轮的差异只来自 loop 本身。桩的输出由 case 声明，计数器由 runner 读取。
  *
  * 桩函数被 jest.mock 工厂通过 requireActual 引用，因此这里不能 import 任何
@@ -141,23 +141,23 @@ interface SupervisorStubInput {
 }
 
 /**
- * 路由 runGoalUnderstandingAgent：
+ * 路由 runGoalUnderstandingModel：
  * - action 规划输入交给真实实现（M3 之前是确定性 planner，M3 之后不再被调用）
  * - 目标理解输入用 case 声明的桩目标
  */
 export function routeGoalUnderstanding(
-  actual: { runGoalUnderstandingAgent: (input: unknown, context?: unknown) => Promise<unknown> },
+  actual: { runGoalUnderstandingModel: (input: unknown, context?: unknown) => Promise<unknown> },
   input: SupervisorStubInput,
   context?: unknown
 ): Promise<unknown> {
   if (input.goal && input.limits) {
     harnessState.counters.plannerModelCalls += 1;
-    return actual.runGoalUnderstandingAgent(input, context);
+    return actual.runGoalUnderstandingModel(input, context);
   }
 
   const failWithCode = harnessState.stubs.goal?.failWithCode;
   if (failWithCode) {
-    return Promise.reject(createStubAgentError('GoalUnderstandingAgent 桩故障', failWithCode));
+    return Promise.reject(createStubAgentError('GoalUnderstandingModel 桩故障', failWithCode));
   }
 
   return Promise.resolve({
@@ -167,20 +167,27 @@ export function routeGoalUnderstanding(
 }
 
 export function buildStubGoal(stub: StubGoal, rawQuery: string) {
+  const primaryKeywords = stub.primaryKeywords ?? [];
+  const requestedItems = stub.requestedItems ?? [];
+  const acceptableCategories = stub.acceptableCategories ?? [];
+  const hasPrimaryTarget = primaryKeywords.length > 0
+    || requestedItems.length > 0
+    || acceptableCategories.length > 0;
+
   return {
     intent: 'find_restaurants' as const,
     rawQuery,
-    requestedItems: (stub.requestedItems ?? []).map((name) => ({
+    requestedItems: requestedItems.map((name) => ({
       name,
       required: true,
       aliases: [],
     })),
-    acceptableCategories: (stub.acceptableCategories ?? []).map((name) => ({
+    acceptableCategories: acceptableCategories.map((name) => ({
       name,
       confidence: 0.85,
     })),
     alternativeGroups: [],
-    primaryKeywords: stub.primaryKeywords ?? [],
+    primaryKeywords,
     relatedKeywords: [],
     broadenedKeywords: [],
     relatedTargets: [],
@@ -204,7 +211,19 @@ export function buildStubGoal(stub: StubGoal, rawQuery: string) {
           allowFreeText: true,
         }]
       : [],
-    authorizations: [],
+    authorizations: stub.allowBroaden
+      ? [{
+          id: hasPrimaryTarget ? 'auth_eval_category_broaden' : 'auth_eval_fallback_primary',
+          kind: hasPrimaryTarget ? 'category_broaden' as const : 'fallback_primary' as const,
+          createdAt: 1,
+          reason: '评测用例中的用户显式授权。',
+          constraints: {
+            allowedSearchIntents: hasPrimaryTarget
+              ? ['broadened' as const]
+              : ['fallback' as const],
+          },
+        }]
+      : [],
     allowBroaden: stub.allowBroaden ?? false,
   };
 }
@@ -271,7 +290,7 @@ export function evaluationStub(input: EvaluationStubInput) {
   if (evaluationError) {
     counters.evaluatedSlots += input.restaurants.length;
     counters.evaluatedIds.push(...input.restaurants.map((item) => item.id));
-    return Promise.reject(createStubAgentError('EvaluationAgent 桩故障', evaluationError));
+    return Promise.reject(createStubAgentError('EvaluationModel 桩故障', evaluationError));
   }
 
   counters.evaluatedSlots += input.restaurants.length;
@@ -329,7 +348,7 @@ export function evaluationStub(input: EvaluationStubInput) {
     };
   });
 
-  // 只出逐家裁决：EvaluationAgent 不再做全局选择与排序（阶段 4）。
+  // 只出逐家裁决：EvaluationModel 不再做全局选择与排序（阶段 4）。
   // 桩必须跟着契约变，否则 eval 会用旧行为掩盖新行为的差异。
   return Promise.resolve({
     verdicts,

@@ -3,7 +3,7 @@ import type { ModelCallMetrics } from '@/lib/agent/metrics';
 
 function call(overrides: Partial<ModelCallMetrics>): ModelCallMetrics {
   return {
-    agentName: 'TestAgent',
+    modelRole: 'TestAgent',
     model: 'test-model',
     startedAt: 0,
     durationMs: 100,

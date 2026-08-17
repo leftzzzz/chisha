@@ -77,10 +77,10 @@ chisha/
 | `lib/apiResponse.ts` | 响应格式 | success(), error() |
 | `lib/logger.ts` | 日志 | logger.info() 等 |
 | `lib/withTimeout.ts` | 超时控制 | withTimeout(), fetchWithTimeout() |
-| `lib/agent/modelClient.ts` | 模型调用统一入口 | callJsonFunctionAgent() |
-| `lib/agent/orchestrator/policy.ts` | 编排层唯一决策者（纯函数，无 I/O） | decideTurnEntry(), decideNextAction(), decideAskOrConverge(), planSearchBatch() |
+| `lib/agent/modelClient.ts` | 单次结构化模型调用统一入口 | callStructuredModel() |
+| `lib/agent/orchestrator/policy.ts` | 当前 workflow 的编排决策者（纯函数，无 I/O） | decideTurnEntry(), decideNextAction(), decideAskOrConverge(), planSearchBatch() |
 | `lib/agent/orchestrator/runtime.ts` | 编排层执行器（只执行决策、发事件、提交状态） | runSearchAgentV3() |
-| `lib/agent/subagents/*.ts` | 四个子 Agent，各做一件独立任务（模型） | runGoalUnderstandingAgent(), runKeywordExpansionAgent(), runEvaluationAgent(), runSearchReplan() |
+| `lib/agent/models/*.ts` | 四个一次性结构化模型角色 | runGoalUnderstandingModel(), runKeywordExpansionModel(), runEvaluationModel(), runSearchReplan() |
 | `lib/agent/goal.ts` | 目标代数：合并、打补丁、追问选项应用 | applyGoalPatch(), applyClarificationOptionToGoal() |
 | `lib/agent/searchAttempts.ts` | 搜索历史只读查询 | hasTriedPlan(), hasTriedKeyword() |
 | `lib/agent/evaluationCache.ts` | 一轮内候选裁决缓存 | createVerdictCache() |

@@ -8,6 +8,25 @@ ChiSha (今天吃啥) is a Next.js 16 restaurant recommendation app with AI-powe
 
 **Tech Stack**: Next.js 16 + React 18 + TypeScript + Tailwind CSS + OpenAI API + Amap (高德地图)
 
+## Documentation Navigation
+
+| Need | Read or search first |
+| --- | --- |
+| Current behavior, constraints, rules, or boundaries | [`docs/specs/AGENTS.md`](docs/specs/AGENTS.md) |
+| Product intent, user needs, or acceptance criteria | [`docs/requirements/AGENTS.md`](docs/requirements/AGENTS.md) |
+| Architecture, implementation approach, or technical rationale | [`docs/technical/AGENTS.md`](docs/technical/AGENTS.md) |
+
+- Read or search [`docs/specs/AGENTS.md`](docs/specs/AGENTS.md) for current behavior, constraints,
+  rules, and boundaries before changing code.
+- Read or search [`docs/requirements/AGENTS.md`](docs/requirements/AGENTS.md) for product intent,
+  user needs, and acceptance criteria.
+- Read or search [`docs/technical/AGENTS.md`](docs/technical/AGENTS.md) for architecture,
+  implementation approach, rationale, and tradeoffs.
+- For a new feature, reconcile the applicable requirement and technical documents with the current
+  Specs before implementation.
+- After accepting a requirement or technical decision, update affected Specs in the same change.
+- Search requirement or technical documents for rationale; do not infer rationale from Specs.
+
 ## Common Commands
 
 ```bash
@@ -52,78 +71,26 @@ Core state files:
 - `types/` - TypeScript type definitions
 
 ### Agent Harness (`lib/agent/`)
-主链路：`/api/agent/chat` → `runSearchAgentV3`。职责边界见
-`docs/Agent-职责边界重构-技术方案-2026-08.md`。
 
-**编排者是代码，不是模型。** 没有"主 Agent 模型"这种东西——`orchestrator/`
-决定一切流程，四个子 Agent 各做一件独立任务。
+主链路是 `/api/agent/chat` → `runSearchAgentV3`。
 
-#### 分层判据（新代码放哪儿，用这条判）
+**当前实现事实**：常规 action 由 `orchestrator/policy.ts` 的确定性策略控制，模型只
+执行目标理解、关键词扩展、候选验证和受限 replan；因此当前形态是 multi-model
+workflow，而不是模型主控的 Agent loop。不要把目标架构写成已经实现。
 
-| 特征 | 归属 |
-|---|---|
-| 需要理解自然语言或语义 | `subagents/` |
-| 需要枚举状态做选择 | `orchestrator/policy.ts` |
-| 需要发请求、发事件、改状态 | `orchestrator/runtime.ts` |
-| 同样输入永远同样输出且不含语义 | 规则库（`lib/agent/*.ts`） |
-
-依赖方向只允许三条：编排层→子 Agent、编排层→规则库、子 Agent→规则库。
-**这条约束由 `__tests__/lib/agent/layering.test.ts` 强制**，违反即测试红。
-
-#### 编排层 `orchestrator/`
-- `policy.ts` - **唯一决策者**，纯函数、无 I/O、无模型。`decideTurnEntry` /
-  `decideContextReset` / `decideScouting` / `decideNextAction` /
-  `decideAskOrConverge` / `planSearchBatch` / `partitionPlansByValidity`。
-  阈值集中在 `POLICY_LIMITS`
-- `runtime.ts` - **只执行**：按决策发起调用、发 SSE、提交状态与 trace。
-  不要在这里写"下一步做什么"的 if
-
-#### 子 Agent `subagents/`（模型只在这四处介入）
-- `goalUnderstandingAgent.ts` - 口语 → UserGoal / GoalPatch / 追问
-- `keywordExpansionAgent.ts` - 目标 → 联想词与探索方向
-- `evaluationAgent.ts` - 餐厅事实 → **逐家**裁决（调用量最大）。它不选择、
-  不排序——那是 finalGuard 的事
-- `replanAgent.ts` - 确定性关键词试完仍无主推荐时重新构思方向，一轮最多一次
-
-子 Agent 的输入必须能用一句话描述**而不提到 loop**。`authorizations`、
-`attempts`、`allowBroaden`、`goalVersion` 这类编排状态一律不得传入——
-由 `__tests__/lib/agent/subagents/subagentContracts.test.ts` 强制。
-
-#### 规则库（确定性，两边复用）
-- `goal.ts` - 目标代数：合并、打补丁、追问选项应用
-- `searchAttempts.ts` - 搜索历史的只读查询
-- `guards.ts` - `validateSearchPlan` 只校验不改写（计划由 policy 生成，
-  违规即 bug）+ 确定性硬约束过滤
-- `finalGuard.ts` - 主推荐准入与候选排序
-- `evaluationCache.ts` - 一轮内的候选裁决缓存，避免重叠 POI 反复送评估。
-  只复用 passed 且镜头不更宽的裁决
-- `finishReason.ts` - 结束原因枚举与用户文案映射（不要用字符串匹配生成文案）
-- `clarificationOptions.ts` - 追问选项的 id 协议（id 是契约，label 只是文案）
-- `nearbyCategories.ts` - 把真实 POI 聚成追问选项
-- `metrics.ts` / `turnLogger.ts` / `tracePersistence.ts` - 观测：模型指标
-  （含 `serialModelSteps`）、带 sessionId/turnId 的日志、trace 持久化裁剪
-
-错误码在**抛出点**用 `AgentError` 指定，不要在消费端对 message 做正则匹配。
-
-**三条不可违反的约定**（见 `docs/模型不可用与追问契约-技术方案-2026-08.md`）：
-
-1. **模型不可用就报错，不降级**。不要新增任何"用关键词表从用户原话里抽词"
-   的兜底路径——那是拿硬编码语义冒充模型判断，也是历史上追问死循环的燃料。
-   验证失败同理：不合成 unverified 候选。
-   注意区分：同义词归一（火锅→涮锅）这类**无语义推断的确定性规则**可以留，
-   删的是"无依据地替模型选方向"的隐式替身。
-2. **用户意图只由 GoalUnderstandingAgent 判断**。「你推荐」「随便」这类说法
-   一个字都不该进代码常量；prompt 里写规则，代码里不做关键词匹配。
-3. **追问选项按 id 走协议**。`optionEffects` 的 key 只能是 option.id，前端回传
-   id、不回传文案，也不许自己造选项。
+修改 Agent 代码、评测或架构文档前，必须阅读
+[`docs/specs/restaurant-search-agent.md`](docs/specs/restaurant-search-agent.md)。目标架构、
+技术理由和迁移顺序见
+[`docs/technical/agent-architecture-root-decision-2026-08.md`](docs/technical/agent-architecture-root-decision-2026-08.md)。
 
 ### Agent 评测 (`evals/`)
-`npm run eval` 用桩模型 + fixture 高德驱动真实 loop，度量的是**行为**：
-串行搜索步数、评估调用数、重复评估数、追问率、主推荐数。改动 policy /
-runtime / 缓存后必须跑，并在 PR 里附基线 diff。
+
+`npm run eval` 当前使用桩模型 + fixture 高德，适合度量 Runtime/workflow 的搜索步数、
+调用量、重复评估和事件行为；它不证明真实模型的 Agent 决策质量。Agent 语义改动还需
+覆盖真实模型或可审查 trace 中的工具选择、参数、目标关系、授权、证据和停止原因。
 
 ### External Services
-- **OpenAI 兼容接口** (`lib/agent/modelClient.ts`) - 所有 Agent 的模型调用入口
+- **OpenAI 兼容接口** (`lib/agent/modelClient.ts`) - 模型请求入口；当前主要是单次结构化调用
 - **Amap** (`lib/amap.ts`) - Primary POI search for China
 - **OpenStreetMap** (`lib/osm.ts`) - Global fallback
 
@@ -173,7 +140,7 @@ Coverage threshold: 70% across all metrics.
 模型决策路径默认被 `AGENT_DETERMINISTIC=1`（`jest.setup.js`）关掉。要覆盖模型
 分支的用例，在用例内 `delete process.env.AGENT_DETERMINISTIC` 并 mock
 `@/lib/withTimeout` 的 `fetchWithTimeout`，参考
-`__tests__/lib/agent/subagents/replanAgent.test.ts`。
+`__tests__/lib/agent/models/searchReplanModel.test.ts`。
 
 改动 agent loop 行为时，单测之外还要跑 `npm run eval`——单测锁的是分支，
 eval 锁的是"这一轮总共搜了几步、评了几次"。

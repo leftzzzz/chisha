@@ -81,17 +81,17 @@ async function loadRuntime(parallel: boolean) {
 
   // 每一轮自由文本都要经过 Supervisor：模型不可用时 runtime 直接报错，
   // 不再有"按原文关键词搜索"的降级路径，所以这里必须显式桩掉理解环节。
-  jest.doMock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
-    const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
+  jest.doMock('@/lib/agent/models/goalUnderstandingModel', () => {
+    const actual = jest.requireActual('@/lib/agent/models/goalUnderstandingModel');
     return {
       ...actual,
-      runGoalUnderstandingAgent: jest.fn(async () => ({ goal: goal() })),
+      runGoalUnderstandingModel: jest.fn(async () => ({ goal: goal() })),
       runSearchReplan: jest.fn(async () => null),
     };
   });
 
-  jest.doMock('@/lib/agent/subagents/evaluationAgent', () => ({
-    runEvaluationAgent: jest.fn(async (input: { restaurants: Restaurant[] }) => ({
+  jest.doMock('@/lib/agent/models/evaluationModel', () => ({
+    runEvaluationModel: jest.fn(async (input: { restaurants: Restaurant[] }) => ({
       verdicts: input.restaurants.map((item) => ({
         restaurantId: item.id,
         status: 'passed' as const,

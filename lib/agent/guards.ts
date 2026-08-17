@@ -1,7 +1,7 @@
 import type { Restaurant } from '@/types';
 import type {
   CandidateVerdict,
-  EvaluationAgentOutput,
+  EvaluationModelOutput,
   GuardrailViolation,
   PolicyContext,
   SearchPlan,
@@ -11,6 +11,7 @@ import { evaluateConstraint } from './constraintEvaluator';
 import { getStrictDistanceMaxMeters } from './goal';
 import { hasTriedPlan } from './searchAttempts';
 import { SearchPlanSchema } from './schemas/plan';
+import { isPrimaryScopeAuthorized } from './searchAction';
 
 export interface HardConstraintGuardResult {
   passed: Restaurant[];
@@ -21,7 +22,7 @@ export interface HardConstraintGuardResult {
 }
 
 export interface RuntimeVerdictGuardResult {
-  output: EvaluationAgentOutput;
+  output: EvaluationModelOutput;
   rejectedVerdicts: CandidateVerdict[];
 }
 
@@ -44,6 +45,18 @@ export function validateSearchPlan(plan: SearchPlan, ctx: PolicyContext): Guardr
       details: { plan },
     });
     return violations;
+  }
+
+  if (
+    plan.searchAction
+    && plan.allowedForPrimary !== isPrimaryScopeAuthorized(ctx.goal, plan.searchAction)
+  ) {
+    violations.push({
+      code: 'UNAUTHORIZED_BROADENING',
+      message: '搜索动作的主推荐授权与 Runtime 派生结果不一致。',
+      severity: 'error',
+      details: { plan },
+    });
   }
 
   const excluded = plan.keywords.filter((keyword) =>
@@ -103,7 +116,7 @@ export function applyHardConstraintGuard(
 }
 
 export function applyVerdictGuard(
-  evaluation: EvaluationAgentOutput,
+  evaluation: EvaluationModelOutput,
   restaurants: Restaurant[],
   goal: UserGoal,
   plan: SearchPlan,
