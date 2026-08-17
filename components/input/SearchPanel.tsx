@@ -81,14 +81,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
         </div>
       </div>
 
-      <div className="relative">
-        <div className="food-orbit mb-5 hidden md:block" aria-hidden="true">
-          <div className="food-orbit__item">辣</div>
-          <div className="food-orbit__item">鲜</div>
-          <div className="food-orbit__item">热</div>
-          <div className="food-orbit__item">快</div>
-        </div>
-
+      <div className="relative min-w-0">
         <div className="surface-panel relative space-y-4 rounded-[1.5rem] p-4 sm:space-y-5 sm:rounded-[2rem] sm:p-6">
           <div className="md:hidden">
             <h2 className="text-2xl font-black leading-tight text-dark">今天想吃什么？</h2>
