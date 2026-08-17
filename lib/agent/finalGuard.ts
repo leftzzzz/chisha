@@ -1,52 +1,126 @@
 import type {
   AgentContext,
+  FinalGuardResult,
+  FinalGuardVerdict,
+  FinalGuardViolation,
   FinishRecommendation,
   RestaurantCandidate,
 } from './types';
 import { isCandidateFreshForContext } from './goalVersion';
+import { evaluateConstraint } from './constraintEvaluator';
 import {
   isBroadSearchIntent,
-  isOpenExplorationAuthorized,
   isSearchIntentAuthorizedForPrimary,
 } from './authorization';
-import { getRestaurantIdentityKeys, getRestaurantInfoScore, getRestaurantBrand, countDistinctBrands } from '@/lib/restaurantIdentity';
-
-export interface FinalGuardResult {
-  primaryCandidates: RestaurantCandidate[];
-  backupCandidates: RestaurantCandidate[];
-  unmetConstraints: string[];
-}
+import { getRestaurantIdentityKeys } from '@/lib/restaurantIdentity';
 
 export function applyFinalGuard(
   context: AgentContext,
   proposed?: FinishRecommendation
 ): FinalGuardResult {
-  const orderedCandidates = orderCandidates(context, proposed);
-  const recommendationCandidates = isRandomRecommendationContext(context)
-    ? seededShuffleCandidates(orderedCandidates, randomRecommendationSeed(context))
-    : dedupeCandidatesForRecommendation(orderedCandidates);
-  const strictPrimary = recommendationCandidates
-    .filter((candidate) => isPrimaryRecommendationAllowed(candidate, context))
-    .slice(0, context.targetCount);
-  // 严格准入凑不满时，用"品类兼容但菜单未验证"的候选补齐，避免菜品级目标
-  // 因为 POI 没有菜单字段而永远空手而归。补进来的带 warning，见 buildUnmetConstraints。
-  const categoryBackfill = strictPrimary.length >= context.targetCount
-    ? []
-    : recommendationCandidates
-      .filter((candidate) => !strictPrimary.includes(candidate))
-      .filter((candidate) => isCategoryCompatiblePrimaryAllowed(candidate, context))
-      .slice(0, context.targetCount - strictPrimary.length);
-  const primaryCandidates = [...strictPrimary, ...categoryBackfill];
-  const primaryIds = new Set(primaryCandidates.map((candidate) => candidate.restaurant.id));
-  const backupCandidates = recommendationCandidates
-    .filter((candidate) => !primaryIds.has(candidate.restaurant.id))
-    .filter((candidate) => isBackupRecommendationAllowed(candidate))
-    .slice(0, 20);
+  const primaryResolution = resolveCandidateIds(
+    context,
+    proposed?.selectedIds === undefined && proposed?.candidateIds !== undefined
+      ? []
+      : proposed?.selectedIds,
+    'selectedIds'
+  );
+  const dedupedPrimary = dedupeCandidatesPreservingOrder(
+    primaryResolution.candidates,
+    'selectedIds'
+  );
+  const primaryCandidates: RestaurantCandidate[] = [];
+  const downgradedCandidates: RestaurantCandidate[] = [];
+  const violations = [
+    ...primaryResolution.violations,
+    ...dedupedPrimary.violations,
+  ];
+
+  for (const candidate of dedupedPrimary.candidates) {
+    const violation = primaryAdmissionViolation(candidate, context);
+    if (!violation && primaryCandidates.length < context.targetCount) {
+      primaryCandidates.push(candidate);
+      continue;
+    }
+
+    if (!violation) {
+      downgradedCandidates.push(candidate);
+      violations.push({
+        code: 'PRIMARY_LIMIT_EXCEEDED',
+        candidateId: candidate.restaurant.id,
+        field: 'selectedIds',
+        disposition: 'backup',
+        message: `候选「${candidate.restaurant.name}」超出本轮主推荐数量上限，已降为候补。`,
+      });
+      continue;
+    }
+
+    const disposition = isBackupRecommendationAllowed(candidate, context)
+      ? 'backup'
+      : 'removed';
+    violations.push({
+      ...violation,
+      candidateId: candidate.restaurant.id,
+      field: 'selectedIds',
+      disposition,
+    });
+    if (disposition === 'backup') {
+      downgradedCandidates.push(candidate);
+    }
+  }
+
+  const backupResolution = proposed?.candidateIds === undefined
+    ? {
+        candidates: context.candidates.filter(
+          (candidate) => !dedupedPrimary.candidates.includes(candidate)
+        ),
+        violations: [],
+      }
+    : resolveCandidateIds(context, proposed.candidateIds, 'candidateIds');
+  const dedupedBackups = dedupeCandidatesPreservingOrder(
+    [...downgradedCandidates, ...backupResolution.candidates],
+    'candidateIds',
+    primaryCandidates
+  );
+  violations.push(...backupResolution.violations, ...dedupedBackups.violations);
+  const backupCandidates: RestaurantCandidate[] = [];
+  for (const candidate of dedupedBackups.candidates) {
+    const violation = backupAdmissionViolation(candidate, context);
+    if (!violation && backupCandidates.length < 20) {
+      backupCandidates.push(candidate);
+      continue;
+    }
+
+    if (violation) {
+      violations.push({
+        ...violation,
+        candidateId: candidate.restaurant.id,
+        field: 'candidateIds',
+        disposition: 'removed',
+      });
+    }
+  }
+
+  const proposedPrimaryCount = proposed?.selectedIds?.length
+    ?? primaryResolution.candidates.length;
+  const verdict: FinalGuardVerdict = proposedPrimaryCount > 0 && primaryCandidates.length === 0
+    ? 'rejected'
+    : violations.length > 0
+      ? 'filtered'
+      : 'accepted';
 
   return {
+    verdict,
     primaryCandidates,
     backupCandidates,
-    unmetConstraints: buildUnmetConstraints(context, primaryCandidates, proposed),
+    unmetConstraints: buildUnmetConstraints(
+      context,
+      primaryCandidates,
+      backupCandidates,
+      violations,
+      proposed
+    ),
+    violations,
   };
 }
 
@@ -56,95 +130,91 @@ export function applyFinalGuard(
  */
 export type CandidateAdmissionContext = Pick<AgentContext, 'goal' | 'attempts' | 'location'>;
 
+type PrimaryAdmissionViolation = Pick<FinalGuardViolation, 'code' | 'message'>;
+
 export function isPrimaryRecommendationAllowed(
   candidate: RestaurantCandidate,
   context: CandidateAdmissionContext
 ): boolean {
-  if (candidate.verification.status !== 'passed') {
-    return false;
-  }
-
-  if (!candidate.verification.primaryEligible) {
-    return false;
-  }
-
-  if (!passesSearchAuthorizationGates(candidate, context)) {
-    return false;
-  }
-
-  const sourceAttempt = context.attempts[candidate.sourceAttempt - 1]!;
-  if (hasRequiredItems(context)) {
-    return candidate.verification.itemMatches.length > 0
-      || (
-        candidate.verification.primaryEligible
-        && isBroadSearchIntent(sourceAttempt.searchIntent)
-        && isSearchIntentAuthorizedForPrimary(
-          context.goal,
-          sourceAttempt.searchIntent,
-          sourceAttempt.keywords
-        )
-      );
-  }
-
-  return true;
+  return primaryAdmissionViolation(candidate, context) === undefined;
 }
 
 /**
- * 品类兼容、但菜单层面无法验证的候选，是否可以补进主推荐。
- *
- * 存在的理由：POI 事实字段里根本没有菜单，所以"这家店有柠檬茶"这种菜品级
- * 断言，除非店名恰好写着，否则**永远**验证不出来。严格准入因此在这类目标上
- * 是一条构造上不可达的线——线上表现就是广东能出结果、成都武汉全军覆没。
- *
- * 这里放宽的只有"菜品是否验证到"这一项。排除项、停业、距离硬约束、搜索授权
- * 一条都不放，且只在严格准入凑不满目标数时才启用，补进来的会带 warning。
- */
-export function isCategoryCompatiblePrimaryAllowed(
-  candidate: RestaurantCandidate,
-  context: CandidateAdmissionContext
-): boolean {
-  if (candidate.verification.status !== 'unverified') {
-    return false;
-  }
-
-  if (candidate.verification.categoryMatches.length === 0) {
-    return false;
-  }
-
-  return passesSearchAuthorizationGates(candidate, context);
-}
-
-/**
- * 决策层判断"这一轮到底有没有主推荐"的口径。
- *
- * 必须与 applyFinalGuard 的装配口径一致：policy 用严格准入去决定要不要追问、
- * finalGuard 却能靠品类补位装配出结果，就会出现"策略说没有、装配说有 3 家"
- * 的分裂——线上表现是明明能给结果却弹了追问。
+ * 决策层判断“这一轮到底有没有主推荐”的兼容入口。
+ * 目标 Agent 落地前 policy 仍复用它，但口径只能是 FinalGuard 的严格准入。
  */
 export function isPrimaryRecommendationEligible(
   candidate: RestaurantCandidate,
   context: CandidateAdmissionContext
 ): boolean {
-  return isPrimaryRecommendationAllowed(candidate, context)
-    || isCategoryCompatiblePrimaryAllowed(candidate, context);
+  return isPrimaryRecommendationAllowed(candidate, context);
 }
 
-/** 与"菜品验证到没有"无关的那部分准入：新鲜度、硬约束、搜索授权。 */
-function passesSearchAuthorizationGates(
+function primaryAdmissionViolation(
   candidate: RestaurantCandidate,
   context: CandidateAdmissionContext
-): boolean {
+): PrimaryAdmissionViolation | undefined {
   if (!isCandidateFreshForContext(candidate, context)) {
-    return false;
+    return {
+      code: 'STALE_CANDIDATE',
+      message: `候选「${candidate.restaurant.name}」来自旧目标或旧位置，已移出主推荐。`,
+    };
   }
 
   if (candidate.verification.hardFailures.length > 0) {
-    return false;
+    return {
+      code: 'HARD_CONSTRAINT_FAILED',
+      message: `候选「${candidate.restaurant.name}」违反明确硬约束，已移出发布结果。`,
+    };
+  }
+
+  const deterministicFailure = deterministicHardConstraintMessage(candidate, context, 'failed');
+  if (deterministicFailure) {
+    return {
+      code: 'HARD_CONSTRAINT_FAILED',
+      message: deterministicFailure,
+    };
   }
 
   const sourceAttempt = context.attempts[candidate.sourceAttempt - 1];
-  if (!sourceAttempt || sourceAttempt.allowedForPrimary === false) {
-    return false;
+  if (!sourceAttempt) {
+    return {
+      code: 'MISSING_SOURCE_ATTEMPT',
+      message: `候选「${candidate.restaurant.name}」缺少可追溯搜索来源，已移出发布结果。`,
+    };
+  }
+
+  if (candidate.verification.status === 'failed') {
+    return {
+      code: 'VERIFICATION_FAILED',
+      message: `候选「${candidate.restaurant.name}」未通过候选验证，已移出发布结果。`,
+    };
+  }
+
+  if (candidate.verification.status !== 'passed') {
+    return {
+      code: 'UNVERIFIED_EVIDENCE',
+      message: `候选「${candidate.restaurant.name}」证据不足，只能作为不确定候补。`,
+    };
+  }
+
+  const unverifiedHardConstraint = deterministicHardConstraintMessage(
+    candidate,
+    context,
+    'unverified'
+  );
+  if (unverifiedHardConstraint) {
+    return {
+      code: 'UNVERIFIED_EVIDENCE',
+      message: `${unverifiedHardConstraint} 只能作为不确定候补。`,
+    };
+  }
+
+  if (sourceAttempt.allowedForPrimary === false) {
+    return {
+      code: 'UNAUTHORIZED_PRIMARY_SCOPE',
+      message: `候选「${candidate.restaurant.name}」的搜索范围未获主推荐授权，只能作为候补。`,
+    };
   }
 
   if (
@@ -155,237 +225,175 @@ function passesSearchAuthorizationGates(
       sourceAttempt.keywords
     )
   ) {
-    return false;
+    return {
+      code: 'UNAUTHORIZED_PRIMARY_SCOPE',
+      message: `候选「${candidate.restaurant.name}」来自未授权放宽，只能作为候补。`,
+    };
   }
 
-  return true;
+  if (!candidate.verification.primaryEligible) {
+    return {
+      code: 'PRIMARY_INELIGIBLE',
+      message: `候选「${candidate.restaurant.name}」未获得主推荐资格，只能作为候补。`,
+    };
+  }
+
+  if (
+    hasRequiredItems(context)
+    && candidate.verification.itemMatches.length === 0
+    && !(
+      isBroadSearchIntent(sourceAttempt.searchIntent)
+      && isSearchIntentAuthorizedForPrimary(
+        context.goal,
+        sourceAttempt.searchIntent,
+        sourceAttempt.keywords
+      )
+    )
+  ) {
+    return {
+      code: 'REQUIRED_ITEM_UNSUPPORTED',
+      message: `候选「${candidate.restaurant.name}」缺少必选菜品证据，只能作为候补。`,
+    };
+  }
+
+  return undefined;
 }
 
-function isBackupRecommendationAllowed(candidate: RestaurantCandidate): boolean {
-  return candidate.verification.status !== 'failed';
+function isBackupRecommendationAllowed(
+  candidate: RestaurantCandidate,
+  context: CandidateAdmissionContext
+): boolean {
+  return backupAdmissionViolation(candidate, context) === undefined;
 }
 
-function orderCandidates(
+function backupAdmissionViolation(
+  candidate: RestaurantCandidate,
+  context: CandidateAdmissionContext
+): PrimaryAdmissionViolation | undefined {
+  if (!isCandidateFreshForContext(candidate, context)) {
+    return {
+      code: 'STALE_CANDIDATE',
+      message: `候选「${candidate.restaurant.name}」来自旧目标或旧位置，已移出发布结果。`,
+    };
+  }
+
+  if (candidate.verification.hardFailures.length > 0) {
+    return {
+      code: 'HARD_CONSTRAINT_FAILED',
+      message: `候选「${candidate.restaurant.name}」违反明确硬约束，已移出发布结果。`,
+    };
+  }
+
+  const deterministicFailure = deterministicHardConstraintMessage(candidate, context, 'failed');
+  if (deterministicFailure) {
+    return {
+      code: 'HARD_CONSTRAINT_FAILED',
+      message: deterministicFailure,
+    };
+  }
+
+  if (!context.attempts[candidate.sourceAttempt - 1]) {
+    return {
+      code: 'MISSING_SOURCE_ATTEMPT',
+      message: `候选「${candidate.restaurant.name}」缺少可追溯搜索来源，已移出发布结果。`,
+    };
+  }
+
+  if (candidate.verification.status === 'failed') {
+    return {
+      code: 'VERIFICATION_FAILED',
+      message: `候选「${candidate.restaurant.name}」未通过候选验证，已移出发布结果。`,
+    };
+  }
+
+  return undefined;
+}
+
+function resolveCandidateIds(
   context: AgentContext,
-  proposed?: FinishRecommendation
-): RestaurantCandidate[] {
+  ids: string[] | undefined,
+  field: FinalGuardViolation['field']
+): { candidates: RestaurantCandidate[]; violations: FinalGuardViolation[] } {
+  if (ids === undefined) {
+    return { candidates: [...context.candidates], violations: [] };
+  }
+
   const byId = new Map(context.candidates.map((candidate) => [candidate.restaurant.id, candidate]));
-  const proposedIds = [
-    ...(proposed?.selectedIds ?? []),
-    ...(proposed?.candidateIds ?? []),
-  ];
-  const proposedCandidates = proposedIds
-    .map((id) => byId.get(id))
-    .filter((candidate): candidate is RestaurantCandidate => Boolean(candidate));
-  const seen = new Set(proposedCandidates.map((candidate) => candidate.restaurant.id));
-  const remaining = context.candidates.filter((candidate) => !seen.has(candidate.restaurant.id));
+  const candidates: RestaurantCandidate[] = [];
+  const violations: FinalGuardViolation[] = [];
 
-  return [...proposedCandidates, ...remaining].sort(compareCandidate);
-}
-
-function isRandomRecommendationContext(context: AgentContext): boolean {
-  return isOpenExplorationAuthorized(context.goal)
-    && !hasExplicitPrimaryTargets(context)
-    && context.attempts.some((attempt) => attempt.searchIntent === 'fallback');
-}
-
-function hasExplicitPrimaryTargets(context: AgentContext): boolean {
-  return [
-    ...context.goal.primaryKeywords,
-    ...context.goal.requestedItems.map((item) => item.name),
-    ...context.goal.acceptableCategories.map((category) => category.name),
-  ].some((target) => target.trim().length > 0);
-}
-
-function randomRecommendationSeed(context: AgentContext): string {
-  return [
-    context.sessionId,
-    context.goal.rawQuery,
-    context.location.lat.toFixed(4),
-    context.location.lng.toFixed(4),
-    context.attempts.map((attempt) =>
-      `${attempt.searchIntent}:${attempt.keywords.join(',')}:${attempt.radius}`
-    ).join(';'),
-  ].filter(Boolean).join('|');
-}
-
-/**
- * 开放推荐的候选排序：先按探索方向轮转，方向内再随机。
- *
- * 只随机不轮转的话，候选基数大的方向会把转盘吃满——线上实测「随便推荐」
- * 并发搜了火锅/甜品/小吃，结果 8 个格子里 5 个火锅 3 个甜品，小吃一家没进。
- * 用户要的是"帮我挑几个方向"，不是"哪个方向搜到的多就给哪个"。
- */
-function seededShuffleCandidates(
-  candidates: RestaurantCandidate[],
-  seed: string
-): RestaurantCandidate[] {
-  const shuffled = dedupeCandidatesForRecommendation(candidates)
-    .map((candidate, index) => ({
-      candidate,
-      index,
-      key: hashString(`${seed}:${candidate.restaurant.id}:${candidate.restaurant.name}`),
-    }))
-    .sort((left, right) => left.key - right.key || left.index - right.index)
-    .map((item) => item.candidate);
-
-  return interleaveBySearchDirection(shuffled);
-}
-
-/**
- * 按来源 attempt（即搜索方向）轮转取候选。
- *
- * 方向内顺序保持传入顺序（已随机），方向之间轮流出一个，直到取完。
- */
-function interleaveBySearchDirection(
-  candidates: RestaurantCandidate[]
-): RestaurantCandidate[] {
-  const buckets = new Map<number, RestaurantCandidate[]>();
-
-  for (const candidate of candidates) {
-    const bucket = buckets.get(candidate.sourceAttempt);
-    if (bucket) {
-      bucket.push(candidate);
-    } else {
-      buckets.set(candidate.sourceAttempt, [candidate]);
-    }
-  }
-
-  if (buckets.size <= 1) {
-    return candidates;
-  }
-
-  const queues = Array.from(buckets.values());
-  const interleaved: RestaurantCandidate[] = [];
-
-  for (let round = 0; interleaved.length < candidates.length; round += 1) {
-    for (const queue of queues) {
-      const candidate = queue[round];
-      if (candidate) {
-        interleaved.push(candidate);
-      }
-    }
-  }
-
-  return interleaved;
-}
-
-function hashString(value: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  return hash >>> 0;
-}
-
-function dedupeCandidatesForRecommendation(
-  candidates: RestaurantCandidate[]
-): RestaurantCandidate[] {
-  const candidateMap = new Map<string, RestaurantCandidate>();
-  const deduped: RestaurantCandidate[] = [];
-  const brandSeen = new Map<string, RestaurantCandidate>();
-
-  for (const candidate of candidates) {
-    const keys = getRestaurantIdentityKeys(candidate.restaurant);
-    const existing = keys
-      .map((key) => candidateMap.get(key))
-      .find((item): item is RestaurantCandidate => Boolean(item));
-
-    if (!existing) {
-      const brand = getRestaurantBrand(candidate.restaurant);
-      if (brand) {
-        const existingBrand = brandSeen.get(brand);
-        if (existingBrand) {
-          if (shouldReplaceRecommendationCandidate(existingBrand, candidate)) {
-            const idx = deduped.indexOf(existingBrand);
-            if (idx >= 0) deduped[idx] = candidate;
-            brandSeen.set(brand, candidate);
-          }
-          continue;
-        }
-        brandSeen.set(brand, candidate);
-      }
-      deduped.push(candidate);
-      keys.forEach((key) => candidateMap.set(key, candidate));
+  for (const id of ids) {
+    const candidate = byId.get(id);
+    if (candidate) {
+      candidates.push(candidate);
       continue;
     }
 
-    if (shouldReplaceRecommendationCandidate(existing, candidate)) {
-      const existingIndex = deduped.indexOf(existing);
-      if (existingIndex >= 0) {
-        deduped[existingIndex] = candidate;
-      }
+    violations.push({
+      code: 'UNOBSERVED_CANDIDATE_ID',
+      candidateId: id,
+      field,
+      disposition: 'removed',
+      message: `候选 id「${id}」未出现在本轮 observation 中，已拒绝发布。`,
+    });
+  }
 
-      new Set([
-        ...getRestaurantIdentityKeys(existing.restaurant),
-        ...keys,
-      ]).forEach((key) => candidateMap.set(key, candidate));
+  return { candidates, violations };
+}
+
+function dedupeCandidatesPreservingOrder(
+  candidates: RestaurantCandidate[],
+  field: FinalGuardViolation['field'],
+  alreadyAccepted: RestaurantCandidate[] = []
+): { candidates: RestaurantCandidate[]; violations: FinalGuardViolation[] } {
+  const deduped: RestaurantCandidate[] = [];
+  const seenKeys = new Set(
+    alreadyAccepted.flatMap((candidate) => getRestaurantIdentityKeys(candidate.restaurant))
+  );
+  const violations: FinalGuardViolation[] = [];
+
+  for (const candidate of candidates) {
+    const keys = getRestaurantIdentityKeys(candidate.restaurant);
+    if (!keys.some((key) => seenKeys.has(key))) {
+      deduped.push(candidate);
+      keys.forEach((key) => seenKeys.add(key));
+      continue;
     }
+
+    violations.push({
+      code: 'DUPLICATE_CANDIDATE',
+      candidateId: candidate.restaurant.id,
+      field,
+      disposition: 'removed',
+      message: `候选「${candidate.restaurant.name}」与已保留地点重复，已保序去重。`,
+    });
   }
 
-  return deduped;
-}
-
-function shouldReplaceRecommendationCandidate(
-  existing: RestaurantCandidate,
-  candidate: RestaurantCandidate
-): boolean {
-  const rank = compareCandidate(candidate, existing);
-  if (rank !== 0) {
-    return rank < 0;
-  }
-
-  return getRestaurantInfoScore(candidate.restaurant) > getRestaurantInfoScore(existing.restaurant);
-}
-
-function compareCandidate(a: RestaurantCandidate, b: RestaurantCandidate): number {
-  const statusRank = verificationRank(b) - verificationRank(a);
-  if (statusRank !== 0) {
-    return statusRank;
-  }
-
-  if (b.score !== a.score) {
-    return b.score - a.score;
-  }
-
-  return (a.restaurant.distance ?? Infinity) - (b.restaurant.distance ?? Infinity);
-}
-
-function verificationRank(candidate: RestaurantCandidate): number {
-  if (candidate.verification.status === 'passed') return 3;
-  if (candidate.verification.status === 'unverified') return 2;
-  return 1;
+  return { candidates: deduped, violations };
 }
 
 function buildUnmetConstraints(
   context: AgentContext,
   primaryCandidates: RestaurantCandidate[],
+  backupCandidates: RestaurantCandidate[],
+  violations: FinalGuardViolation[],
   proposed?: FinishRecommendation
 ): string[] {
   const unmet = [
     ...context.unmetConstraints,
     ...context.goal.ambiguity,
     ...(proposed?.unmetConstraints ?? []),
+    ...violations
+      .filter((violation) => violation.field === 'selectedIds')
+      .map((violation) => violation.message),
   ];
 
   if (primaryCandidates.length < context.targetCount) {
-    const brandCount = countDistinctBrands(primaryCandidates.map((c) => c.restaurant));
-    unmet.push(`只找到 ${brandCount} 个不同品牌的餐厅（共 ${primaryCandidates.length} 家）。`);
+    unmet.push(`只找到 ${primaryCandidates.length} 家通过最终准入的餐厅。`);
   }
 
-  const primaryIds = new Set(primaryCandidates.map((candidate) => candidate.restaurant.id));
-  const backfilledCount = primaryCandidates.filter((candidate) =>
+  const hasUnverifiedBackups = backupCandidates.some((candidate) =>
     candidate.verification.status === 'unverified'
-  ).length;
-  if (backfilledCount > 0) {
-    unmet.push(`其中 ${backfilledCount} 家按品类匹配推荐，未能确认菜单，请以门店实际供应为准。`);
-  }
-
-  const hasUnverifiedBackups = context.candidates.some((candidate) =>
-    candidate.verification.status === 'unverified'
-    && !primaryIds.has(candidate.restaurant.id)
   );
   if (hasUnverifiedBackups) {
     unmet.push('部分候补缺少可验证字段，未进入主推荐。');
@@ -423,3 +431,30 @@ function buildUnmetConstraints(
 function hasRequiredItems(context: CandidateAdmissionContext): boolean {
   return context.goal.requestedItems.some((item) => item.required);
 }
+
+function deterministicHardConstraintMessage(
+  candidate: RestaurantCandidate,
+  context: CandidateAdmissionContext,
+  status: 'failed' | 'unverified'
+): string | undefined {
+  for (const constraint of context.goal.hardConstraints) {
+    if (!isDeterministicHardConstraint(constraint.kind)) {
+      continue;
+    }
+
+    const evaluation = evaluateConstraint(candidate.restaurant, constraint);
+    if (evaluation.status === status) {
+      return evaluation.message;
+    }
+  }
+
+  return undefined;
+}
+
+function isDeterministicHardConstraint(
+  kind: UserGoalConstraintKind
+): boolean {
+  return kind === 'distance' || kind === 'budget' || kind === 'open_now';
+}
+
+type UserGoalConstraintKind = AgentContext['goal']['hardConstraints'][number]['kind'];

@@ -53,6 +53,8 @@ export interface EvalExpectation {
   minPrimary?: number;
   /** 主推荐最多条数 */
   maxPrimary?: number;
+  /** 候补最少条数 */
+  minBackup?: number;
   /** 主推荐中必须出现的菜系（任一命中即可） */
   anyCuisine?: string[];
   /** 主推荐中不允许出现的菜系 */

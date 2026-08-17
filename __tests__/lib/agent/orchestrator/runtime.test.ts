@@ -230,12 +230,17 @@ describe('runSearchAgentV3', () => {
       'evaluation',
       'observation',
       'state_update',
+      'guard_decision',
       'final',
     ]));
-    // 常规轮次不再有 model_action / guard_decision：动作由 policy 生成，
-    // guard 只在拒绝时才写 trace。
+    // 常规 action 由 policy 生成，所以没有 model_action；发布前 FinalGuard 必须留痕。
     expect(trace.some((item) => item.type === 'model_action')).toBe(false);
-    expect(trace.some((item) => item.type === 'guard_decision')).toBe(false);
+    expect(trace.find((item) => item.type === 'guard_decision')?.output).toEqual(
+      expect.objectContaining({
+        verdict: 'accepted',
+        primaryIds: ['r1'],
+      })
+    );
     expect(trace.find((item) => item.type === 'runtime_decision')?.output).toEqual(
       expect.objectContaining({ kind: 'search', stage: 'first_batch', plans: ['日料'] })
     );
@@ -389,7 +394,7 @@ describe('runSearchAgentV3', () => {
 
     expect(result.paused).toBe(true);
     expect(result.restaurants).toEqual([]);
-    expect(result.unmetConstraints?.join('')).toContain('不同品牌');
+    expect(result.unmetConstraints?.join('')).toContain('通过最终准入');
   });
 
   it('promotes existing broadened candidates after the user authorizes broadening', async () => {
@@ -540,6 +545,10 @@ describe('runSearchAgentV3', () => {
     expect(result.paused).toBe(true);
     expect(result.question?.question).toContain('非常具体的菜');
     expect(result.restaurants).toEqual([]);
+    expect(result.runtimeState?.trace?.some((item) =>
+      item.type === 'guard_decision'
+      && (item.input as { mode?: string } | undefined)?.mode === 'partial'
+    )).toBe(true);
   });
 
   it('does not ask for broadening again after authorized broadened targets are exhausted', async () => {

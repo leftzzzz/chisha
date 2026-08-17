@@ -633,8 +633,7 @@ function toTarget(goal: UserGoal, keyword: string): SearchKeywordTarget {
 // 候选与授权
 // ---------------------------------------------------------------------------
 
-// 口径与 finalGuard 装配一致（含品类兼容补位），否则会出现"策略判定无结果
-// 去追问、装配其实能给出 3 家"的分裂。见 isPrimaryRecommendationEligible。
+// 迁移期与 FinalGuard 共用严格准入口径，避免策略结束后再由下游补位。
 export function primaryCandidates(ctx: PolicyContext): RestaurantCandidate[] {
   return ctx.candidates.filter((candidate) => isPrimaryRecommendationEligible(candidate, ctx));
 }

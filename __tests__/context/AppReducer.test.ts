@@ -5,7 +5,6 @@
  */
 
 import { appReducer, initialState } from '@/context/AppReducer';
-import { MIN_TURNTABLE_OPTIONS } from '@/lib/turntableOptions';
 import type { AppState, Restaurant, CustomOption, Location } from '@/types';
 
 describe('AppReducer', () => {
@@ -160,8 +159,7 @@ describe('AppReducer', () => {
       expect(newState.selectedIndex).toBe(-1);
     });
 
-    it('should backfill turntable from candidates when primaries cannot fill a spin', () => {
-      // 主推荐只有 1 家时转盘转不动，必须从候补补到 MIN_TURNTABLE_OPTIONS。
+    it('should keep candidates separate when primaries cannot fill a spin', () => {
       const turntable = [mockRestaurant];
       const candidates = createRestaurants(5, 'candidate');
       const action = {
@@ -171,18 +169,8 @@ describe('AppReducer', () => {
 
       const newState = appReducer(initialState, action);
 
-      expect(newState.restaurants).toHaveLength(MIN_TURNTABLE_OPTIONS);
-      expect(newState.restaurants[0]).toEqual(mockRestaurant);
-      expect(newState.restaurants.slice(1).map((restaurant) => restaurant.id)).toEqual([
-        'candidate0',
-        'candidate1',
-      ]);
-      // 补上去的不能同时留在候补池里。
-      expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual([
-        'candidate2',
-        'candidate3',
-        'candidate4',
-      ]);
+      expect(newState.restaurants).toEqual(turntable);
+      expect(newState.candidateRestaurants).toEqual(candidates);
     });
 
     it('should keep Agent explanation and unmet constraints', () => {
@@ -218,7 +206,6 @@ describe('AppReducer', () => {
         id: 'r2',
         name: '另一家餐厅',
       };
-      // 主推荐凑满 MIN_TURNTABLE_OPTIONS，把补位逻辑排除在外，这里只测去重。
       const filler = createRestaurants(2, 'filler');
       const action = {
         type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
@@ -238,7 +225,30 @@ describe('AppReducer', () => {
       expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual(['r2']);
     });
 
-    it('should move overflow turntable restaurants into the candidate pool', () => {
+    it('should keep different locations from the same brand', () => {
+      const first = {
+        ...mockRestaurant,
+        id: 'brand-1',
+        name: '同品牌（人民广场店）',
+      };
+      const second = {
+        ...mockRestaurant,
+        id: 'brand-2',
+        name: '同品牌（陆家嘴店）',
+        location: { lat: 31.2404, lng: 121.5037 },
+      };
+      const action = {
+        type: 'SET_RESTAURANTS_WITH_CANDIDATES' as const,
+        payload: { turntable: [first, second], candidates: [] },
+      };
+
+      const newState = appReducer(initialState, action);
+
+      expect(newState.restaurants.map((restaurant) => restaurant.id))
+        .toEqual(['brand-1', 'brand-2']);
+    });
+
+    it('should trim overflow primaries without relabeling them as candidates', () => {
       const turntable = createRestaurants(10, 'primary');
       const candidates = createRestaurants(2, 'candidate');
       const action = {
@@ -254,10 +264,9 @@ describe('AppReducer', () => {
       expect(newState.restaurants.map((restaurant) => restaurant.id)).toEqual(
         turntable.slice(0, 8).map((restaurant) => restaurant.id)
       );
-      expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual([
-        ...turntable.slice(8).map((restaurant) => restaurant.id),
-        ...candidates.map((restaurant) => restaurant.id),
-      ]);
+      expect(newState.candidateRestaurants.map((restaurant) => restaurant.id)).toEqual(
+        candidates.map((restaurant) => restaurant.id)
+      );
     });
 
     it('should support Agent question step', () => {
