@@ -7,7 +7,7 @@
  */
 
 export interface ModelCallMetrics {
-  agentName: string;
+  modelRole: string;
   model: string;
   /** 调用发起时刻；用于把并发调用合并成"串行步数" */
   startedAt: number;
@@ -39,7 +39,7 @@ export interface TurnMetrics {
   failedModelCalls: number;
   legacyModeCalls: number;
   truncatedCalls: number;
-  byAgent: Record<string, { calls: number; ms: number; tokens: number }>;
+  byModelRole: Record<string, { calls: number; ms: number; tokens: number }>;
 }
 
 /** 指标容器；AgentContext 结构性满足。 */
@@ -61,14 +61,14 @@ export function recordModelCall(sink: MetricsSink | undefined, metrics: ModelCal
 
 export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics {
   const calls = sink?.modelCallMetrics ?? [];
-  const byAgent: TurnMetrics['byAgent'] = {};
+  const byModelRole: TurnMetrics['byModelRole'] = {};
 
   for (const call of calls) {
-    const bucket = byAgent[call.agentName] ?? { calls: 0, ms: 0, tokens: 0 };
+    const bucket = byModelRole[call.modelRole] ?? { calls: 0, ms: 0, tokens: 0 };
     bucket.calls += 1;
     bucket.ms += call.durationMs;
     bucket.tokens += (call.promptTokens ?? 0) + (call.completionTokens ?? 0);
-    byAgent[call.agentName] = bucket;
+    byModelRole[call.modelRole] = bucket;
   }
 
   const promptTokens = sum(calls.map((call) => call.promptTokens ?? 0));
@@ -85,7 +85,7 @@ export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics
     failedModelCalls: calls.filter((call) => !call.ok).length,
     legacyModeCalls: calls.filter((call) => call.mode === 'functions').length,
     truncatedCalls: calls.filter((call) => call.truncated).length,
-    byAgent,
+    byModelRole,
   };
 }
 

@@ -1,15 +1,15 @@
 import type { Restaurant } from '@/types';
 import {
-  callJsonFunctionAgent,
-  JSON_FUNCTION_MAX_TOKENS,
-  JSON_FUNCTION_RETRY_MAX_TOKENS,
+  callStructuredModel,
+  STRUCTURED_MODEL_MAX_TOKENS,
+  STRUCTURED_MODEL_RETRY_MAX_TOKENS,
 } from '../modelClient';
 import type { MetricsSink } from '../metrics';
-import { EvaluationAgentOutputSchema } from '../schemas/verdict';
+import { EvaluationModelOutputSchema } from '../schemas/verdict';
 import { AgentError } from '../types';
 import type {
   CandidateVerdict,
-  EvaluationAgentOutput,
+  EvaluationModelOutput,
   SearchPlan,
   UserGoal,
   UserPreferenceSummary,
@@ -21,9 +21,9 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL_EVALUATION
   || process.env.OPENAI_MODEL
   || 'deepseek-v4-flash-0731';
 const EVALUATION_TIMEOUT = 60000;
-const EVALUATION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
-const EVALUATION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
-export interface EvaluationAgentInput {
+const EVALUATION_MAX_TOKENS = STRUCTURED_MODEL_MAX_TOKENS;
+const EVALUATION_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
+export interface EvaluationModelInput {
   metricsSink?: MetricsSink;
   goal: UserGoal;
   plan: SearchPlan;
@@ -37,7 +37,7 @@ export interface EvaluationAgentInput {
   preferenceSummary?: UserPreferenceSummary;
 }
 
-const SYSTEM_PROMPT = `你是餐厅搜索系统的 EvaluationAgent。你**逐家**判断餐厅是否满足用户目标，只依据输入的餐厅事实字段。
+const SYSTEM_PROMPT = `你是餐厅搜索系统的 EvaluationModel。你**逐家**判断餐厅是否满足用户目标，只依据输入的餐厅事实字段。
 
 你不负责挑选最终推荐，也不负责排序——那由系统的确定性规则完成。你只对每一家给出裁决。
 
@@ -108,9 +108,9 @@ const EVALUATION_FUNCTION = {
   },
 };
 
-export async function runEvaluationAgent(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
+export async function runEvaluationModel(input: EvaluationModelInput): Promise<EvaluationModelOutput> {
   if (!OPENAI_API_KEY) {
-    throw new AgentError('EvaluationAgent requires OPENAI_API_KEY', 'CONFIG_MISSING', false);
+    throw new AgentError('EvaluationModel requires OPENAI_API_KEY', 'CONFIG_MISSING', false);
   }
 
   return {
@@ -119,9 +119,9 @@ export async function runEvaluationAgent(input: EvaluationAgentInput): Promise<E
   };
 }
 
-async function callEvaluationModel(input: EvaluationAgentInput): Promise<EvaluationAgentOutput> {
-  return callJsonFunctionAgent({
-    agentName: 'EvaluationAgent',
+async function callEvaluationModel(input: EvaluationModelInput): Promise<EvaluationModelOutput> {
+  return callStructuredModel({
+    modelRole: 'EvaluationModel',
     metricsSink: input.metricsSink,
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
@@ -130,7 +130,7 @@ async function callEvaluationModel(input: EvaluationAgentInput): Promise<Evaluat
     input: buildEvaluationModelInput(input),
     functionDefinition: EVALUATION_FUNCTION,
     functionName: 'evaluateRestaurantCandidates',
-    schema: EvaluationAgentOutputSchema,
+    schema: EvaluationModelOutputSchema,
     temperature: 0,
     maxTokens: EVALUATION_MAX_TOKENS,
     retryMaxTokens: EVALUATION_RETRY_MAX_TOKENS,
@@ -143,12 +143,12 @@ async function callEvaluationModel(input: EvaluationAgentInput): Promise<Evaluat
  *
  * 刻意排除 authorizations / allowBroaden / relatedTargets / broadenedTargets /
  * goalVersion / clarificationNeeded —— 那些是编排层的状态，跟单家餐厅是否满足
- * 目标无关。让子 Agent 看见编排状态，等于请它一起参与编排。
+ * 目标无关。让模型角色看见编排状态，等于请它一起参与编排。
  *
  * plan 同理只保留搜索词：allowedForPrimary / planId / radiusMeters 是授权与
  * 调度信息，授权由 applyVerdictGuard 在事后与裁决相与，不该影响裁决本身。
  */
-function buildEvaluationModelInput(input: EvaluationAgentInput) {
+function buildEvaluationModelInput(input: EvaluationModelInput) {
   return {
     trustedContext: {
       target: {
@@ -203,6 +203,4 @@ function restaurantFactSummary(restaurant: Restaurant) {
     poiTypeCode: restaurant.poiTypeCode,
   };
 }
-
-
 

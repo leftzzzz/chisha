@@ -1,5 +1,5 @@
 import { deriveGoalSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
-import { applyKeywordExpansion } from '@/lib/agent/subagents/keywordExpansionAgent';
+import { applyKeywordExpansion } from '@/lib/agent/models/keywordExpansionModel';
 import type { UserGoal } from '@/lib/agent/types';
 
 function goal(overrides: Partial<UserGoal> = {}): UserGoal {

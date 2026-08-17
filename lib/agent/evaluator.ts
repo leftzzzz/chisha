@@ -2,7 +2,7 @@ import type { Restaurant } from '@/types';
 import type {
   AgentContext,
   CandidateVerdict,
-  EvaluationAgentOutput,
+  EvaluationModelOutput,
   Observation,
   RestaurantCandidate,
   SearchPlan,
@@ -19,7 +19,7 @@ export function evaluateSearchResult(
   context: AgentContext,
   plan: SearchPlan,
   sourceAttempt: number,
-  evaluation: EvaluationAgentOutput
+  evaluation: EvaluationModelOutput
 ): Observation {
   const restaurantById = new Map(restaurants.map((restaurant) => [restaurant.id, restaurant]));
   const acceptedCandidates = evaluation.verdicts
@@ -116,7 +116,7 @@ function buildCandidate(
  * 候选打分。
  *
  * 此前还有一项 "模型把它选进 selectedIds 就 +30"。那是让一个只看到 6 家店的
- * 分批子 Agent 去做全局选择，再把结果当权重——已随 EvaluationAgent 的选择
+ * 分批模型角色 去做全局选择，再把结果当权重——已随 EvaluationModel 的选择
  * 输出一起删除。现在打分完全由裁决内容与距离决定，同样输入必得同样顺序。
  */
 function calculateScore(

@@ -3,7 +3,7 @@ import { GoalUnderstandingOutputSchema } from '@/lib/agent/schemas/clarification
 import { UserGoalSchema } from '@/lib/agent/schemas/goal';
 import { KeywordExpansionOutputSchema } from '@/lib/agent/schemas/keywordExpansion';
 import { SearchPlanSchema } from '@/lib/agent/schemas/plan';
-import { EvaluationAgentOutputSchema } from '@/lib/agent/schemas/verdict';
+import { EvaluationModelOutputSchema } from '@/lib/agent/schemas/verdict';
 
 describe('Agent schema defaults', () => {
   it('defaults non-critical UserGoal fields commonly omitted by models', () => {
@@ -187,7 +187,7 @@ describe('Agent schema defaults', () => {
   });
 
   it('defaults non-critical evaluation output fields', () => {
-    const parsed = EvaluationAgentOutputSchema.parse({
+    const parsed = EvaluationModelOutputSchema.parse({
       verdicts: [{
         restaurantId: 'r1',
         status: 'passed',
@@ -205,7 +205,7 @@ describe('Agent schema defaults', () => {
   });
 
   it('tolerates common malformed evaluation output fields', () => {
-    const parsed = EvaluationAgentOutputSchema.parse({
+    const parsed = EvaluationModelOutputSchema.parse({
       verdicts: [
         {
           id: 'r1',

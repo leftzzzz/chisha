@@ -185,7 +185,7 @@ function classifyAgentError(
   if (message.includes('搜索超时')) {
     return { message, code: 'SEARCH_PROVIDER_FAILED', recoverable: true };
   }
-  if (message.includes('EvaluationAgent')) {
+  if (message.includes('EvaluationModel')) {
     return { message, code: 'EVALUATION_FAILED', recoverable: true };
   }
 

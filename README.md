@@ -106,24 +106,29 @@ npm run db:migrate:remote
 ## Agent 架构总览
 
 **编排者是代码，不是模型。** 没有"主 Agent 模型"这种东西——`orchestrator/`
-决定一切流程，四个子 Agent 各做一件独立任务。核心原则是**模型只做代码枚举不了的事**：
+决定一切流程，四个结构化模型角色各做一件独立任务。核心原则是**模型只做代码枚举不了的事**：
+
+这是当前实现事实，不是目标架构。目标形态是 Anthropic 术语下的
+`RestaurantSearchLeadAgent` + specialized subagents；迁移边界与顺序以
+`docs/specs/restaurant-search-agent.md` 和
+`docs/technical/agent-architecture-root-decision-2026-08.md` 为准。
 
 | 层 | 谁 | 负责什么 |
 |---|---|---|
 | 编排（代码） | `orchestrator/policy.ts` | **唯一决策者**：本轮从哪开始、搜哪些词、够不够、要不要追问、何时收敛。纯函数，无 I/O 无模型 |
 | 编排（代码） | `orchestrator/runtime.ts` | **只执行**：按决策发起调用、发 SSE、提交状态与 trace |
-| 子 Agent（模型） | `goalUnderstandingAgent` | 理解口语、维护 `UserGoal`、判断信息够不够 |
-| 子 Agent（模型） | `keywordExpansionAgent` | 把目标扩成更容易命中 POI 的搜索词与探索方向 |
-| 子 Agent（模型） | `evaluationAgent` | **逐家**判断 POI 是否满足目标（不选择、不排序） |
-| 子 Agent（模型） | `replanAgent` | 确定性关键词试完仍无主推荐时重新构思方向，一轮最多一次 |
+| 模型角色（模型） | `goalUnderstandingModel` | 理解口语、维护 `UserGoal`、判断信息够不够 |
+| 模型角色（模型） | `keywordExpansionModel` | 把目标扩成更容易命中 POI 的搜索词与探索方向 |
+| 模型角色（模型） | `evaluationModel` | **逐家**判断 POI 是否满足目标（不选择、不排序） |
+| 模型角色（模型） | `searchReplanModel` | 确定性关键词试完仍无主推荐时重新构思方向，一轮最多一次 |
 | 规则库（代码） | `goal.ts` / `guards.ts` / `finalGuard.ts` 等 | 同样输入永远同样输出，不含语义判断 |
 
-依赖方向只允许三条：编排层→子 Agent、编排层→规则库、子 Agent→规则库。
+依赖方向只允许三条：编排层→模型角色、编排层→规则库、模型角色→规则库。
 **这条约束由 `__tests__/lib/agent/layering.test.ts` 强制**，违反即测试红；
-子 Agent 的输入不得含编排状态，由 `subagentContracts.test.ts` 强制。
+模型角色的输入不得含编排状态，由 `modelRoleContracts.test.ts` 强制。
 
 演进过程：动作决策从模型收回到代码见
-`docs/agent-loop-shape-review-2026-08.md`；角色正名与子 Agent 解耦见
+`docs/agent-loop-shape-review-2026-08.md`；角色正名与模型角色解耦见
 `docs/Agent-职责边界重构-技术方案-2026-08.md`。
 
 ```mermaid
@@ -134,13 +139,13 @@ graph TB
 
     RT --> ENTRY["policy.decideTurnEntry<br/>本轮从哪开始"]
     ENTRY -- "optionId 带 effect：确定性打补丁，不调模型" --> GOAL
-    ENTRY -- "自由文本 / 无 effect 的选项" --> GU["goalUnderstandingAgent 模型"]
+    ENTRY -- "自由文本 / 无 effect 的选项" --> GU["goalUnderstandingModel 模型"]
     GU --> GOAL["本轮 UserGoal + conversationMode"]
 
     GOAL --> RESET["policy.decideContextReset<br/>旧的 attempts / candidates 清不清空"]
     RESET --> CTX["createInitialContext 应用重置计划"]
 
-    CTX --> Q{"子 Agent 说要先问清楚？"}
+    CTX --> Q{"模型角色 说要先问清楚？"}
     Q -- "是" --> SCOUT["policy.decideScouting"]
     SCOUT -- "scout" --> PROBE["探一次路 → nearbyCategories<br/>用附近真实品类替换选项"]
     SCOUT -- "skip" --> ASK
@@ -150,18 +155,18 @@ graph TB
 
     Q -- "否" --> PROMO{"授权放宽后已有候选转正？"}
     PROMO -- "是" --> FG
-    PROMO -- "否" --> KW["keywordExpansionAgent 模型"]
+    PROMO -- "否" --> KW["keywordExpansionModel 模型"]
     PROMO -. "首批不依赖联想词，并发发起" .-> POLICY
     KW --> POLICY["policy.decideNextAction"]
 
     POLICY -- "search" --> BATCH["铺开 N 个 SearchPlan<br/>policy 内部已过 guard"]
     BATCH --> TOOL["并行 Amap / OSM"]
-    TOOL --> EVA["evaluationAgent 逐家裁决<br/>+ 一轮内裁决缓存"]
+    TOOL --> EVA["evaluationModel 逐家裁决<br/>+ 一轮内裁决缓存"]
     EVA --> VG["VerdictGuard"]
     VG --> MERGE["Candidate Merge"]
     MERGE --> POLICY
 
-    POLICY -- "replan" --> RP["replanAgent 模型，一轮最多一次"]
+    POLICY -- "replan" --> RP["searchReplanModel 模型，一轮最多一次"]
     RP --> POLICY
     POLICY -- "invalid_plans" --> BUG["策略 bug：上报 + 记为已尝试"]
     BUG --> POLICY
@@ -174,7 +179,7 @@ graph TB
 
 读图说明：方框里的 `policy.*` 是决策函数（纯函数，给状态就能单测）；
 菱形是 runtime 里剩下的两个分支——它们只是转发上游已经做出的判断
-（子 Agent 说要追问、放宽授权已让候选转正），不自行选择动作。
+（模型角色说要追问、放宽授权已让候选转正），不自行选择动作。
 `decideContextReset` 不产生分支，它只算出"清空哪些状态"交给
 `createInitialContext` 执行。
 
@@ -183,22 +188,22 @@ graph TB
 1. 用户输入：“附近想吃便宜点的川菜，不要太远。”
 2. `/api/agent/chat` 校验请求，加载或创建 session。
 3. `policy.decideTurnEntry` 分派：点了带 effect 的追问选项就确定性打补丁
-   （**全程不调模型**）；自由文本才交给 `goalUnderstandingAgent` 理解。
+   （**全程不调模型**）；自由文本才交给 `goalUnderstandingModel` 理解。
 4. `policy.decideContextReset` 按会话模式决定要不要作废已搜到的东西。
-   注意分工：“这句话与上文什么关系”是语义判断，归子 Agent；
+   注意分工：“这句话与上文什么关系”是语义判断，归模型角色；
    “因此要不要清空”是策略判断，归 policy。
 5. 需要先问清楚时，`policy.decideScouting` 判断要不要先探一次路——用户没说
    想吃什么时，先搜一次拿到附近真实品类分布，再据此生成追问选项，避免模型
    凭空复述自己 prompt 里的例子。`decideAskOrConverge` 用问题指纹挡住
    “同一个问题连问两次”。
-6. `keywordExpansionAgent` 生成同义词与探索方向。**首批 exact 搜索不依赖它，
+6. `keywordExpansionModel` 生成同义词与探索方向。**首批 exact 搜索不依赖它，
    两者并发**——首批只用得到 `UserGoal.primaryKeywords`。
 7. `policy.decideNextAction` 决定下一步：搜索（一次铺开整批计划）、结束、
    追问、replan，或在验证不可用时 abort。计划在 policy 内部就过了
    `validateSearchPlan`——任何违规都是编程错误，会以 `invalid_plans` 决策
    显式报出来，**不改写、也不请求重写**。
 8. 批内计划并行调用高德，失败时 fallback 到 OSM。
-9. `evaluationAgent` 逐家验证候选，只出裁决、不做选择与排序。一轮内同一家店
+9. `evaluationModel` 逐家验证候选，只出裁决、不做选择与排序。一轮内同一家店
    只判一次（`evaluationCache.ts`）。
 10. `VerdictGuard` 清理模型 verdict 中不合法的内容。
 11. `FinalGuard` 决定哪些候选能进入主推荐，并按裁决内容与距离确定性排序；
@@ -231,7 +236,7 @@ graph TB
 
 - `lib/agent/types.ts`
 - `lib/agent/schemas/goal.ts`
-- `lib/agent/subagents/goalUnderstandingAgent.ts`（目标理解，模型）
+- `lib/agent/models/goalUnderstandingModel.ts`（目标理解，模型）
 - `lib/agent/goal.ts`（目标代数：合并、打补丁、追问选项应用，纯函数）
 
 ### SearchPlan
@@ -262,7 +267,7 @@ graph TB
 
 ### CandidateVerdict
 
-`CandidateVerdict` 是 `EvaluationAgent` 对餐厅候选的判断。
+`CandidateVerdict` 是 `EvaluationModel` 对餐厅候选的判断。
 
 它应该回答：
 
@@ -282,7 +287,7 @@ graph TB
 
 相关文件：
 
-- `lib/agent/subagents/evaluationAgent.ts`
+- `lib/agent/models/evaluationModel.ts`
 - `lib/agent/schemas/verdict.ts`
 - `lib/agent/guards.ts`
 - `lib/agent/evaluator.ts`
@@ -335,7 +340,7 @@ graph TB
 职责：
 
 - 执行 policy 给出的决策，不自行推导下一步。
-- 调用四个子 Agent 与搜索工具。
+- 调用四个结构化模型角色与搜索工具。
 - 控制 action 次数和评价 batch。
 - 并行执行批内搜索计划，串行提交结果（保证 `sourceAttempt` 索引稳定）。
 - 触发 guard 和 FinalGuard。
@@ -388,8 +393,8 @@ Runtime 的边界：
 
 不要做：
 
-- 不要做语义理解——那是 `goalUnderstandingAgent` 的事。
-- 不要 import 子 Agent 或 `modelClient`——那会破坏"能不 mock 就单测"的性质，
+- 不要做语义理解——那是 `goalUnderstandingModel` 的事。
+- 不要 import 模型角色或 `modelClient`——那会破坏"能不 mock 就单测"的性质，
   `layering.test.ts` 会红。
 - 不要做候选准入——那是 FinalGuard 的事。
 - 不要在 runtime 或 guard 里另写一份顺序决策。
@@ -402,7 +407,7 @@ Runtime 的边界：
 一个刻意的策略：**一个结果都没有时优先换镜头，而不是加深同一个镜头**。
 批次里放 1 个同义词 + 相邻品类，而不是把预算全花在同义词穷举上。
 
-### `lib/agent/subagents/replanAgent.ts`
+### `lib/agent/models/searchReplanModel.ts`
 
 职责：
 
@@ -419,7 +424,7 @@ Runtime 的边界：
 - 不要把“不辣”“都可以”“环境好”这类非餐饮目标塞进搜索关键词。
 - **不要重新承担常规轮次的 action 决策**——那是 `policy.ts` 的职责。
 
-### `lib/agent/subagents/keywordExpansionAgent.ts`
+### `lib/agent/models/keywordExpansionModel.ts`
 
 架构定位：
 
@@ -443,7 +448,7 @@ Runtime 的边界：
 - 不要生成多个意图合并的 keyword。
 - 不要让多个 keyword 共享一个不匹配的窄 POI type。
 
-### `lib/agent/subagents/evaluationAgent.ts`
+### `lib/agent/models/evaluationModel.ts`
 
 职责：
 
@@ -459,13 +464,13 @@ Runtime 的边界：
 - 不要替代 FinalGuard。
 - 不要实现 deterministic verifier fallback。
 
-重要约束：如果 `EvaluationAgent` 失败，系统可以重试、缓存命中、暂停、报错或只返回未验证候补，但不能用本地规则生成 `passed` verdict。
+重要约束：如果 `EvaluationModel` 失败，系统可以重试、缓存命中、暂停、报错或只返回未验证候补，但不能用本地规则生成 `passed` verdict。
 
 ### `lib/agent/evaluationCache.ts`
 
 职责：
 
-- 一轮内同一家餐厅只送一次 `EvaluationAgent`。高德对相邻关键词会返回大量
+- 一轮内同一家餐厅只送一次 `EvaluationModel`。高德对相邻关键词会返回大量
   重叠 POI，而 Evaluation 是调用量最大的 agent。
 - 并发批次下用申领机制协调：同一家店只由一个计划评估，其余等待结果。
 
@@ -615,13 +620,13 @@ Runtime 的边界：
 
 `unverified` 可以作为候补展示，但不能进入主推荐。尤其是用户明确想吃具体菜品时，模型必须有证据证明餐厅匹配。
 
-### 5. 在 EvaluationAgent 失败时做本地语义兜底
+### 5. 在 EvaluationModel 失败时做本地语义兜底
 
 本项目明确不做 deterministic verifier fallback。
 
 允许：
 
-- 重试 EvaluationAgent
+- 重试 EvaluationModel
 - 使用相同输入的 evaluation cache
 - 暂停并告知用户验证失败
 - 返回候补但标记未验证
@@ -653,7 +658,7 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 - policy 这一步为什么选了这个决策（`runtime_decision` trace）
 - Guard 是否拦截
 - 搜索工具返回了什么
-- EvaluationAgent 为什么通过或拒绝，还是命中了缓存
+- EvaluationModel 为什么通过或拒绝，还是命中了缓存
 - FinalGuard 为什么没有让某个候选进入主推荐
 
 ### 9. 只跑单测就改 loop 行为
@@ -676,7 +681,7 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 - `lib/agent/types.ts`
 - `lib/agent/schemas/goal.ts`
-- `lib/agent/subagents/goalUnderstandingAgent.ts`
+- `lib/agent/models/goalUnderstandingModel.ts`
 - `lib/agent/constraintEvaluator.ts`
 - `lib/agent/guards.ts`
 - `lib/agent/finalGuard.ts`
@@ -701,7 +706,7 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 - `lib/agent/orchestrator/policy.ts`（顺序决策、批次、阈值——**先看这里**）
 - `lib/agent/orchestrator/runtime.ts`
 - `lib/agent/poiTaxonomy.ts`
-- `lib/agent/subagents/keywordExpansionAgent.ts`
+- `lib/agent/models/keywordExpansionModel.ts`
 - `__tests__/lib/agent/orchestrator/policy.test.ts`
 - `__tests__/lib/agent/orchestrator/runtime.test.ts`
 - `evals/cases/`（新策略要有对应的 golden case）
@@ -726,7 +731,7 @@ Agent bug 很难只从最终结果判断。开发新能力时要能回答：
 
 - `app/api/agent/chat/route.ts`
 - `lib/agent/session.ts`
-- `lib/agent/subagents/goalUnderstandingAgent.ts`
+- `lib/agent/models/goalUnderstandingModel.ts`
 - `lib/agent/goalVersion.ts`
 - `lib/agent/orchestrator/runtime.ts`
 - `hooks/useRestaurantSearch.ts`
@@ -766,9 +771,9 @@ chisha/
 ├── lib/
 │   ├── agent/
 │   │   ├── orchestrator/runtime.ts # 执行器
-│   │   ├── policy.ts             # 唯一 planner
-│   │   ├── subagents/goalUnderstandingAgent.ts # 目标理解（模型）
-│   │   ├── subagents/replanAgent.ts # 重新构思方向（模型）
+│   │   ├── orchestrator/policy.ts # 当前 workflow 的唯一 planner
+│   │   ├── models/goalUnderstandingModel.ts # 目标理解（模型）
+│   │   ├── models/searchReplanModel.ts # 重新构思方向（模型）
 │   │   ├── evaluationCache.ts    # 一轮内候选裁决缓存
 │   │   ├── session.ts
 │   │   ├── d1SessionStore.ts
@@ -780,7 +785,7 @@ chisha/
 │   │   ├── metrics.ts
 │   │   ├── poiTaxonomy.ts
 │   │   ├── schemas/
-│   │   └── subagents/
+│   │   └── models/
 │   ├── amap.ts
 │   ├── osm.ts
 │   ├── api.ts
@@ -896,11 +901,11 @@ Agent 相关测试集中在：
 - `__tests__/lib/agent/orchestrator/runtime.test.ts`
 - `__tests__/lib/agent/orchestrator/runtime.parallel.test.ts`
 - `__tests__/lib/agent/evaluationCache.test.ts`
-- `__tests__/lib/agent/subagents/goalUnderstandingAgent.test.ts`
-- `__tests__/lib/agent/subagents/replanAgent.test.ts`（replan）
+- `__tests__/lib/agent/models/goalUnderstandingModel.test.ts`
+- `__tests__/lib/agent/models/searchReplanModel.test.ts`（replan）
 - `__tests__/lib/agent/finalGuard.test.ts`
 - `__tests__/lib/agent/guards.test.ts`
-- `__tests__/lib/agent/subagents/evaluationAgent.test.ts`
+- `__tests__/lib/agent/models/evaluationModel.test.ts`
 - `__tests__/app/api/agent/chat.test.ts`
 
 新增 Agent 行为时，至少补三类测试：
@@ -944,7 +949,7 @@ Agent 相关测试集中在：
 4. `lib/agent/types.ts`。
 5. `lib/agent/orchestrator/policy.ts`——顺序决策都在这里。
 6. `lib/agent/orchestrator/runtime.ts`。
-7. `lib/agent/subagents/goalUnderstandingAgent.ts`。
+7. `lib/agent/models/goalUnderstandingModel.ts`。
 8. `lib/agent/finalGuard.ts`。
 9. `__tests__/lib/agent/orchestrator/policy.test.ts` 与 `evals/cases/`。
 
@@ -997,7 +1002,7 @@ Fork 之后需要把 `wrangler.jsonc` 里的 `d1_databases[].database_id` 换成
 
 ### OpenAI API 调用失败怎么办？
 
-部分 Agent 子模块或特定场景有确定性兜底，例如开放推荐、关键词扩展或 action 选择。但 `EvaluationAgent` 不做 deterministic verifier fallback。EvaluationAgent 失败时，不允许把本地规则生成的语义判断作为主推荐依据。
+部分 Agent 子模块或特定场景有确定性兜底，例如开放推荐、关键词扩展或 action 选择。但 `EvaluationModel` 不做 deterministic verifier fallback。EvaluationModel 失败时，不允许把本地规则生成的语义判断作为主推荐依据。
 
 ### 高德搜索无结果怎么办？
 
@@ -1008,7 +1013,7 @@ Agent 会尝试同义词、相邻品类或 fallback 搜索。Amap 失败时 API 
 通常是以下原因之一：
 
 - 没通过硬约束。
-- EvaluationAgent 判断为 `unverified` 或 `failed`。
+- EvaluationModel 判断为 `unverified` 或 `failed`。
 - 来自未授权放宽搜索。
 - FinalGuard 判定不能进入主推荐。
 - 候选对应旧 goal 或旧 location，应该重新验证。

@@ -1,7 +1,7 @@
 /**
- * GoalUnderstandingAgent：把用户的自然语言变成结构化 UserGoal / GoalPatch。
+ * GoalUnderstandingModel：把用户的自然语言变成结构化 UserGoal / GoalPatch。
  *
- * 它是**子 Agent**，不是主 Agent——流程由 orchestrator/policy 决定。这里只回答
+ * 它是一次结构化模型角色调用，不是独立 Agent——流程由 orchestrator/policy 决定。这里只回答
  * 两个语义问题：用户想要什么，以及这句话与上文是什么关系（conversationMode）。
  * "因此该不该清空搜索状态"是编排层的判断，不在这里。
  *
@@ -10,9 +10,9 @@
 
 import { logger } from '@/lib/logger';
 import {
-  callJsonFunctionAgent,
-  JSON_FUNCTION_MAX_TOKENS,
-  JSON_FUNCTION_RETRY_MAX_TOKENS,
+  callStructuredModel,
+  STRUCTURED_MODEL_MAX_TOKENS,
+  STRUCTURED_MODEL_RETRY_MAX_TOKENS,
 } from '../modelClient';
 import { normalizePendingAnswerPatch, primaryTargetSetSignature } from '../goal';
 import type { MetricsSink } from '../metrics';
@@ -36,8 +36,8 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL_SUPERVISOR
   || process.env.OPENAI_MODEL
   || 'deepseek-v4-flash-0731';
 const GOAL_UNDERSTANDING_TIMEOUT = 60000;
-const GOAL_UNDERSTANDING_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
-const GOAL_UNDERSTANDING_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
+const GOAL_UNDERSTANDING_MAX_TOKENS = STRUCTURED_MODEL_MAX_TOKENS;
+const GOAL_UNDERSTANDING_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
 
 export interface GoalUnderstandingInput {
   message: string;
@@ -56,7 +56,7 @@ export interface GoalUnderstandingOutput {
   conversationMode?: ConversationMode;
 }
 
-const SYSTEM_PROMPT = `你是 GoalUnderstandingAgent，餐厅搜索系统的目标理解子 Agent。你负责理解用户消息、维护 UserGoal、生成 GoalPatch，并判断信息是否足够、是否需要先追问。
+const SYSTEM_PROMPT = `你是 GoalUnderstandingModel，餐厅搜索系统的目标理解模型角色。你负责理解用户消息、维护 UserGoal、生成 GoalPatch，并判断信息是否足够、是否需要先追问。
 
 边界：
 0. 你不决定搜索流程——搜什么、搜几轮、何时结束由系统的策略层决定，不要在输出里安排后续步骤。
@@ -64,16 +64,16 @@ const SYSTEM_PROMPT = `你是 GoalUnderstandingAgent，餐厅搜索系统的目�
 2. 你不能调用高德，也不能生成或修改餐厅事实。
 3. 你不能生成高德 POI typecode；只输出 UserGoal、GoalPatch 或 PendingQuestion。
 4. 用户明确表达的菜品必须保留在 requestedItems，不要只泛化成菜系。
-5. 用户没有明确授权时 allowBroaden=false。
+5. 用户没有明确授权时 allowBroaden=false 且 authorizations=[]。用户明确授权时，除了 allowBroaden=true，还必须输出对应的结构化授权：放宽到相邻品类用 category_broaden + allowedSearchIntents=["broadened"]；开放随机推荐用 fallback_primary + allowedSearchIntents=["fallback"]；不能只输出 allowBroaden。
 6. 需要放宽 strict 距离、明确排除项、未验证候补进入主推荐时，必须 ask_user。
 7. 追问应基于当前上下文自己生成，避免固定套用“正餐/小吃/喝点东西”等预设流程。
 7a. 如果追问给出选项，必须尽量给每个选项设置 optionEffects；选项只是分类说明时，effect 要指向被澄清的原始目标，不能把选项标签当搜索词。
-8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么/没有具体想吃的”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，加入“默认多样性”软偏好，进入 plan 后由 KeywordExpansionAgent 生成开放探索词；不要 ask_user，也不要把这些词当 keywords。
+8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么/没有具体想吃的”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，并加入 fallback_primary 授权（allowedSearchIntents=["fallback"]）；requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，加入“默认多样性”软偏好，进入 plan 后由 KeywordExpansionModel 生成开放探索词；不要 ask_user，也不要把这些词当 keywords。
 8a. 用户只是“附近有什么/吃点/清淡点/健康点/便宜点/环境好/人气高”等软偏好或开放询问、但没有明确授权随意/随机推荐且没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
-9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/你推荐/直接推荐/按你推荐/你看着办”等，表示授权开放推荐；输出 patch.allowBroaden=true，加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
+9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/你推荐/直接推荐/按你推荐/你看着办”等，表示授权开放推荐；输出 patch.allowBroaden=true、addAuthorizations 中的 fallback_primary 授权（allowedSearchIntents=["fallback"]），加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
 10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
 11. primaryKeywords 只能放用户正向想吃的、适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
-12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords/broadenedKeywords 及 relatedTargets/broadenedTargets 由 KeywordExpansionAgent 负责生成，初始目标保持空数组即可。
+12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords/broadenedKeywords 及 relatedTargets/broadenedTargets 由 KeywordExpansionModel 负责生成，初始目标保持空数组即可。
 13. 处理 pendingQuestion 的用户回复时，必须结合 previousGoal.rawQuery、pendingQuestion 和历史 messages 重新总结完整需求；当前 message 不是独立新需求。
 14. 如果用户回复命中的是上轮澄清问题的选项标签或分类说明，不要把该标签本身作为搜索词；优先通过 pendingQuestion.optionEffects 或历史上下文恢复被澄清的原始目标。
 15. 否定条件、口味限制、排除项、开放授权和软偏好都不是搜索目标，不能进入 primaryKeywords、requestedItems 或 acceptableCategories。类似“不要辣的，其他都可以”应表达为硬约束/开放授权，并在缺少正向餐饮目标时追问，不要输出“不辣”“都可以”作为关键词。
@@ -106,19 +106,19 @@ const GOAL_UNDERSTANDING_FUNCTION = {
   },
 };
 
-export async function runGoalUnderstandingAgent(
+export async function runGoalUnderstandingModel(
   input: GoalUnderstandingInput
 ): Promise<GoalUnderstandingOutput> {
   // 追问选项的确定性处理由编排层完成（按 optionId 查 effect，不调模型）。
   // 这里只处理自由文本——用户说了什么，只有模型能判断。
   if (!OPENAI_API_KEY) {
-    throw new AgentError('OPENAI_API_KEY is required for GoalUnderstandingAgent', 'CONFIG_MISSING', false);
+    throw new AgentError('OPENAI_API_KEY is required for GoalUnderstandingModel', 'CONFIG_MISSING', false);
   }
 
   try {
     return normalizeGoalUnderstandingOutput(input, await callGoalUnderstandingModel(input));
   } catch (error) {
-    logger.warn('GoalUnderstandingAgent unavailable', {
+    logger.warn('GoalUnderstandingModel unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
@@ -171,10 +171,10 @@ function normalizeGoalUnderstandingOutput(
     };
   }
 
-  logger.warn('GoalUnderstandingAgent returned nothing for a pending clarification answer', {
+  logger.warn('GoalUnderstandingModel returned nothing for a pending clarification answer', {
     question: input.pendingQuestion.question,
   });
-  throw new AgentError('GoalUnderstandingAgent returned no goal, patch or question for a pending clarification answer', 'SUPERVISOR_UNAVAILABLE', true);
+  throw new AgentError('GoalUnderstandingModel returned no goal, patch or question for a pending clarification answer', 'SUPERVISOR_UNAVAILABLE', true);
 }
 
 function inferConversationMode(
@@ -214,8 +214,8 @@ async function callGoalUnderstandingModel(
   input: GoalUnderstandingInput,
   maxTokens = GOAL_UNDERSTANDING_MAX_TOKENS
 ): Promise<GoalUnderstandingOutput> {
-  return callJsonFunctionAgent({
-    agentName: 'GoalUnderstandingAgent',
+  return callStructuredModel({
+    modelRole: 'GoalUnderstandingModel',
     metricsSink: input.metricsSink,
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
@@ -298,12 +298,12 @@ function userGoalJsonSchema() {
       },
       relatedTargets: {
         type: 'array',
-        description: '由 KeywordExpansionAgent 维护；理解目标时保持空数组。',
+        description: '由 KeywordExpansionModel 维护；理解目标时保持空数组。',
         items: searchKeywordTargetJsonSchema(),
       },
       broadenedTargets: {
         type: 'array',
-        description: '由 KeywordExpansionAgent 维护；理解目标时保持空数组。',
+        description: '由 KeywordExpansionModel 维护；理解目标时保持空数组。',
         items: searchKeywordTargetJsonSchema(),
       },
       hardConstraints: {

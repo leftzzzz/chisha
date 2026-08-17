@@ -11,7 +11,11 @@
 
 import { countDistinctBrands } from '@/lib/restaurantIdentity';
 import { getAmapFoodPoiType } from '../amapPoiTypeCatalog';
-import { isOpenExplorationAuthorized, isSearchIntentAuthorizedForPrimary } from '../authorization';
+import {
+  isOpenExplorationAuthorized,
+  isSearchIntentAuthorizedForPrimary,
+  primaryAuthorizationRef,
+} from '../authorization';
 import { isPrimaryRecommendationEligible } from '../finalGuard';
 import type { FinishReason } from '../finishReason';
 import {
@@ -35,6 +39,7 @@ import {
   normalizeSearchKeywords,
 } from '../poiTaxonomy';
 import { SearchPlanSchema } from '../schemas/plan';
+import { createSearchAction, isPrimaryScopeAuthorized, searchRelationFromIntent } from '../searchAction';
 import {
   buildQuestionFingerprint,
   CLARIFICATION_OPTION,
@@ -423,7 +428,7 @@ export function buildSearchPlan(
   ctx: PolicyContext,
   target: SearchKeywordTarget | string,
   searchIntent: SearchPlan['searchIntent'],
-  allowedForPrimary: boolean,
+  legacyAllowedForPrimary: boolean,
   reason: string
 ): SearchPlan {
   const rawKeyword = typeof target === 'string' ? target : target.keyword;
@@ -431,14 +436,33 @@ export function buildSearchPlan(
   const [normalizedKeyword] = normalizeSearchKeywords([rawKeyword]);
   const keyword = normalizedKeyword || '餐厅';
 
+  const action = createSearchAction({
+    query: keyword,
+    supportsGoalIds: ctx.goal.goalId ? [ctx.goal.goalId] : [],
+    relation: searchRelationFromIntent(searchIntent),
+    rationale: reason,
+    // Legacy/unversioned contexts have no stable scope to bind an explicit
+    // widening authorization to. Keep their old SearchPlan compatibility path,
+    // but never mint a scoped SearchAction authorization for them.
+    authorizationRef: ctx.goal.goalId
+      ? primaryAuthorizationRef(ctx.goal, searchIntent, [keyword])
+      : undefined,
+  });
+  const derivedPrimaryScopeAuthorized = isPrimaryScopeAuthorized(ctx.goal, action);
+  // 只有没有稳定 goalId 的旧上下文才保留旧布尔值兼容。带 goalId 的新动作
+  // 必须完全由 Runtime 按 relation + authorizationRef 派生，不能回退到调用者传值。
+  const effectiveAllowedForPrimary = derivedPrimaryScopeAuthorized
+    || (!ctx.goal.goalId && legacyAllowedForPrimary);
+
   return SearchPlanSchema.parse({
     keywords: [keyword],
     radiusMeters: nextSearchRadius(ctx),
     poiType: resolvePlanPoiType(ctx.goal, keyword, targetPoiTypes),
     searchIntent,
-    allowedForPrimary,
+    allowedForPrimary: effectiveAllowedForPrimary,
     reason,
     planId: createPlanId(),
+    searchAction: ctx.goal.goalId ? action : undefined,
   });
 }
 
@@ -537,7 +561,7 @@ export function hasPositiveFoodTarget(goal: UserGoal): boolean {
  *
  * 去重键用 canonicalizePoiTerm——那是规则库里已有的确定性同义词归一，
  * 不是新造的相似度判断。刻意**不**做「柠檬茶≈柠檬水」这种近义合并：那属于
- * 语义推断，只能由子 Agent 做；在这里写等于给"词是否同一"造第二个真理源。
+ * 语义推断，只能由模型角色 做；在这里写等于给"词是否同一"造第二个真理源。
  * 词表认为不同的词就分别显示——它确实分别搜过。
  *
  * 显示的是首次出现的原词而非 canonical，用户说「柠檬茶」就不该被回显成「奶茶」。
@@ -870,12 +894,12 @@ export function partitionPlansByValidity(
  * 本轮从哪儿开始。
  *
  * 两条互斥的入口：用户点了追问选项（按 id 查 effect，确定性执行，不调模型），
- * 或者用户输入了自由文本（交给 GoalUnderstandingAgent，代码不猜语义）。
+ * 或者用户输入了自由文本（交给 GoalUnderstandingModel，代码不猜语义）。
  *
  * 返回 `understand` 时 Runtime 才去调模型；其余分支全程无模型参与。
  */
 export type TurnEntryDecision =
-  /** 交给目标理解子 Agent，message 是要送进去的那句话 */
+  /** 交给目标理解模型角色，message 是要送进去的那句话 */
   | { kind: 'understand'; message: string }
   /** 选项带 effect：确定性打补丁 */
   | { kind: 'apply_effect'; goal: UserGoal; conversationMode: ConversationMode }
@@ -925,7 +949,7 @@ export function decideTurnEntry(input: AgentInput): TurnEntryDecision {
   }
 
   // 没有 effect 的选项：模型写的「火锅」「日料」这类，本质是替用户预填的
-  // 一句回答。把 label 当自由文本交给子 Agent——语义判断仍归模型。
+  // 一句回答。把 label 当自由文本交给模型角色——语义判断仍归模型。
   const label = clarificationOptionLabel(pendingQuestion, optionId);
   return label
     ? { kind: 'understand', message: label }
@@ -947,7 +971,7 @@ export interface SearchStateResetPlan {
 /**
  * 会话模式与上下文变化 → 该清空哪些搜索状态。
  *
- * "这句话与上文是什么关系"是语义判断，归 GoalUnderstandingAgent；
+ * "这句话与上文是什么关系"是语义判断，归 GoalUnderstandingModel；
  * "因此要不要作废已经搜到的东西"是策略判断，归这里。
  */
 export function decideContextReset(

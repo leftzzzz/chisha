@@ -1,18 +1,18 @@
 /**
- * 子 Agent 的输入契约。
+ * 模型角色的输入契约。
  *
- * 判据：一个子 Agent 的输入应该能用一句话描述**而不提到 loop**。
+ * 判据：一个模型角色的输入应该能用一句话描述**而不提到 loop**。
  * 「给定目标和这批餐厅事实，逐家判定是否满足」合格；
  * 「给定 authorizations 和 attempts，注意开放推荐时要多样」不合格——
- * 那是在请子 Agent 参与编排。
+ * 那是在请模型角色参与编排。
  *
- * 这组用例拦的就是后者：只要有人把编排状态塞回子 Agent 的模型输入，这里就红。
+ * 这组用例拦的就是后者：只要有人把编排状态塞回模型角色的输入，这里就红。
  */
 
 import type { SearchAttempt, SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Restaurant } from '@/types';
 
-/** 绝不能出现在任何子 Agent 模型输入里的编排层状态。 */
+/** 绝不能出现在任何模型角色输入里的编排层状态。 */
 const ORCHESTRATION_STATE_KEYS = [
   'authorizations',
   'allowBroaden',
@@ -148,7 +148,7 @@ async function captureModelInput(
   return JSON.parse(body.messages[1].content) as Record<string, unknown>;
 }
 
-describe('子 Agent 输入契约', () => {
+describe('模型角色输入契约', () => {
   const originalApiKey = process.env.OPENAI_API_KEY;
 
   beforeEach(() => {
@@ -167,9 +167,9 @@ describe('子 Agent 输入契约', () => {
     process.env.AGENT_DETERMINISTIC = '1';
   });
 
-  it('EvaluationAgent 只看到可验证的目标与餐厅事实', async () => {
+  it('EvaluationModel 只看到可验证的目标与餐厅事实', async () => {
     const modelInput = await captureModelInput(
-      async () => (await import('@/lib/agent/subagents/evaluationAgent')).runEvaluationAgent,
+      async () => (await import('@/lib/agent/models/evaluationModel')).runEvaluationModel,
       { goal: goal(), plan, restaurants, targetCount: 8 },
       'evaluateRestaurantCandidates'
     );
@@ -185,9 +185,9 @@ describe('子 Agent 输入契约', () => {
     expect(keys.has('searchedKeywords')).toBe(true);
   });
 
-  it('KeywordExpansionAgent 拿到的是编排层算好的 mode，不用自己推断阶段', async () => {
+  it('KeywordExpansionModel 拿到的是编排层算好的 mode，不用自己推断阶段', async () => {
     const modelInput = await captureModelInput(
-      async () => (await import('@/lib/agent/subagents/keywordExpansionAgent')).runKeywordExpansionAgent,
+      async () => (await import('@/lib/agent/models/keywordExpansionModel')).runKeywordExpansionModel,
       { goal: goal(), attempts },
       'expandRestaurantSearchKeywords'
     );
@@ -202,9 +202,9 @@ describe('子 Agent 输入契约', () => {
     expect(trusted.targets).toEqual(expect.arrayContaining(['火锅']));
   });
 
-  it('GoalUnderstandingAgent 不需要搜索历史', async () => {
+  it('GoalUnderstandingModel 不需要搜索历史', async () => {
     const modelInput = await captureModelInput(
-      async () => (await import('@/lib/agent/subagents/goalUnderstandingAgent')).runGoalUnderstandingAgent,
+      async () => (await import('@/lib/agent/models/goalUnderstandingModel')).runGoalUnderstandingModel,
       { message: '想吃火锅' },
       'understandRestaurantGoal'
     );

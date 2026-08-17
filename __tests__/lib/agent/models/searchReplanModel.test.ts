@@ -5,7 +5,7 @@
  * 开放探索的兜底顺序等确定性行为的用例见 __tests__/lib/agent/policy.test.ts。
  */
 
-import type { SearchReplanInput } from '@/lib/agent/subagents/replanAgent';
+import type { SearchReplanInput } from '@/lib/agent/models/searchReplanModel';
 import type { UserGoal } from '@/lib/agent/types';
 
 function goal(overrides: Partial<UserGoal> = {}): UserGoal {
@@ -42,7 +42,7 @@ function replanInput(overrides: Partial<SearchReplanInput> = {}): SearchReplanIn
 
 async function withModel(
   respond: (body: unknown) => unknown,
-  run: (module: typeof import('@/lib/agent/subagents/replanAgent')) => Promise<void>
+  run: (module: typeof import('@/lib/agent/models/searchReplanModel')) => Promise<void>
 ): Promise<void> {
   const originalDeterministic = process.env.AGENT_DETERMINISTIC;
   const originalApiKey = process.env.OPENAI_API_KEY;
@@ -57,7 +57,7 @@ async function withModel(
   jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
   try {
-    await run(await import('@/lib/agent/subagents/replanAgent'));
+    await run(await import('@/lib/agent/models/searchReplanModel'));
   } finally {
     if (originalDeterministic === undefined) {
       delete process.env.AGENT_DETERMINISTIC;
@@ -91,9 +91,9 @@ function toolCallResponse(args: unknown) {
   };
 }
 
-describe('SearchReplanAgent', () => {
+describe('SearchReplanModel', () => {
   it('never calls the model in deterministic mode', async () => {
-    const { runSearchReplan } = await import('@/lib/agent/subagents/replanAgent');
+    const { runSearchReplan } = await import('@/lib/agent/models/searchReplanModel');
     process.env.AGENT_DETERMINISTIC = '1';
 
     await expect(runSearchReplan(replanInput())).resolves.toBeNull();
@@ -166,7 +166,7 @@ describe('SearchReplanAgent', () => {
     }));
 
     try {
-      const { runSearchReplan } = await import('@/lib/agent/subagents/replanAgent');
+      const { runSearchReplan } = await import('@/lib/agent/models/searchReplanModel');
       await expect(runSearchReplan(replanInput())).resolves.toBeNull();
     } finally {
       if (originalDeterministic === undefined) {

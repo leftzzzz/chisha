@@ -293,7 +293,7 @@ describe('/api/agent/chat', () => {
     saveAgentSession(session);
 
     (runSearchAgentV3 as jest.Mock).mockImplementationOnce(async () => {
-      throw new AgentRunError('EvaluationAgent API failed: 429', 'RATE_LIMITED', {
+      throw new AgentRunError('EvaluationModel API failed: 429', 'RATE_LIMITED', {
         attempts: [],
         candidates: [],
         actions: [],
@@ -306,7 +306,7 @@ describe('/api/agent/chat', () => {
           createdAt: 1,
           error: {
             code: 'RATE_LIMITED',
-            message: 'EvaluationAgent API failed: 429',
+            message: 'EvaluationModel API failed: 429',
             retryable: true,
           },
         }],

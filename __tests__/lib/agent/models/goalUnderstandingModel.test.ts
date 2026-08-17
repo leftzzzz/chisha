@@ -21,15 +21,15 @@ function goal(overrides: Partial<UserGoal> = {}): UserGoal {
   };
 }
 
-describe('GoalUnderstandingAgent', () => {
+describe('GoalUnderstandingModel', () => {
   it('requires the model instead of falling back to local parsing', async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
     jest.resetModules();
 
     try {
-      const { runGoalUnderstandingAgent } = await import('@/lib/agent/subagents/goalUnderstandingAgent');
-      await expect(runGoalUnderstandingAgent({ message: '想吃牛排' })).rejects.toThrow('OPENAI_API_KEY');
+      const { runGoalUnderstandingModel } = await import('@/lib/agent/models/goalUnderstandingModel');
+      await expect(runGoalUnderstandingModel({ message: '想吃牛排' })).rejects.toThrow('OPENAI_API_KEY');
     } finally {
       if (originalApiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -45,8 +45,8 @@ describe('GoalUnderstandingAgent', () => {
     jest.resetModules();
 
     try {
-      const { runGoalUnderstandingAgent } = await import('@/lib/agent/subagents/goalUnderstandingAgent');
-      await expect(runGoalUnderstandingAgent({
+      const { runGoalUnderstandingModel } = await import('@/lib/agent/models/goalUnderstandingModel');
+      await expect(runGoalUnderstandingModel({
         message: '你看着办',
         previousGoal: goal({
           requestedItems: [],
@@ -73,8 +73,8 @@ describe('GoalUnderstandingAgent', () => {
     jest.resetModules();
 
     try {
-      const { runGoalUnderstandingAgent } = await import('@/lib/agent/subagents/goalUnderstandingAgent');
-      await expect(runGoalUnderstandingAgent({
+      const { runGoalUnderstandingModel } = await import('@/lib/agent/models/goalUnderstandingModel');
+      await expect(runGoalUnderstandingModel({
         message: '扩大范围',
         previousGoal: goal({
           hardConstraints: [{
@@ -142,8 +142,8 @@ describe('GoalUnderstandingAgent', () => {
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
     try {
-      const { runGoalUnderstandingAgent } = await import('@/lib/agent/subagents/goalUnderstandingAgent');
-      const output = await runGoalUnderstandingAgent({ message: '想吃日料' });
+      const { runGoalUnderstandingModel } = await import('@/lib/agent/models/goalUnderstandingModel');
+      const output = await runGoalUnderstandingModel({ message: '想吃日料' });
       const initialRequest = JSON.parse(fetchWithTimeout.mock.calls[0][1].body as string);
       const retryRequest = JSON.parse(fetchWithTimeout.mock.calls[1][1].body as string);
 
@@ -163,7 +163,7 @@ describe('GoalUnderstandingAgent', () => {
   });
 });
 
-describe('GoalUnderstandingAgent output schema', () => {
+describe('GoalUnderstandingModel output schema', () => {
   it('normalizes category objects in clarification option effects', () => {
     const parsed = GoalUnderstandingOutputSchema.parse({
       goal: {
@@ -301,7 +301,7 @@ describe('GoalUnderstandingAgent output schema', () => {
       nextAction: 'plan',
     });
 
-    expect(parsed.patch?.reason).toBe('GoalUnderstandingAgent 更新目标。');
+    expect(parsed.patch?.reason).toBe('GoalUnderstandingModel 更新目标。');
   });
 
   it('accepts conversation mode from model output', () => {

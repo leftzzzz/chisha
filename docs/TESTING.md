@@ -35,17 +35,17 @@ EVAL_MODE=live npm run eval   # 改用真实模型（需要 OPENAI_API_KEY）
 改 `lib/agent/orchestrator/**` / `evaluationCache.ts` 之后必须跑，
 新增策略要在 `evals/cases/` 配套加 golden case。
 
-**改子 Agent 的桩时要连契约一起改**：eval 桩若仍按旧契约返回数据，
+**改模型角色的桩时要连契约一起改**：eval 桩若仍按旧契约返回数据，
 会用旧行为掩盖新行为的差异，"基线无变化"就不再是证据（阶段 4 踩过）。
 
 ### 架构约束测试
 
 两条约束写成了会变红的测试，不要绕过它们：
 
-- `__tests__/lib/agent/layering.test.ts` — 依赖方向（子 Agent 不得依赖编排层、
-  子 Agent 之间不得互相依赖、规则库不得反向依赖）
-- `__tests__/lib/agent/subagents/subagentContracts.test.ts` — 编排状态
-  （authorizations / attempts / goalVersion 等）不得出现在子 Agent 的模型输入里
+- `__tests__/lib/agent/layering.test.ts` — 依赖方向（模型角色不得依赖编排层、
+  模型角色之间不得互相依赖、规则库不得反向依赖）
+- `__tests__/lib/agent/models/modelRoleContracts.test.ts` — 编排状态
+  （authorizations / attempts / goalVersion 等）不得出现在一次性模型角色的输入里
 
 ## 运行测试
 

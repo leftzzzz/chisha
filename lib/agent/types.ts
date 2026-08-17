@@ -4,6 +4,27 @@ import type { ModelCallMetrics } from './metrics';
 
 export type SearchIntent = 'exact' | 'synonym' | 'broadened' | 'fallback';
 
+/** SearchAction 面向 Runtime 的语义关系，不暴露 Provider 分类码。 */
+export type SearchRelation = 'exact' | 'equivalent' | 'broader' | 'alternative';
+
+/**
+ * 一次自然语言搜索动作的模型无关契约。
+ *
+ * `id` 由 Runtime 分配，模型只提供其余字段。`primaryScopeAuthorized` 不属于
+ * 输入契约：它必须由 Runtime 根据 relation 和 authorizationRef 派生。
+ */
+export interface SearchActionInput {
+  query: string;
+  supportsGoalIds: string[];
+  relation: SearchRelation;
+  rationale: string;
+  authorizationRef?: string;
+}
+
+export interface SearchAction extends SearchActionInput {
+  id: string;
+}
+
 export type AuthorizationScopeKind =
   | 'distance_expansion'
   | 'category_broaden'
@@ -157,6 +178,8 @@ export interface SearchPlan {
   reason: string;
   /** Runtime 生成，用于并行搜索时区分交错事件；不进模型 schema。 */
   planId?: string;
+  /** Runtime 生成的授权动作，供 observation/trace 重放与审计。 */
+  searchAction?: SearchAction;
 }
 
 export interface SearchTarget {
@@ -177,7 +200,7 @@ export interface CandidateVerdict {
   warnings: string[];
 }
 
-export interface EvaluationAgentOutput {
+export interface EvaluationModelOutput {
   verdicts: CandidateVerdict[];
   selectedIds: string[];
   candidateIds: string[];

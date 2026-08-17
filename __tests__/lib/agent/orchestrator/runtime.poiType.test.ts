@@ -62,21 +62,21 @@ function input(searchGoal: UserGoal): AgentInput {
 
 describe('runSearchAgentV3 POI type selection', () => {
   afterEach(() => {
-    jest.dontMock('@/lib/agent/subagents/goalUnderstandingAgent');
+    jest.dontMock('@/lib/agent/models/goalUnderstandingModel');
     jest.resetModules();
   });
 
   it('uses selected Amap POI type and rejects unrelated exact-keyword retrievals', async () => {
-    jest.doMock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
-      const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
+    jest.doMock('@/lib/agent/models/goalUnderstandingModel', () => {
+      const actual = jest.requireActual('@/lib/agent/models/goalUnderstandingModel');
       return {
         ...actual,
-        runGoalUnderstandingAgent: jest.fn(async (
+        runGoalUnderstandingModel: jest.fn(async (
           supervisorInput: { previousGoal?: UserGoal; goal?: UserGoal; limits?: unknown },
           context?: import('@/lib/agent/types').AgentContext
         ) => {
           if (supervisorInput.goal && supervisorInput.limits) {
-            return actual.runGoalUnderstandingAgent(supervisorInput, context);
+            return actual.runGoalUnderstandingModel(supervisorInput, context);
           }
 
           return {
@@ -86,8 +86,8 @@ describe('runSearchAgentV3 POI type selection', () => {
         }),
       };
     });
-    jest.doMock('@/lib/agent/subagents/evaluationAgent', () => ({
-      runEvaluationAgent: jest.fn(async (evaluationInput: {
+    jest.doMock('@/lib/agent/models/evaluationModel', () => ({
+      runEvaluationModel: jest.fn(async (evaluationInput: {
         plan: SearchPlan;
         restaurants: Restaurant[];
         targetCount: number;

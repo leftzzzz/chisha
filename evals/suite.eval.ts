@@ -8,32 +8,32 @@
  * 更新基线：EVAL_UPDATE_BASELINE=1 npm run eval
  */
 
-jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
-  const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
+jest.mock('@/lib/agent/models/goalUnderstandingModel', () => {
+  const actual = jest.requireActual('@/lib/agent/models/goalUnderstandingModel');
   const harness = jest.requireActual('@/evals/harness');
 
   return {
     ...actual,
-    runGoalUnderstandingAgent: (input: unknown, context?: unknown) =>
+    runGoalUnderstandingModel: (input: unknown, context?: unknown) =>
       harness.routeGoalUnderstanding(actual, input, context),
   };
 });
 
-jest.mock('@/lib/agent/subagents/keywordExpansionAgent', () => {
-  const actual = jest.requireActual('@/lib/agent/subagents/keywordExpansionAgent');
+jest.mock('@/lib/agent/models/keywordExpansionModel', () => {
+  const actual = jest.requireActual('@/lib/agent/models/keywordExpansionModel');
   const harness = jest.requireActual('@/evals/harness');
 
   return {
     ...actual,
-    runKeywordExpansionAgent: () => harness.keywordExpansionStub(),
+    runKeywordExpansionModel: () => harness.keywordExpansionStub(),
   };
 });
 
-jest.mock('@/lib/agent/subagents/evaluationAgent', () => {
+jest.mock('@/lib/agent/models/evaluationModel', () => {
   const harness = jest.requireActual('@/evals/harness');
 
   return {
-    runEvaluationAgent: (input: unknown) => harness.evaluationStub(input),
+    runEvaluationModel: (input: unknown) => harness.evaluationStub(input),
   };
 });
 

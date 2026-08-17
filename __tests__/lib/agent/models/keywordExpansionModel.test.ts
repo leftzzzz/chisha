@@ -1,7 +1,7 @@
 import {
   applyKeywordExpansion,
   deterministicKeywordExpansion,
-} from '@/lib/agent/subagents/keywordExpansionAgent';
+} from '@/lib/agent/models/keywordExpansionModel';
 import type { UserGoal } from '@/lib/agent/types';
 
 function goal(overrides: Partial<UserGoal> = {}): UserGoal {
@@ -24,7 +24,7 @@ function goal(overrides: Partial<UserGoal> = {}): UserGoal {
   };
 }
 
-describe('KeywordExpansionAgent', () => {
+describe('KeywordExpansionModel', () => {
   afterEach(() => {
     jest.dontMock('@/lib/withTimeout');
     jest.resetModules();
@@ -84,8 +84,8 @@ describe('KeywordExpansionAgent', () => {
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
     try {
-      const { runKeywordExpansionAgent } = await import('@/lib/agent/subagents/keywordExpansionAgent');
-      const expansion = await runKeywordExpansionAgent({
+      const { runKeywordExpansionModel } = await import('@/lib/agent/models/keywordExpansionModel');
+      const expansion = await runKeywordExpansionModel({
         goal: goal({
           rawQuery: '不要辣的',
           primaryKeywords: [],
@@ -142,8 +142,8 @@ describe('KeywordExpansionAgent', () => {
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
     try {
-      const { runKeywordExpansionAgent } = await import('@/lib/agent/subagents/keywordExpansionAgent');
-      const expansion = await runKeywordExpansionAgent({
+      const { runKeywordExpansionModel } = await import('@/lib/agent/models/keywordExpansionModel');
+      const expansion = await runKeywordExpansionModel({
         goal: goal({
           rawQuery: '随意，你来选择',
           requestedItems: [],
@@ -164,7 +164,7 @@ describe('KeywordExpansionAgent', () => {
       expect(requestBody.messages[0].role).toBe('system');
       expect(modelInput.trustedContext.mode).toBe('open_exploration');
       expect(modelInput.trustedContext.openContext.rawQuery).toBe('随意，你来选择');
-      // 编排状态不得出现在子 Agent 的输入里。
+      // 编排状态不得出现在模型角色的输入里。
       expect(modelInput.trustedContext.goalContext).toBeUndefined();
       expect(expansion.relatedKeywords).toEqual([]);
       expect(expansion.broadenedKeywords).toEqual(['简餐', '面馆', '小吃']);
@@ -213,8 +213,8 @@ describe('KeywordExpansionAgent', () => {
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
     try {
-      const { runKeywordExpansionAgent } = await import('@/lib/agent/subagents/keywordExpansionAgent');
-      const expansion = await runKeywordExpansionAgent({
+      const { runKeywordExpansionModel } = await import('@/lib/agent/models/keywordExpansionModel');
+      const expansion = await runKeywordExpansionModel({
         goal: goal({
           rawQuery: '没有具体想吃的，你来选',
           requestedItems: [],
@@ -274,8 +274,8 @@ describe('KeywordExpansionAgent', () => {
     jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
 
     try {
-      const { runKeywordExpansionAgent } = await import('@/lib/agent/subagents/keywordExpansionAgent');
-      const expansion = await runKeywordExpansionAgent({
+      const { runKeywordExpansionModel } = await import('@/lib/agent/models/keywordExpansionModel');
+      const expansion = await runKeywordExpansionModel({
         goal: goal(),
         attempts: [],
       });

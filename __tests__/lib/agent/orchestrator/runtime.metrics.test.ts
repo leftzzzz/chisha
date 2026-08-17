@@ -11,9 +11,9 @@ import type { Location, Restaurant } from '@/types';
 
 const location: Location = { lat: 31.2304, lng: 121.4737, address: '上海市黄浦区' };
 
-function recordInto(sink: { modelCallMetrics?: ModelCallMetrics[] }, agentName: string): void {
+function recordInto(sink: { modelCallMetrics?: ModelCallMetrics[] }, modelRole: string): void {
   const metrics: ModelCallMetrics = {
-    agentName,
+    modelRole,
     model: 'test-model',
     startedAt: 0,
     durationMs: 10,
@@ -29,13 +29,13 @@ function recordInto(sink: { modelCallMetrics?: ModelCallMetrics[] }, agentName: 
   sink.modelCallMetrics.push(metrics);
 }
 
-jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
-  const actual = jest.requireActual('@/lib/agent/subagents/goalUnderstandingAgent');
+jest.mock('@/lib/agent/models/goalUnderstandingModel', () => {
+  const actual = jest.requireActual('@/lib/agent/models/goalUnderstandingModel');
   return {
     ...actual,
     // Supervisor 走确定性短路：不记指标，于是 turn 容器起初是空的——
     // 这正是曾经触发覆盖的条件。
-    runGoalUnderstandingAgent: jest.fn(async (input: { message: string }) => ({
+    runGoalUnderstandingModel: jest.fn(async (input: { message: string }) => ({
       goal: {
         intent: 'find_restaurants',
         rawQuery: input.message,
@@ -57,15 +57,15 @@ jest.mock('@/lib/agent/subagents/goalUnderstandingAgent', () => {
   };
 });
 
-jest.mock('@/lib/agent/subagents/keywordExpansionAgent', () => {
-  const actual = jest.requireActual('@/lib/agent/subagents/keywordExpansionAgent');
+jest.mock('@/lib/agent/models/keywordExpansionModel', () => {
+  const actual = jest.requireActual('@/lib/agent/models/keywordExpansionModel');
   return {
     ...actual,
-    runKeywordExpansionAgent: jest.fn(async (input: {
+    runKeywordExpansionModel: jest.fn(async (input: {
       metricsSink?: { modelCallMetrics?: ModelCallMetrics[] };
     }) => {
       if (input.metricsSink) {
-        recordInto(input.metricsSink, 'KeywordExpansionAgent');
+        recordInto(input.metricsSink, 'KeywordExpansionModel');
       }
 
       return {
@@ -79,13 +79,13 @@ jest.mock('@/lib/agent/subagents/keywordExpansionAgent', () => {
   };
 });
 
-jest.mock('@/lib/agent/subagents/evaluationAgent', () => ({
-  runEvaluationAgent: jest.fn(async (input: {
+jest.mock('@/lib/agent/models/evaluationModel', () => ({
+  runEvaluationModel: jest.fn(async (input: {
     metricsSink?: { modelCallMetrics?: ModelCallMetrics[] };
     restaurants: Restaurant[];
   }) => {
     if (input.metricsSink) {
-      recordInto(input.metricsSink, 'EvaluationAgent');
+      recordInto(input.metricsSink, 'EvaluationModel');
     }
 
     return {
@@ -131,10 +131,10 @@ describe('turn 指标汇总', () => {
 
     const modelCallTrace = (result.runtimeState?.trace ?? [])
       .filter((item) => item.type === 'model_call')
-      .at(-1)?.output as { modelCalls: number; byAgent: Record<string, { calls: number }> };
+      .at(-1)?.output as { modelCalls: number; byModelRole: Record<string, { calls: number }> };
 
-    expect(modelCallTrace.byAgent.KeywordExpansionAgent?.calls).toBe(1);
-    expect(modelCallTrace.byAgent.EvaluationAgent?.calls).toBeGreaterThanOrEqual(1);
+    expect(modelCallTrace.byModelRole.KeywordExpansionModel?.calls).toBe(1);
+    expect(modelCallTrace.byModelRole.EvaluationModel?.calls).toBeGreaterThanOrEqual(1);
     expect(modelCallTrace.modelCalls).toBeGreaterThanOrEqual(2);
   });
 });

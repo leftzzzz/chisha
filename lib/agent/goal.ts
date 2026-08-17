@@ -1,11 +1,11 @@
 /**
  * 目标代数：UserGoal 的合并、打补丁与追问选项应用。
  *
- * 全部是纯函数，不调模型、不发请求。此前它们和 GoalUnderstandingAgent 混在
- * 同一个文件里，导致任何想复用"合并目标"的地方都得 import 一个模型 Agent。
+ * 全部是纯函数，不调模型、不发请求。此前它们和 GoalUnderstandingModel 混在
+ * 同一个文件里，导致任何想复用"合并目标"的地方都得 import 一个模型角色。
  *
  * 边界：这里只做"给定旧目标和一个变更，新目标长什么样"，不判断该不该变更
- * （属于 orchestrator/policy），也不理解用户说了什么（属于子 Agent）。
+ * （属于 orchestrator/policy），也不理解用户说了什么（属于模型角色）。
  */
 
 import { promoteAuthorizedBroadenedResults } from './broadenAdmission';

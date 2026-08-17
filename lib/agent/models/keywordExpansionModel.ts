@@ -1,7 +1,7 @@
 import {
-  callJsonFunctionAgent,
-  JSON_FUNCTION_MAX_TOKENS,
-  JSON_FUNCTION_RETRY_MAX_TOKENS,
+  callStructuredModel,
+  STRUCTURED_MODEL_MAX_TOKENS,
+  STRUCTURED_MODEL_RETRY_MAX_TOKENS,
 } from '../modelClient';
 import {
   expandPoiSearchKeywords,
@@ -20,11 +20,11 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL_KEYWORD
   || process.env.OPENAI_MODEL
   || 'deepseek-v4-flash-0731';
 const KEYWORD_EXPANSION_TIMEOUT = 60000;
-const KEYWORD_EXPANSION_MAX_TOKENS = JSON_FUNCTION_MAX_TOKENS;
-const KEYWORD_EXPANSION_RETRY_MAX_TOKENS = JSON_FUNCTION_RETRY_MAX_TOKENS;
+const KEYWORD_EXPANSION_MAX_TOKENS = STRUCTURED_MODEL_MAX_TOKENS;
+const KEYWORD_EXPANSION_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
 const KEYWORD_EXPANSION_LIMIT = 3;
 
-export interface KeywordExpansionAgentInput {
+export interface KeywordExpansionModelInput {
   metricsSink?: MetricsSink;
   goal: UserGoal;
   attempts: SearchAttempt[];
@@ -39,7 +39,7 @@ export interface KeywordExpansionOutput {
   rationale: string;
 }
 
-const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionAgent。你为一个已结构化的搜索目标生成高德 POI keyword，并为每个 keyword 建议匹配的官方餐饮 POI typecode；不调用外部工具，也不决定搜索流程。
+const SYSTEM_PROMPT = `你是餐厅搜索系统的 KeywordExpansionModel。你为一个已结构化的搜索目标生成高德 POI keyword，并为每个 keyword 建议匹配的官方餐饮 POI typecode；不调用外部工具，也不决定搜索流程。
 
 trustedContext.mode 决定你这次要做什么，只有两种：
 
@@ -102,8 +102,8 @@ function keywordTargetJsonSchema() {
   };
 }
 
-export async function runKeywordExpansionAgent(
-  input: KeywordExpansionAgentInput
+export async function runKeywordExpansionModel(
+  input: KeywordExpansionModelInput
 ): Promise<KeywordExpansionOutput> {
   if (goalKeywords(input.goal).length === 0 && !isOpenExplorationGoal(input.goal)) {
     return {
@@ -111,7 +111,7 @@ export async function runKeywordExpansionAgent(
       broadenedKeywords: [],
       relatedTargets: [],
       broadenedTargets: [],
-      rationale: '没有正向餐饮目标，KeywordExpansionAgent 不生成搜索联想词。',
+      rationale: '没有正向餐饮目标，KeywordExpansionModel 不生成搜索联想词。',
     };
   }
 
@@ -133,7 +133,7 @@ export function deterministicKeywordExpansion(
   const expansion = expandPoiSearchKeywords(seeds);
   return {
     ...sanitizeExpansion(expansion, goal, attempts),
-    rationale: 'KeywordExpansionAgent 走确定性 taxonomy 生成搜索联想词。',
+    rationale: 'KeywordExpansionModel 走确定性 taxonomy 生成搜索联想词。',
   };
 }
 
@@ -161,10 +161,10 @@ export function applyKeywordExpansion(goal: UserGoal, expansion: KeywordExpansio
 }
 
 async function callKeywordExpansionModel(
-  input: KeywordExpansionAgentInput
+  input: KeywordExpansionModelInput
 ): Promise<KeywordExpansionOutput> {
-  return callJsonFunctionAgent({
-    agentName: 'KeywordExpansionAgent',
+  return callStructuredModel({
+    modelRole: 'KeywordExpansionModel',
     metricsSink: input.metricsSink,
     apiKey: OPENAI_API_KEY!,
     baseUrl: OPENAI_BASE_URL,
@@ -185,11 +185,11 @@ async function callKeywordExpansionModel(
  * 只给联想词生成真正需要的东西。
  *
  * `mode` 由编排层算好后显式传入，取代此前"给模型 authorizations 和
- * allowBroaden，让它自己推断当前处于哪个阶段"的做法——那是在请子 Agent
+ * allowBroaden，让它自己推断当前处于哪个阶段"的做法——那是在请模型角色
  * 参与编排。软偏好只在开放探索时才有意义（那时它是唯一的方向线索），
  * 有明确目标时传进去只会诱导模型把"清淡""便宜"当成搜索词。
  */
-function buildModelInput(input: KeywordExpansionAgentInput) {
+function buildModelInput(input: KeywordExpansionModelInput) {
   const targets = goalKeywords(input.goal);
   const openExploration = isOpenExplorationGoal(input.goal);
 
