@@ -32,6 +32,7 @@
 | P2 | 新 session 在后续 admission 失败后遗留 | D1 可被失败请求堆积孤儿记录 | 失败路径回收 lease 并删除本次创建的 session |
 | P2 | DO 状态解析失败时重置为空 | 状态损坏会清除在途租约和熔断，短时放大流量 | 状态结构异常时失败关闭，不静默重置 |
 | P2 | `wrangler deploy --dry-run` 的 custom build 曾执行远程 D1 migration | 只读验证产生生产写入 | migration 移到 deploy wrapper；dry-run 明确跳过。审查期间已发生的一次 `0002` 是可重复、仅新增 nullable 列的迁移 |
+| P2 | 首次 DO migration 的 PR Version upload 被 Cloudflare 拒绝 | 预览失败可能被误判为 bundle/binding 故障，或诱导删除必要 migration | 本地真实 Version upload 已复现错误 `10211`：构建、资源上传和 binding 校验后，仅因 Version API 不能应用 DO migration 被拒；发布文档明确要求合并后首次使用非版本化 deploy |
 
 ## 验证结果
 
@@ -43,6 +44,8 @@
 - `npm run build:cloudflare`：通过。
 - `npm run deploy -- --dry-run`：通过，bundle 中包含 DO、D1、五个 Rate Limiting binding；
   明确输出跳过远程 D1 migration。
+- `npm run versions:upload`：D1 无待应用迁移，构建、资源上传与 binding 校验通过；Cloudflare
+  Version API 按预期以 `10211` 拒绝尚未通过非版本化部署应用的首次 DO migration。
 - `agents-spec` 结构审计：零错误、零警告。
 
 ## 保留风险与上线判定
@@ -53,7 +56,10 @@
    改为异步 job 协议，而不是延长当前 SSE 队列。
 3. 匿名 Cookie 仍是 bearer 凭证，不提供跨设备恢复、账号撤销或按用户计费。本期通过 HMAC、
    服务端到期、SameSite、HttpOnly、Secure 和 owner 校验把风险限制在已接受边界内。
-4. 单元测试验证算法与 API 竞争，Wrangler dry-run 验证绑定和 bundle；真实多 PoP 协调、
+4. 首次 DO migration 会让合并前的 Cloudflare Version 预览保持失败；这是 Cloudflare 发布
+   模型的引导限制，不是允许忽略的长期红灯。合并后的首次非版本化部署必须成功，之后要
+   再验证 Version upload 已恢复。
+5. 单元测试验证算法与 API 竞争，Wrangler dry-run 验证绑定和 bundle；真实多 PoP 协调、
    secret 和供应商调用只能在合并部署后的线上验收最终确认。
 
 审查结论：代码层无未处理 P0/P1；可以进入 PR 与生产灰度，但必须完成上述线上验收后才算

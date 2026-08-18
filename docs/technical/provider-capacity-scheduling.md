@@ -158,12 +158,15 @@ session GET/DELETE 使用单独的廉价入口 Rate Limiting binding。它防止
 
 ## 发布与回滚
 
-1. 先应用 D1 owner migration 与 DO migration，再发布 Worker；dry-run 必须跳过远程 D1
-   migration，避免构建验证产生生产写入。
-2. 在生产 secrets 中配置 `SESSION_OWNER_SECRET`，并按控制台确认容量变量。
-3. 以安全值灰度，观察等待时间、上游 429、5xx、租约过期和 fallback 比例。
-4. 只调整物理容量变量，不通过降低 `AGENT_SEARCH_CONCURRENCY` 处理供应商配额。
-5. 回滚代码时保留新增 D1 列和 DO migration；它们向后兼容，不执行破坏性 down migration。
+1. D1 owner migration 由 `npm run deploy` 的包装器先行应用；构建和 dry-run 必须跳过远程
+   D1 migration，避免验证产生生产写入。
+2. 首次引入 DO class 或新增 DO migration 时，必须使用非版本化 `npm run deploy`；Cloudflare
+   Version upload/PR 预览不能应用新 DO migration，错误 `10211` 不得通过删除 migration
+   规避。首次部署应用 migration 后，后续 Versions 流程才可恢复。
+3. 在生产 secrets 中配置 `SESSION_OWNER_SECRET`，并按控制台确认容量变量。
+4. 以安全值灰度，观察等待时间、上游 429、5xx、租约过期和 fallback 比例。
+5. 只调整物理容量变量，不通过降低 `AGENT_SEARCH_CONCURRENCY` 处理供应商配额。
+6. 回滚代码时保留新增 D1 列和 DO migration；它们向后兼容，不执行破坏性 down migration。
 
 ## 验证矩阵
 

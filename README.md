@@ -981,6 +981,10 @@ npm run build:cloudflare
 npm run deploy
 ```
 
+首次引入或新增 Durable Object migration 时必须使用非版本化的 `npm run deploy`；
+Cloudflare Version upload/PR 预览不能应用这类 migration。D1 migration 也由该项目命令
+显式执行，直接运行 `npx wrangler deploy` 不具备同等行为。
+
 生产环境如果使用 Cloudflare，需要配置 D1 binding：`CHISHA_DB`。如果缺少 D1 binding，代码会回退到内存 session store，不适合生产长期运行。
 
 Fork 之后需要把 `wrangler.jsonc` 里的 `d1_databases[].database_id` 换成你自己的——

@@ -79,5 +79,9 @@ Durable Object 调度和相关测试。产品要求见
 - 新增或修改 Durable Object 时必须同步 Wrangler binding、migration、生成类型和 Worker
   导出，并通过 Cloudflare dry-run。
 - Cloudflare dry-run 不得执行远程 D1 migration；部署命令才允许按既定顺序应用 migration。
+- 首次发布新的 Durable Object class 或 migration 时必须使用非版本化 `npm run deploy`。
+  Cloudflare Version upload 和 PR 预览不能应用新 DO migration；其 `10211` 失败只可在常规
+  CI、构建与 binding 校验均通过且确认是该约束时接受，并必须在合并后的生产部署中完成
+  migration 与线上验收。
 - 适用改动至少运行类型检查、lint、相关 Jest、`npm run eval`、Next/OpenNext 构建和文档
   结构审计。
