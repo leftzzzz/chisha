@@ -5,6 +5,12 @@ import { recordModelCall, type MetricsSink, type ModelCallMetrics } from './metr
 import { AgentError, isAgentError } from './types';
 import type { AgentErrorCode } from './types';
 import {
+  getProviderSchedulerConfig,
+  providerSchedulerName,
+  runWithProviderLease,
+  ProviderSchedulerError,
+} from '@/lib/providerScheduler';
+import {
   extractModelFunctionArguments,
   isModelFunctionOutputTruncated,
   parseModelJsonArguments,
@@ -68,6 +74,7 @@ export interface StructuredModelOptions<T> {
   maxTokens: number;
   retryMaxTokens?: number;
   timeoutMs: number;
+  signal?: AbortSignal;
 }
 
 export interface StructuredModelParsingOptions<T> {
@@ -94,6 +101,9 @@ export async function callStructuredModel<T>(
     return result;
   } catch (error) {
     tracker.finish(false);
+    if (isAbortError(error)) {
+      throw error;
+    }
     // 走到这里还不是 AgentError 的，只可能是"模型可达但输出不合法/被截断"，
     // 传输层异常已经在 requestStructuredModel 里定过码了。
     throw isAgentError(error)
@@ -323,19 +333,41 @@ async function requestChatCompletion<T>(
   mode: ChatToolCallMode
 ): Promise<Response> {
   try {
-    return await fetchWithTimeout(
-      `${options.baseUrl}/chat/completions`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${options.apiKey}`,
-        },
-        body: JSON.stringify(buildChatCompletionRequestBody(options, maxTokens, mode)),
+    const body = buildChatCompletionRequestBody(options, maxTokens, mode);
+    return await runWithProviderLease(
+      providerSchedulerName('model', `${options.baseUrl}|${options.model}`),
+      getProviderSchedulerConfig('model'),
+      async (_lease, leaseSignal) => {
+        const response = await fetchWithTimeout(
+          `${options.baseUrl}/chat/completions`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${options.apiKey}`,
+            },
+            body: JSON.stringify(body),
+            signal: leaseSignal,
+          },
+          options.timeoutMs
+        );
+        return bufferResponseBody(response);
       },
-      options.timeoutMs
+      {
+        signal: options.signal,
+        tokenCost: estimateModelTokenCost(body, maxTokens),
+      }
     );
   } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+    if (error instanceof ProviderSchedulerError) {
+      const code: AgentErrorCode = error.kind === 'busy' || error.kind === 'blocked'
+        ? 'RATE_LIMITED'
+        : 'MODEL_UNAVAILABLE';
+      throw new AgentError(error.message, code, error.kind === 'busy' || error.kind === 'blocked' || error.kind === 'unavailable', { cause: error });
+    }
     throw new AgentError(
       `${options.modelRole} API request failed: ${error instanceof Error ? error.message : String(error)}`,
       'MODEL_UNAVAILABLE',
@@ -343,6 +375,30 @@ async function requestChatCompletion<T>(
       { cause: error }
     );
   }
+}
+
+async function bufferResponseBody(response: Response): Promise<Response> {
+  // Holding the provider lease until the body is consumed makes maxInFlight
+  // describe complete model requests rather than only time-to-first-byte.
+  if (typeof Response === 'undefined'
+    || !(response instanceof Response)
+    || typeof response.text !== 'function') {
+    return response;
+  }
+  const body = await response.text();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+function isAbortError(error: unknown): error is Error {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function estimateModelTokenCost(body: ChatCompletionRequestBody, maxTokens: number): number {
+  return Math.ceil(JSON.stringify(body).length / 4) + maxTokens;
 }
 
 function buildChatCompletionRequestBody<T>(

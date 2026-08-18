@@ -19,6 +19,8 @@ rg -n "用户场景|能力|验收条件" docs/requirements docs/立项文档 \
   分区和 Agent 行为的当前产品要求。
 - [最终推荐发布边界](./final-recommendation-publication.md) - 主推荐最终准入、候补分区、
   顺序保真和禁止下游自动补位的产品要求。
+- [公网运行保护与供应商容量管理](./public-runtime-protection.md) - 公开使用时的并发、短等待、
+  上游额度、匿名会话和线上验收要求。
 
 历史需求仍保留在 `docs/` 和 `docs/立项文档/`，用于追溯已有产品决策，不自动覆盖当前
 Spec。

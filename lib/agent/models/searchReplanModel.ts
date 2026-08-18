@@ -46,6 +46,7 @@ export interface ExhaustedSearchSummary {
 }
 
 export interface SearchReplanInput {
+  signal?: AbortSignal;
   metricsSink?: MetricsSink;
   message: string;
   goal: UserGoal;
@@ -162,6 +163,7 @@ export async function runSearchReplan(
       maxTokens: STRUCTURED_MODEL_MAX_TOKENS,
       retryMaxTokens: STRUCTURED_MODEL_RETRY_MAX_TOKENS,
       timeoutMs: REPLAN_TIMEOUT,
+      signal: input.signal,
     });
 
     return sanitizeReplanOutput(output, input);

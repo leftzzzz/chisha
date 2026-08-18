@@ -64,6 +64,7 @@ class FakeD1PreparedStatement implements D1PreparedStatement {
       const [
         id,
         version,
+        ownerId,
         locationJson,
         messagesJson,
         runtimeStateJson,
@@ -76,6 +77,7 @@ class FakeD1PreparedStatement implements D1PreparedStatement {
       this.database.rows.set(String(id), {
         id: String(id),
         version: Number(version),
+        owner_id: ownerId === null ? null : String(ownerId),
         location_json: String(locationJson),
         messages_json: String(messagesJson),
         runtime_state_json: String(runtimeStateJson),

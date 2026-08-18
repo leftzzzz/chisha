@@ -9,6 +9,14 @@ import { fetchWithTimeout } from './withTimeout';
 import { ErrorCode } from './apiResponse';
 import { osmReverseGeocode } from './osm';
 import {
+  getProviderSchedulerConfig,
+  providerSchedulerName,
+  reportProviderFailure,
+  reportProviderSuccess,
+  runWithProviderLease,
+  ProviderSchedulerError,
+} from './providerScheduler';
+import {
   MAX_POI_PAGES,
   getPagesPerKeyword,
   normalizeSearchKeywords,
@@ -19,12 +27,21 @@ const AMAP_API_KEY = process.env.AMAP_API_KEY;
 const AMAP_SECURITY_CODE = process.env.AMAP_SECURITY_CODE;
 const AMAP_BASE_URL = 'https://restapi.amap.com/v3';
 const AMAP_TIMEOUT = 10000; // 10 秒超时
-const AMAP_MAX_QPS = parsePositiveInt(process.env.AMAP_MAX_QPS, 4);
-const AMAP_MAX_RETRIES = parsePositiveInt(process.env.AMAP_MAX_RETRIES, 2);
+const AMAP_MAX_RETRIES = parseBoundedInt(process.env.AMAP_MAX_RETRIES, 2, 0, 3);
 const AMAP_SEARCH_CACHE_TTL_MS = parsePositiveInt(process.env.AMAP_SEARCH_CACHE_TTL_MS, 2 * 60 * 1000);
 const AMAP_DETAIL_CACHE_TTL_MS = parsePositiveInt(process.env.AMAP_DETAIL_CACHE_TTL_MS, 24 * 60 * 60 * 1000);
 const AMAP_GEOCODE_CACHE_TTL_MS = parsePositiveInt(process.env.AMAP_GEOCODE_CACHE_TTL_MS, 60 * 60 * 1000);
-const AMAP_RATE_LIMIT_INFOCODES = new Set(['10020', '10021']);
+const AMAP_RATE_LIMIT_INFOCODES = new Set([
+  '10004', '10014', '10015', '10019', '10020', '10021', '10029',
+]);
+const AMAP_QUOTA_INFOCODES = new Set([
+  '10003', '10044', '10045', '40000', '40002', '40003',
+]);
+const AMAP_CONFIGURATION_INFOCODES = new Set([
+  '10001', '10002', '10005', '10006', '10007', '10008', '10009', '10010',
+  '10011', '10012', '10013', '10026', '10041', '20000', '20001', '20002',
+  '20011', '20012',
+]);
 
 /**
  * 高德 API 响应类型
@@ -72,11 +89,24 @@ interface AmapPoi {
 
 interface AmapPoiSearchOptions {
   preferProvidedPoiType?: boolean;
+  signal?: AbortSignal;
+}
+
+export type AmapFailureCategory = 'rate_limited' | 'quota_exhausted' | 'configuration' | 'unavailable';
+
+export class AmapProviderError extends ApiError {
+  constructor(
+    code: string,
+    message: string,
+    public readonly category: AmapFailureCategory,
+    public readonly retryable: boolean
+  ) {
+    super(code, message, { category });
+    this.name = 'AmapProviderError';
+  }
 }
 
 const amapResponseCache = new Map<string, { expiresAt: number; data: unknown }>();
-let amapRequestSchedule = Promise.resolve();
-let lastAmapRequestAt = 0;
 
 /**
  * 调用高德地图 POI 搜索 API
@@ -131,7 +161,15 @@ export async function amapPoiSearch(
 
     for (const task of searchTasks) {
       for (let page = 1; page <= pagesPerKeyword; page++) {
-        const data = await fetchAmapPoiPage(task.keyword, task.poiType, location, distance, page);
+        throwIfAborted(options.signal);
+        const data = await fetchAmapPoiPage(
+          task.keyword,
+          task.poiType,
+          location,
+          distance,
+          page,
+          options.signal
+        );
         if (!data.pois || data.pois.length === 0) {
           if (page === 1) {
             logger.info('Amap search returned no results', {
@@ -222,7 +260,8 @@ async function fetchAmapPoiPage(
   poiType: string,
   location: Location,
   distance: number,
-  page: number
+  page: number,
+  signal?: AbortSignal
 ): Promise<AmapPoiResponse> {
   const params = new URLSearchParams({
     key: AMAP_API_KEY!,
@@ -244,14 +283,16 @@ async function fetchAmapPoiPage(
   return fetchAmapJson<AmapPoiResponse>(
     url,
     ErrorCode.SEARCH_API_ERROR,
-    AMAP_SEARCH_CACHE_TTL_MS
+    AMAP_SEARCH_CACHE_TTL_MS,
+    signal
   );
 }
 
 async function fetchAmapJson<T extends AmapStatusResponse>(
   url: string,
   errorCode: string,
-  cacheTtlMs: number
+  cacheTtlMs: number,
+  signal?: AbortSignal
 ): Promise<T> {
   const cached = getCachedAmapResponse<T>(url);
   if (cached) {
@@ -260,17 +301,65 @@ async function fetchAmapJson<T extends AmapStatusResponse>(
   }
 
   let lastError: unknown;
+  const schedulerName = providerSchedulerName('amap');
 
   for (let attempt = 0; attempt <= AMAP_MAX_RETRIES; attempt++) {
     try {
-      await scheduleAmapRequest();
-      const response = await fetchWithTimeout(url, {}, AMAP_TIMEOUT);
+      const outcome = await runWithProviderLease(
+        schedulerName,
+        getProviderSchedulerConfig('amap'),
+        async (lease, leaseSignal) => {
+          try {
+            const response = await fetchWithTimeout(url, { signal: leaseSignal }, AMAP_TIMEOUT);
+            if (!response.ok) {
+              const category: AmapFailureCategory = response.status === 429
+                ? 'rate_limited'
+                : response.status >= 500 ? 'unavailable' : 'configuration';
+              if ((category !== 'rate_limited' && category !== 'unavailable')
+                || attempt >= AMAP_MAX_RETRIES) {
+                await reportAmapFailure(category);
+              }
+              return { status: response.status, category };
+            }
 
-      if (!response.ok) {
-        throw new ApiError(errorCode, `Amap API error: ${response.status}`);
+            const data = await response.json() as T;
+            if (data.status === '1') {
+              if (lease.probe) {
+                await reportProviderSuccess(schedulerName, lease.leaseId);
+              }
+            } else if (!isAmapQpsLimit(data) || attempt >= AMAP_MAX_RETRIES) {
+              await reportAmapFailure(classifyAmapFailure(data));
+            }
+            return { status: response.status, data };
+          } catch (error) {
+            if (!(error instanceof Error && error.name === 'AbortError')
+              && !(error instanceof ApiError)
+              && !(error instanceof ProviderSchedulerError)
+              && attempt >= AMAP_MAX_RETRIES) {
+              await reportAmapFailure('unavailable');
+            }
+            throw error;
+          }
+        },
+        { signal }
+      );
+
+      if (!outcome.data) {
+        if ((outcome.category === 'rate_limited' || outcome.category === 'unavailable')
+          && attempt < AMAP_MAX_RETRIES) {
+          const delayMs = getAmapRetryDelayMs(attempt);
+          await sleep(delayMs, signal);
+          continue;
+        }
+        throw new AmapProviderError(
+          errorCode,
+          `Amap API error: ${outcome.status}`,
+          outcome.category ?? 'unavailable',
+          outcome.category === 'rate_limited' || outcome.category === 'unavailable'
+        );
       }
 
-      const data = await response.json() as T;
+      const data = outcome.data;
 
       if (data.status === '1') {
         setCachedAmapResponse(url, data, cacheTtlMs);
@@ -285,7 +374,7 @@ async function fetchAmapJson<T extends AmapStatusResponse>(
           attempt: attempt + 1,
           delayMs,
         });
-        await sleep(delayMs);
+        await sleep(delayMs, signal);
         continue;
       }
 
@@ -293,14 +382,21 @@ async function fetchAmapJson<T extends AmapStatusResponse>(
         info: data.info,
         infocode: data.infocode,
       });
-      throw new ApiError(
+      const category = classifyAmapFailure(data);
+      throw new AmapProviderError(
         isAmapQpsLimit(data) ? ErrorCode.RATE_LIMIT_EXCEEDED : errorCode,
-        `Amap API error: ${data.info}`
+        `Amap API error: ${data.info}`,
+        category,
+        category === 'rate_limited' || category === 'unavailable'
       );
     } catch (error) {
       lastError = error;
 
-      if (error instanceof ApiError) {
+      if (error instanceof ApiError || error instanceof ProviderSchedulerError) {
+        throw error;
+      }
+
+      if (error instanceof Error && error.name === 'AbortError') {
         throw error;
       }
 
@@ -314,25 +410,11 @@ async function fetchAmapJson<T extends AmapStatusResponse>(
         attempt: attempt + 1,
         delayMs,
       });
-      await sleep(delayMs);
+      await sleep(delayMs, signal);
     }
   }
 
   throw lastError;
-}
-
-function scheduleAmapRequest(): Promise<void> {
-  const scheduled = amapRequestSchedule.then(async () => {
-    const minIntervalMs = Math.ceil(1000 / Math.max(1, AMAP_MAX_QPS));
-    const waitMs = Math.max(0, lastAmapRequestAt + minIntervalMs - Date.now());
-    if (waitMs > 0) {
-      await sleep(waitMs);
-    }
-    lastAmapRequestAt = Date.now();
-  });
-
-  amapRequestSchedule = scheduled.catch(() => undefined);
-  return scheduled;
 }
 
 function getCachedAmapResponse<T>(url: string): T | null {
@@ -379,6 +461,41 @@ function isAmapQpsLimit(data: AmapStatusResponse): boolean {
     || /QPS|并发|访问过于频繁|限流/.test(data.info);
 }
 
+function classifyAmapFailure(data: AmapStatusResponse): AmapFailureCategory {
+  if (isAmapQpsLimit(data)) {
+    return 'rate_limited';
+  }
+  if (AMAP_QUOTA_INFOCODES.has(data.infocode)
+    || /配额|额度|次数用尽|余额(?:不足|耗尽)|日.*(?:超限|用量)|DAILY_QUERY_OVER_LIMIT|QUOTA_PLAN_RUN_OUT|SERVICE_EXPIRED/i.test(data.info)) {
+    return 'quota_exhausted';
+  }
+  if (AMAP_CONFIGURATION_INFOCODES.has(data.infocode) || /key|签名|权限|白名单/i.test(data.info)) {
+    return 'configuration';
+  }
+  return 'unavailable';
+}
+
+async function reportAmapFailure(category: AmapFailureCategory): Promise<void> {
+  if (category === 'rate_limited') {
+    return;
+  }
+
+  const cooldownMs = category === 'quota_exhausted'
+    ? parseBoundedInt(process.env.AMAP_QUOTA_COOLDOWN_MS, 60_000, 1_000, 24 * 60 * 60 * 1000)
+    : category === 'configuration'
+      ? parseBoundedInt(process.env.AMAP_CONFIGURATION_COOLDOWN_MS, 300_000, 1_000, 24 * 60 * 60 * 1000)
+      : parseBoundedInt(process.env.AMAP_UNAVAILABLE_COOLDOWN_MS, 5_000, 1_000, 60_000);
+
+  try {
+    await reportProviderFailure(providerSchedulerName('amap'), category, cooldownMs);
+  } catch (error) {
+    logger.warn('Failed to report Amap provider failure to scheduler', {
+      category,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 function getAmapRetryDelayMs(attempt: number): number {
   return Math.min(2000, 300 * 2 ** attempt);
 }
@@ -388,8 +505,45 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function parseBoundedInt(
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const finish = (): void => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      const error = new Error('Request aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    if (signal?.aborted) {
+      onAbort();
+    } else {
+      signal?.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const error = new Error('Request aborted');
+  error.name = 'AbortError';
+  throw error;
 }
 
 function redactAmapUrl(url: string): string {
@@ -409,7 +563,8 @@ function redactAmapUrl(url: string): string {
  */
 export async function enrichRestaurantsWithAmapDetails(
   restaurants: Restaurant[],
-  limit: number = 10
+  limit: number = 10,
+  signal?: AbortSignal
 ): Promise<Restaurant[]> {
   if (!AMAP_API_KEY || restaurants.length === 0) {
     return restaurants;
@@ -423,30 +578,37 @@ export async function enrichRestaurantsWithAmapDetails(
       amapId: restaurant.id.startsWith('amap_') ? restaurant.id.slice(5) : '',
     }))
     .filter((target) => target.amapId.length > 0);
-
-  await Promise.all(detailTargets.map(async (target) => {
-    try {
-      const detail = await amapPoiDetail(target.amapId);
-      if (detail) {
-        enrichedRestaurants[target.index] = {
-          ...enrichedRestaurants[target.index],
-          ...detail,
-          id: enrichedRestaurants[target.index].id,
-          distance: enrichedRestaurants[target.index].distance,
-        };
+  const concurrency = parseBoundedInt(process.env.AMAP_DETAIL_CONCURRENCY, 2, 1, 10);
+  for (let offset = 0; offset < detailTargets.length; offset += concurrency) {
+    throwIfAborted(signal);
+    const batch = detailTargets.slice(offset, offset + concurrency);
+    await Promise.all(batch.map(async (target) => {
+      try {
+        const detail = await amapPoiDetail(target.amapId, signal);
+        if (detail) {
+          enrichedRestaurants[target.index] = {
+            ...enrichedRestaurants[target.index],
+            ...detail,
+            id: enrichedRestaurants[target.index].id,
+            distance: enrichedRestaurants[target.index].distance,
+          };
+        }
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          throw error;
+        }
+        logger.warn('Amap detail enrichment failed', {
+          amapId: target.amapId,
+          error,
+        });
       }
-    } catch (error) {
-      logger.warn('Amap detail enrichment failed', {
-        amapId: target.amapId,
-        error,
-      });
-    }
-  }));
+    }));
+  }
 
   return enrichedRestaurants;
 }
 
-async function amapPoiDetail(amapId: string): Promise<Restaurant | null> {
+async function amapPoiDetail(amapId: string, signal?: AbortSignal): Promise<Restaurant | null> {
   const params = new URLSearchParams({
     key: AMAP_API_KEY!,
     id: amapId,
@@ -457,7 +619,8 @@ async function amapPoiDetail(amapId: string): Promise<Restaurant | null> {
   const data = await fetchAmapJson<AmapPoiResponse>(
     url,
     ErrorCode.SEARCH_API_ERROR,
-    AMAP_DETAIL_CACHE_TTL_MS
+    AMAP_DETAIL_CACHE_TTL_MS,
+    signal
   );
   if (!data.pois || data.pois.length === 0) {
     return null;
@@ -542,7 +705,8 @@ function firstNonEmpty(values: Array<string | undefined>): string | undefined {
  */
 export async function amapGeocode(
   address: string,
-  city?: string
+  city?: string,
+  signal?: AbortSignal
 ): Promise<Location> {
   if (!AMAP_API_KEY) {
     throw new ApiError(
@@ -573,7 +737,7 @@ export async function amapGeocode(
         location: string;
         formatted_address: string;
       }>;
-    }>(url, ErrorCode.GEOCODE_ERROR, AMAP_GEOCODE_CACHE_TTL_MS);
+    }>(url, ErrorCode.GEOCODE_ERROR, AMAP_GEOCODE_CACHE_TTL_MS, signal);
 
     if (!data.geocodes || data.geocodes.length === 0) {
       throw new ApiError(
@@ -599,7 +763,7 @@ export async function amapGeocode(
 /**
  * 逆向地理编码：坐标转地址（仅调用高德地图）
  */
-async function amapReverseGeocodeOnly(location: Location): Promise<{
+async function amapReverseGeocodeOnly(location: Location, signal?: AbortSignal): Promise<{
   address: string;
   formattedAddress?: string;
   province?: string;
@@ -635,7 +799,7 @@ async function amapReverseGeocodeOnly(location: Location): Promise<{
           district?: string;
         };
       };
-    }>(url, ErrorCode.GEOCODE_ERROR, AMAP_GEOCODE_CACHE_TTL_MS);
+    }>(url, ErrorCode.GEOCODE_ERROR, AMAP_GEOCODE_CACHE_TTL_MS, signal);
 
     logger.info('Amap reverse geocode response', {
       status: data.status,
@@ -692,7 +856,7 @@ async function amapReverseGeocodeOnly(location: Location): Promise<{
  * 优先使用高德地图，失败则降级到 OSM Nominatim
  * 最后降级到坐标格式化地址
  */
-export async function amapReverseGeocode(location: Location): Promise<{
+export async function amapReverseGeocode(location: Location, signal?: AbortSignal): Promise<{
   address: string;
   formattedAddress?: string;
   province?: string;
@@ -701,20 +865,31 @@ export async function amapReverseGeocode(location: Location): Promise<{
 }> {
   try {
     // 优先使用高德地图
-    return await amapReverseGeocodeOnly(location);
+    return await amapReverseGeocodeOnly(location, signal);
   } catch (amapError) {
+    if (amapError instanceof Error && amapError.name === 'AbortError') {
+      throw amapError;
+    }
+    if ((amapError instanceof AmapProviderError && amapError.category !== 'unavailable')
+      || amapError instanceof ProviderSchedulerError
+      || (amapError instanceof ApiError && amapError.code === ErrorCode.MISSING_API_KEY)) {
+      throw amapError;
+    }
     logger.warn('Amap reverse geocode failed, falling back to OSM Nominatim', {
       error: amapError instanceof Error ? amapError.message : String(amapError),
     });
 
     try {
       // 降级到 OSM Nominatim
-      const osmResult = await osmReverseGeocode(location);
+      const osmResult = await osmReverseGeocode(location, signal);
       logger.info('OSM Nominatim reverse geocode successful', {
         address: osmResult.address,
       });
       return osmResult;
     } catch (osmError) {
+      if (osmError instanceof Error && osmError.name === 'AbortError') {
+        throw osmError;
+      }
       logger.warn('OSM Nominatim reverse geocode also failed, using fallback coordinate format', {
         amapError: amapError instanceof Error ? amapError.message : String(amapError),
         osmError: osmError instanceof Error ? osmError.message : String(osmError),

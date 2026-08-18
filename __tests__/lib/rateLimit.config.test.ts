@@ -4,7 +4,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { RATE_LIMITS, checkRateLimit, rateLimit } from '@/lib/rateLimit';
+import { RATE_LIMITS, checkRateLimit, getClientIP, rateLimit } from '@/lib/rateLimit';
 
 /**
  * Cloudflare 原生 ratelimit binding 的额度写在 wrangler.jsonc 里，代码侧只能
@@ -103,5 +103,38 @@ describe('rateLimit', () => {
     expect(rejected.success).toBe(false);
     expect(rejected.retryAfterSeconds).toBeGreaterThan(0);
     expect(rejected.remaining).toBe(0);
+  });
+});
+
+describe('getClientIP', () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv;
+  });
+
+  it('prefers the Cloudflare-authenticated address over spoofable proxy headers', () => {
+    process.env.NODE_ENV = 'production';
+    const request = new Request('https://example.com', {
+      headers: {
+        'cf-connecting-ip': '203.0.113.10',
+        'x-forwarded-for': '198.51.100.20',
+        'x-real-ip': '192.0.2.30',
+      },
+    });
+
+    expect(getClientIP(request)).toBe('203.0.113.10');
+  });
+
+  it('does not trust x-forwarded-for in production without a Cloudflare header', () => {
+    process.env.NODE_ENV = 'production';
+    const request = new Request('https://example.com', {
+      headers: {
+        'x-forwarded-for': '198.51.100.20',
+        'x-real-ip': '192.0.2.30',
+      },
+    });
+
+    expect(getClientIP(request)).toBe('unknown-client');
   });
 });

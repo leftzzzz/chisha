@@ -50,6 +50,8 @@ export const RATE_LIMITS = {
   amapProxyPerIp: { binding: 'RL_AMAP_PROXY', limit: 300, periodSeconds: 60 },
   /** 地理编码，正反向共用一个域 */
   geocodePerIp: { binding: 'RL_GEOCODE', limit: 3, periodSeconds: 60 },
+  /** 会话读取/删除的廉价入口保护，不能替代 owner 授权 */
+  agentSessionPerIp: { binding: 'RL_AGENT_SESSION', limit: 60, periodSeconds: 60 },
 } as const;
 
 export type RateLimitDomain = keyof typeof RATE_LIMITS;
@@ -238,6 +240,18 @@ export async function checkRateLimit(
  * 从请求头获取客户端 IP
  */
 export function getClientIP(request: Request): string {
+  // Cloudflare Workers 专用 header
+  const cfConnectingIP = request.headers.get('cf-connecting-ip');
+  if (cfConnectingIP) {
+    return cfConnectingIP;
+  }
+
+  // 生产没有可信 CF header 时，不接受客户端自报的 X-Forwarded-For 作为账单保护依据。
+  // 本地 Node/测试仍兼容常见代理头，方便 API 测试和开发调试。
+  if (process.env.NODE_ENV === 'production') {
+    return 'unknown-client';
+  }
+
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded) {
     return forwarded.split(',')[0].trim();
@@ -245,11 +259,6 @@ export function getClientIP(request: Request): string {
   const realIP = request.headers.get('x-real-ip');
   if (realIP) {
     return realIP;
-  }
-  // Cloudflare Workers 专用 header
-  const cfConnectingIP = request.headers.get('cf-connecting-ip');
-  if (cfConnectingIP) {
-    return cfConnectingIP;
   }
   return '127.0.0.1';
 }

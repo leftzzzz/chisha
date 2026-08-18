@@ -24,6 +24,7 @@ const EVALUATION_TIMEOUT = 60000;
 const EVALUATION_MAX_TOKENS = STRUCTURED_MODEL_MAX_TOKENS;
 const EVALUATION_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
 export interface EvaluationModelInput {
+  signal?: AbortSignal;
   metricsSink?: MetricsSink;
   goal: UserGoal;
   plan: SearchPlan;
@@ -135,6 +136,7 @@ async function callEvaluationModel(input: EvaluationModelInput): Promise<Evaluat
     maxTokens: EVALUATION_MAX_TOKENS,
     retryMaxTokens: EVALUATION_RETRY_MAX_TOKENS,
     timeoutMs: EVALUATION_TIMEOUT,
+    signal: input.signal,
   });
 }
 
@@ -203,4 +205,3 @@ function restaurantFactSummary(restaurant: Restaurant) {
     poiTypeCode: restaurant.poiTypeCode,
   };
 }
-

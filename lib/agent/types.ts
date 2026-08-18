@@ -452,6 +452,8 @@ export interface AgentTraceItem {
 }
 
 export interface AgentInput {
+  /** 客户端断开时取消尚未发出的供应商/模型请求。 */
+  signal?: AbortSignal;
   query: string;
   /**
    * 用户点击的追问选项 id。
@@ -666,7 +668,9 @@ export interface PendingQuestion {
 
 export interface AgentSession {
   id: string;
-  version: 4;
+  version: number;
+  /** 签名匿名 owner；历史无 owner 会话只允许非生产测试读取。 */
+  ownerId?: string;
   createdAt: number;
   updatedAt: number;
   expiresAt: number;

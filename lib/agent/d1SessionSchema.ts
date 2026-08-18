@@ -5,6 +5,7 @@ import type { Location } from '@/types';
 export interface AgentSessionD1Row {
   id: string;
   version: number;
+  owner_id: string | null;
   location_json: string;
   messages_json: string;
   runtime_state_json: string;
@@ -18,6 +19,7 @@ export function agentSessionToD1Row(session: AgentSession): AgentSessionD1Row {
   return {
     id: session.id,
     version: session.version,
+    owner_id: session.ownerId ?? null,
     location_json: JSON.stringify(session.location),
     messages_json: JSON.stringify(session.messages),
     runtime_state_json: JSON.stringify({
@@ -45,6 +47,7 @@ export function agentSessionFromD1Row(row: AgentSessionD1Row): AgentSession {
   return {
     id: row.id,
     version: 4,
+    ownerId: row.owner_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,

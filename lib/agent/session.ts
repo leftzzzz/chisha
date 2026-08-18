@@ -10,11 +10,11 @@ const sessions = new Map<string, AgentSession>();
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
 export interface AgentSessionStore {
-  create(message: string, location: Location): AgentSession;
+  create(message: string, location: Location, ownerId?: string): AgentSession;
   get(sessionId: string): AgentSession | null;
   save(session: AgentSession): AgentSession;
   delete(sessionId: string): boolean;
-  createAsync?: (message: string, location: Location) => Promise<AgentSession>;
+  createAsync?: (message: string, location: Location, ownerId?: string) => Promise<AgentSession>;
   getAsync?: (sessionId: string) => Promise<AgentSession | null>;
   saveAsync?: (session: AgentSession) => Promise<AgentSession>;
   deleteAsync?: (sessionId: string) => Promise<boolean>;
@@ -37,14 +37,18 @@ export function resetAgentSessionStore(): void {
   activeAgentSessionStore = inMemoryAgentSessionStore;
 }
 
-export function createAgentSession(message: string, location: Location): AgentSession {
-  return activeAgentSessionStore.create(message, location);
+export function createAgentSession(message: string, location: Location, ownerId?: string): AgentSession {
+  return activeAgentSessionStore.create(message, location, ownerId);
 }
 
-export async function createAgentSessionAsync(message: string, location: Location): Promise<AgentSession> {
+export async function createAgentSessionAsync(
+  message: string,
+  location: Location,
+  ownerId?: string
+): Promise<AgentSession> {
   return activeAgentSessionStore.createAsync
-    ? activeAgentSessionStore.createAsync(message, location)
-    : activeAgentSessionStore.create(message, location);
+    ? activeAgentSessionStore.createAsync(message, location, ownerId)
+    : activeAgentSessionStore.create(message, location, ownerId);
 }
 
 export function getAgentSession(sessionId: string): AgentSession | null {
@@ -77,13 +81,14 @@ export async function saveAgentSessionAsync(session: AgentSession): Promise<Agen
     : activeAgentSessionStore.save(session);
 }
 
-function createInMemoryAgentSession(message: string, location: Location): AgentSession {
+function createInMemoryAgentSession(message: string, location: Location, ownerId?: string): AgentSession {
   cleanupExpiredSessions();
 
   const now = Date.now();
   const session: AgentSession = {
     id: createSessionId(),
     version: 4,
+    ownerId,
     createdAt: now,
     updatedAt: now,
     expiresAt: now + SESSION_TTL_MS,

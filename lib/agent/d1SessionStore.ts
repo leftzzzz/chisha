@@ -32,7 +32,7 @@ export class D1AgentSessionStore implements AgentSessionStore {
     throw new Error('D1AgentSessionStore requires async session methods');
   }
 
-  async createAsync(message: string, location: Location): Promise<AgentSession> {
+  async createAsync(message: string, location: Location, ownerId?: string): Promise<AgentSession> {
     const now = Date.now();
     // Keep cleanup off the read path; D1 can automatically retry the SELECT in getAsync.
     await this.cleanupExpiredSessions(now);
@@ -40,6 +40,7 @@ export class D1AgentSessionStore implements AgentSessionStore {
     const session: AgentSession = {
       id: createSessionId(),
       version: 4,
+      ownerId,
       createdAt: now,
       updatedAt: now,
       expiresAt: now + SESSION_TTL_MS,
@@ -84,6 +85,7 @@ export class D1AgentSessionStore implements AgentSessionStore {
           INSERT INTO agent_sessions (
             id,
             version,
+            owner_id,
             location_json,
             messages_json,
             runtime_state_json,
@@ -92,9 +94,10 @@ export class D1AgentSessionStore implements AgentSessionStore {
             updated_at,
             expires_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             version = excluded.version,
+            owner_id = excluded.owner_id,
             location_json = excluded.location_json,
             messages_json = excluded.messages_json,
             runtime_state_json = excluded.runtime_state_json,
@@ -105,6 +108,7 @@ export class D1AgentSessionStore implements AgentSessionStore {
         .bind(
           row.id,
           row.version,
+          row.owner_id,
           row.location_json,
           row.messages_json,
           row.runtime_state_json,

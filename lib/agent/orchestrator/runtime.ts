@@ -122,6 +122,9 @@ export async function runSearchAgentV3(
   try {
     return await runAgentTurn(input, emit, searchPlaces, contextRef);
   } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     if (error instanceof AgentRunError) {
       throw error;
     }
@@ -285,6 +288,9 @@ async function groundQuestionInNearbyCategories(
 
     return grounded ?? question;
   } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     createTurnLogger(context.sessionId, context.turnId).warn(
       'Nearby category scouting failed; keeping the model question',
       { error: error instanceof Error ? error.message : String(error) }
@@ -314,6 +320,7 @@ async function expandKeywordsAlongsideFirstSearch(
   // 指标直接记到 context：它此刻已经存在，再走 turnMetrics 转一手会和
   // 并发首批里评估 agent 的记录互相覆盖。
   const expansion = runKeywordExpansionModel({
+    signal: context.signal,
     metricsSink: context,
     goal: context.goal,
     attempts: context.attempts,
@@ -499,6 +506,7 @@ async function applyReplan(
   emit({ type: 'status', message: '正在换个思路继续找...' });
 
   const replan = await runSearchReplan({
+    signal: context.signal,
     metricsSink: context,
     message: context.query,
     goal: context.goal,
@@ -688,6 +696,10 @@ function toAgentErrorCode(error: unknown): AgentErrorCode {
   return isAgentError(error) ? error.code : 'UNKNOWN';
 }
 
+function isAbortError(error: unknown): error is Error {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
 function isRetryableAgentError(error: unknown, code: AgentErrorCode): boolean {
   if (isAgentError(error)) {
     return error.retryable;
@@ -720,6 +732,7 @@ async function getGoalUnderstandingOutput(
   metricsSink: MetricsSink
 ): Promise<Awaited<ReturnType<typeof runGoalUnderstandingModel>>> {
   return runGoalUnderstandingModel({
+    signal: input.signal,
     metricsSink,
     message: input.query,
     previousGoal: input.runtimeState?.goal,
@@ -865,32 +878,51 @@ async function executeSearchBatch(
   const baseRound = context.attempts.length + 1;
   const results = await mapWithConcurrency(plans, plans.length, async (plan, index) => {
     try {
-      return await runSearchPlan(actionId, plan, baseRound + index, context, searchPlaces, emit);
+      return {
+        result: await runSearchPlan(actionId, plan, baseRound + index, context, searchPlaces, emit),
+      };
     } catch (error) {
-      createTurnLogger(context.sessionId, context.turnId).warn('Parallel search plan failed', {
-        keywords: plan.keywords,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      appendTrace(context, 'error', {
-        actionId,
-        input: { plan },
-        error: {
-          code: 'SEARCH_PROVIDER_FAILED',
-          message: error instanceof Error ? error.message : String(error),
-          retryable: true,
-        },
-      });
-      // 记为一次已尝试：否则这个关键词会被反复选中，直到预算耗尽。
-      recordFailedAttempt(context, plan);
-      return null;
+      if (isAbortError(error)) {
+        throw error;
+      }
+      return { result: null, error };
     }
   });
 
   const observations: AgentObservation[] = [];
-  for (const result of results) {
-    if (result) {
-      observations.push(commitSearchPlanResult(result, context, emit));
+  const failures: unknown[] = [];
+  for (let index = 0; index < results.length; index += 1) {
+    const outcome = results[index];
+    const plan = plans[index];
+    if (outcome.result) {
+      observations.push(commitSearchPlanResult(outcome.result, context, emit));
+      continue;
     }
+
+    const failure = outcome.error ?? new Error('Search plan failed without an error');
+    failures.push(failure);
+    createTurnLogger(context.sessionId, context.turnId).warn('Parallel search plan failed', {
+      keywords: plan.keywords,
+      error: failure instanceof Error ? failure.message : String(failure),
+    });
+    appendTrace(context, 'error', {
+      actionId,
+      input: { plan },
+      error: {
+        code: isAgentError(failure) ? failure.code : 'SEARCH_PROVIDER_FAILED',
+        message: failure instanceof Error ? failure.message : String(failure),
+        retryable: isAgentError(failure) ? failure.retryable : true,
+      },
+    });
+    // 记为一次已尝试：否则这个关键词会被反复选中，直到预算耗尽。
+    recordFailedAttempt(context, plan);
+  }
+
+  // A partial batch can still produce useful evidence. If every provider call
+  // failed, treating the outage as "zero nearby restaurants" would mislead the
+  // user and spend the remaining search budget on a dead path.
+  if (observations.length === 0 && failures.length > 0) {
+    throw failures.find(isAgentError) ?? failures[0];
   }
 
   return observations;
@@ -1100,6 +1132,7 @@ async function evaluatePlanCandidates(
 
       try {
         const output = await runBatchedEvaluationModel({
+          signal: context.signal,
           metricsSink: context,
           goal: context.goal,
           plan,
@@ -1115,6 +1148,9 @@ async function evaluatePlanCandidates(
         cache.settle(output.verdicts, plan);
         outputs.push(output);
       } catch (evaluationError) {
+        if (isAbortError(evaluationError)) {
+          throw evaluationError;
+        }
         error = evaluationFailureFromError(evaluationError);
         context.evaluationFailed = true;
         context.evaluationError = isAgentError(evaluationError)

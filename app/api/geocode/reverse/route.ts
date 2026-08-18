@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     logger.info('Processing reverse geocode request', { location });
 
     // 调用高德地图逆向地理编码
-    const result = await amapReverseGeocode(location);
+    const result = await amapReverseGeocode(location, request.signal);
 
     const response: ReverseGeocodeResponse = result;
 

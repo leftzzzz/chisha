@@ -25,6 +25,7 @@ const KEYWORD_EXPANSION_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
 const KEYWORD_EXPANSION_LIMIT = 3;
 
 export interface KeywordExpansionModelInput {
+  signal?: AbortSignal;
   metricsSink?: MetricsSink;
   goal: UserGoal;
   attempts: SearchAttempt[];
@@ -178,6 +179,7 @@ async function callKeywordExpansionModel(
     maxTokens: KEYWORD_EXPANSION_MAX_TOKENS,
     retryMaxTokens: KEYWORD_EXPANSION_RETRY_MAX_TOKENS,
     timeoutMs: KEYWORD_EXPANSION_TIMEOUT,
+    signal: input.signal,
   }) as Promise<KeywordExpansionOutput>;
 }
 

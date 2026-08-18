@@ -20,3 +20,5 @@ rg -n "关键词|组件名|文件路径" docs/specs
   决策优先级、单一真源和验证交付规则。
 - [Restaurant Search Agent](./restaurant-search-agent.md) - Restaurant Search Agent 的
   命名、语义所有权、工具、Provider、证据、Runtime、委派和 eval 强制边界。
+- [Public Runtime Protection](./public-runtime-protection.md) - 公网入口、匿名会话、跨实例
+  Provider 调度、短等待、错误分类和部署验证强制边界。
