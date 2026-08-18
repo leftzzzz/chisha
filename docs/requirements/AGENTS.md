@@ -13,6 +13,8 @@ rg -n "用户场景|能力|验收条件" docs/requirements docs/立项文档 \
 
 ## Current Requirements
 
+- [ChiSha 业务规则与产品边界](./chisha-product-rules.md) - 输入、位置、转盘、候补、历史
+  和跨功能用户交互的当前业务规则。
 - [Restaurant Search Agent](./restaurant-search-agent.md) - 自然语言搜索、范围授权、证据
   分区和 Agent 行为的当前产品要求。
 - [最终推荐发布边界](./final-recommendation-publication.md) - 主推荐最终准入、候补分区、
