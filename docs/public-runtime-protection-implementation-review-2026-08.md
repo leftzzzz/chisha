@@ -23,6 +23,7 @@
 | P1 | Provider lease 续期失败只记录日志 | 失去容量所有权后仍继续调用供应商 | 续期失败中止组合 signal，并映射为类型化可重试故障 |
 | P1 | SSE cancel、详情补全和反向地理编码可能吞掉 abort | 客户端离开后继续分页、fallback 或消耗额度 | request/cancel signal 贯穿 Runtime；AbortError 不再被详情或 fallback 吞掉 |
 | P1 | 租约丢失走取消分支但不关闭在线 SSE | 客户端保持无心跳悬挂连接 | 区分客户端取消和 admission lease 丢失；后者发送可恢复错误并关闭流 |
+| P1 | SSE 先 `controller.close()` 再异步 release admission lease | Cloudflare 可在响应结束后终止请求，已完成会话仍占用 session/active-run 直至 120 秒 TTL；线上连续续接均在 3.5 秒后 429 | release 合并为幂等 cleanup Promise；正常、异常与 cancel 均等待 cleanup，之后才暴露流结束；延迟 release 回归测试锁定顺序 |
 | P1 | session DELETE 未参与互斥 | 运行结束可把刚删除的 session 重新写回 | DELETE 取得同一 session lease；API 并发测试验证第二 turn 在 Runtime 前 429 |
 | P1 | owner token 只靠浏览器 `Max-Age` 过期 | 被复制的旧 token 可无限期重放 | 到期时间纳入 HMAC，服务端校验并在合法访问时重新签发；生产密钥至少 32 字符 |
 | P1 | owner Cookie 与 session 都是 30 分钟 | 长运行结束续期后，Cookie 可能先于 session 过期 | Cookie 调整为 60 分钟并滚动续期，session 保持 30 分钟 |
@@ -38,7 +39,8 @@
 
 - `npm run type-check`：通过。
 - `npm run lint`：通过。
-- `npm test -- --runInBand --silent`：48 suites、423 tests 全部通过。
+- `npm test -- --runInBand --silent`：48 suites、425 tests 全部通过；其中两项延迟 cleanup
+  测试分别锁定正常 close 顺序与 cancel 后的运行退出顺序。
 - `npm run eval`：15/15 通过，搜索步数、关键词、评估调用和并发基线无变化。
 - `npm run build`：通过。
 - `npm run build:cloudflare`：通过。
@@ -46,6 +48,9 @@
   明确输出跳过远程 D1 migration。
 - `npm run versions:upload`：D1 无待应用迁移，构建、资源上传与 binding 校验通过；Cloudflare
   Version API 按预期以 `10211` 拒绝尚未通过非版本化部署应用的首次 DO migration。
+- 首次线上验收：普通高德搜索、完整 Agent SSE、owner Cookie 同源读取和异源 404 均通过；
+  随后连续 session resume 均等待约 3.5 秒返回 429，而 120 秒 TTL 后 DELETE 成功，确认并
+  修复了 close-before-release 生命周期缺陷。
 - `agents-spec` 结构审计：零错误、零警告。
 
 ## 保留风险与上线判定

@@ -36,6 +36,8 @@ Durable Object 调度和相关测试。产品要求见
 - `/api/agent/chat` 在返回 SSE 响应前取得全局 active-run lease 与 session lease。已有会话先
   校验 owner 并取得 session lease，再占全局名额；新会话先取得全局名额，创建后取得其唯一
   session lease。所有退出路径必须回收。
+- SSE 正常结束必须先等待 admission lease release，再关闭响应流；客户端 cancel 必须返回
+  同一个幂等 cleanup Promise，不能依赖 120 秒 lease TTL 回收正常完成的请求。
 - `/api/search` 必须有入口限流、有界数组/字符串/半径/数量 schema，并通过高德调度器。
 - session GET/DELETE 必须有独立入口限流，且限流不能代替 owner 授权。
 - 拒绝拥塞使用 429；协调基础设施或上游不可用使用 503；两者包含合理 `Retry-After`。

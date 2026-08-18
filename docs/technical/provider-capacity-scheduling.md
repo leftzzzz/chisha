@@ -90,6 +90,10 @@ OSM_MAX_INFLIGHT=1
 名额；新会话先取得全局 lease，创建记录后立即取得其 session lease。所有步骤都在 SSE 响应
 建立前完成，任何后续异常都在 `finally` 回收租约。
 
+`controller.close()` 会向 Cloudflare 暴露请求生命周期终点，因此正常结束必须先等待
+active-run/session release，再关闭 SSE；cancel 返回同一个幂等 cleanup Promise。lease TTL
+只为进程中断等异常兜底，不能承担正常请求的回收。
+
 匿名所有者 Cookie 保存随机 id 与 HMAC 签名，服务端只将 owner id 写入 D1。签名密钥
 `SESSION_OWNER_SECRET` 是生产必需且至少 32 字符的高熵 secret。Cookie token 把到期时间
 纳入 HMAC，服务端拒绝过期 token，不能仅依赖浏览器删除。Cookie 仅在生产添加 `Secure`，本地 HTTP 开发
