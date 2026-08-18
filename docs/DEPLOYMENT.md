@@ -702,7 +702,9 @@ npm run db:migrate:local
 npm run db:migrate:remote
 ```
 
-当前迁移会创建 `agent_sessions` 表，并建立 `expires_at`、`updated_at` 索引。迁移文件使用 `IF NOT EXISTS`，搬环境后重复执行是安全的。
+当前迁移会创建 `agent_sessions` 表，增加匿名会话归属列 `owner_id`，并建立
+`expires_at`、`updated_at`、`owner_id` 索引。已经成功应用的迁移由 Wrangler 记录，
+不会重复执行。
 
 ### 自动部署迁移
 
@@ -712,7 +714,14 @@ npm run db:migrate:remote
 npm run deploy
 ```
 
-迁移由 `wrangler.jsonc` 里的 `build.command = "npm run wrangler:build"` 触发。因此部署平台即使直接执行 `npx wrangler deploy` 或 `npx wrangler versions upload`，Wrangler 也会在上传前先运行远程 D1 迁移。`wrangler dev` 不会触发远程迁移。若部署平台已经先执行了 `npm run build:cloudflare`，脚本会复用已有的 `.open-next/worker.js`，避免重复构建；否则会自动执行 OpenNext 构建。
+远程 D1 migration 由 `scripts/wrangler-deploy-with-migrations.js` 在上传 Worker 前显式执行。
+`wrangler.jsonc` 的 `build.command = "npm run wrangler:build"` 只负责构建，不写远程 D1，
+因此 `wrangler dev` 和 `npm run deploy -- --dry-run` 都不会产生生产数据变更。若部署平台
+已经先执行了 `npm run build:cloudflare`，构建脚本会复用已有的
+`.open-next/worker.js`；否则会自动执行 OpenNext 构建。
+
+不要把直接运行 `npx wrangler deploy` 当作等价命令：它不会执行本项目的 D1 migration。
+只有在已经显式处理 D1 migration 时，才可以绕过 `npm run deploy`。
 
 Wrangler 在 CI/CD 或其它非交互命令行中会跳过迁移确认提示；本地终端可能会要求确认。需要紧急跳过迁移时使用：
 
@@ -726,7 +735,15 @@ npm run deploy:skip-migrations
 npm run versions:upload
 ```
 
-直接使用平台的 Version command `npx wrangler versions upload` 也可以，因为会走上面的 Wrangler build hook。
+`npm run versions:upload` 会先应用 D1 migration，再上传新版本；但 Cloudflare Version
+upload 不能应用新的 Durable Object migration。首次引入
+`ProviderSchedulerDurableObject`，或以后新增任何 DO migration 时，必须先执行一次非版本化
+的 `npm run deploy`。迁移应用后，后续 Version upload 才可正常使用。
+
+因此首次合并含新 DO migration 的 PR 时，Cloudflare 预览构建可能以错误 `10211` 拒绝
+Version upload。这是一次性的发布引导约束：确认常规 CI、OpenNext 构建和 binding 校验
+通过后，合并代码并执行 `npm run deploy`，不得通过删除 DO migration 绕过。直接运行
+`npx wrangler versions upload` 既不会补 D1 migration，也不能解决这一限制。
 
 ### 搬环境检查清单
 

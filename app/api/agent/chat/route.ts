@@ -23,15 +23,33 @@ import {
   appendAssistantMessageAsync,
   appendUserMessageAsync,
   createAgentSessionAsync,
+  deleteAgentSessionAsync,
   getAgentSessionAsync,
   saveAgentSessionAsync,
 } from '@/lib/agent/session';
 import { configureCloudflareAgentSessionStore } from '@/lib/agent/cloudflareSessionStore';
+import {
+  claimLegacySessionOwner,
+  getSessionOwner,
+  sessionBelongsToOwner,
+  SessionOwnerConfigurationError,
+} from '@/lib/agent/sessionOwner';
 import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
-import { amapPoiSearch, enrichRestaurantsWithAmapDetails } from '@/lib/amap';
+import {
+  amapPoiSearch,
+  AmapProviderError,
+  enrichRestaurantsWithAmapDetails,
+} from '@/lib/amap';
 import { logger } from '@/lib/logger';
 import { osmSearch } from '@/lib/osm';
 import { checkRateLimit, getClientIP } from '@/lib/rateLimit';
+import {
+  acquireProviderLease,
+  getProviderSchedulerConfig,
+  providerSchedulerName,
+  ProviderSchedulerError,
+  type ProviderLease,
+} from '@/lib/providerScheduler';
 
 const AGENT_POI_PAGES_PER_SEARCH = parsePositiveInt(process.env.AGENT_POI_PAGES_PER_SEARCH, 2);
 const AGENT_DETAIL_ENRICH_LIMIT = parsePositiveInt(process.env.AGENT_DETAIL_ENRICH_LIMIT, 6);
@@ -43,29 +61,29 @@ const AGENT_DETAIL_ENRICH_LIMIT = parsePositiveInt(process.env.AGENT_DETAIL_ENRI
  * HEARTBEAT_TIMEOUT_MS，二者需保持数倍关系。
  */
 const AGENT_HEARTBEAT_INTERVAL_MS = parsePositiveInt(process.env.AGENT_HEARTBEAT_MS, 10000);
+const MAX_AGENT_REQUEST_BYTES = 64 * 1024;
+
+const BoundedPreferenceItemSchema = z.object({
+  name: z.string().trim().min(1).max(64),
+  weight: z.number().finite().min(0).max(1000),
+});
 
 const LocationSchema = z.object({
-  lat: z.number(),
-  lng: z.number(),
-  address: z.string().optional(),
+  lat: z.number().finite().min(-90).max(90),
+  lng: z.number().finite().min(-180).max(180),
+  address: z.string().trim().max(200).optional(),
 });
 
 const PreferenceSummarySchema = z.object({
-  favoriteCuisines: z.array(z.object({
-    name: z.string(),
-    weight: z.number(),
-  })).optional(),
-  avoidedCuisines: z.array(z.object({
-    name: z.string(),
-    weight: z.number(),
-  })).optional(),
-  preferredDistanceMeters: z.number().optional(),
+  favoriteCuisines: z.array(BoundedPreferenceItemSchema).max(20).optional(),
+  avoidedCuisines: z.array(BoundedPreferenceItemSchema).max(20).optional(),
+  preferredDistanceMeters: z.number().finite().min(0).max(50_000).optional(),
   preferredPriceRange: z.object({
-    min: z.number().optional(),
-    max: z.number().optional(),
+    min: z.number().finite().min(0).max(100_000).optional(),
+    max: z.number().finite().min(0).max(100_000).optional(),
   }).optional(),
-  recentSelectedRestaurants: z.array(z.string()).optional(),
-  recentRejectedRestaurants: z.array(z.string()).optional(),
+  recentSelectedRestaurants: z.array(z.string().trim().min(1).max(150)).max(20).optional(),
+  recentRejectedRestaurants: z.array(z.string().trim().min(1).max(150)).max(20).optional(),
 }).optional();
 
 /**
@@ -78,9 +96,9 @@ const AgentChatRequestSchema = z.object({
   message: z.string().min(1).max(500).optional(),
   optionId: z.string().min(1).max(64).optional(),
   location: LocationSchema,
-  sessionId: z.string().optional(),
+  sessionId: z.string().trim().min(1).max(128).optional(),
   preferenceSummary: PreferenceSummarySchema,
-  groupPreferenceSummaries: z.array(PreferenceSummarySchema.unwrap()).optional(),
+  groupPreferenceSummaries: z.array(PreferenceSummarySchema.unwrap()).max(8).optional(),
 }).refine(
   (data) => Boolean(data.message?.trim()) || Boolean(data.optionId?.trim()),
   { message: 'Either message or optionId is required' }
@@ -139,20 +157,9 @@ function sendSessionUpdated(
 export async function POST(request: Request) {
   await configureCloudflareAgentSessionStore();
 
-  // 这是整个应用最贵的入口：一次请求会跑完整个 agent loop，用的是部署者自己的
-  // OPENAI_API_KEY。两道闸门——按 IP 挡普通滥用，按常量 key 的总量闸门挡轮换
-  // IP 的脚本，后者才是真正给账单封顶的那道。
-  const ip = getClientIP(request);
-  const [perIp, global] = await Promise.all([
-    checkRateLimit('agentChatPerIp', ip),
-    checkRateLimit('agentChatGlobal', 'all'),
-  ]);
-
-  const rejected = !perIp.success ? perIp : (!global.success ? global : null);
-  if (rejected) {
-    return jsonResponse({ error: '请求过于频繁，请稍后再试' }, 429, {
-      'Retry-After': String(rejected.retryAfterSeconds),
-    });
+  const contentLength = Number.parseInt(request.headers.get('content-length') ?? '', 10);
+  if (Number.isFinite(contentLength) && contentLength > MAX_AGENT_REQUEST_BYTES) {
+    return jsonResponse({ error: 'Request body too large' }, 413);
   }
 
   let requestData: z.infer<typeof AgentChatRequestSchema>;
@@ -173,6 +180,104 @@ export async function POST(request: Request) {
     return jsonResponse({ error: 'Invalid JSON body' }, 400);
   }
 
+  // IP 限流只做廉价反滥用；真正的账单保护由下面的跨实例 active-run/provider lease 提供。
+  const ip = getClientIP(request);
+  const [perIp, global] = await Promise.all([
+    checkRateLimit('agentChatPerIp', ip),
+    checkRateLimit('agentChatGlobal', 'all'),
+  ]);
+  const rejected = !perIp.success ? perIp : (!global.success ? global : null);
+  if (rejected) {
+    return jsonResponse({ error: '请求过于频繁，请稍后再试' }, 429, {
+      'Retry-After': String(rejected.retryAfterSeconds),
+    });
+  }
+
+  let ownerContext: Awaited<ReturnType<typeof getSessionOwner>>;
+  try {
+    ownerContext = await getSessionOwner(request);
+  } catch (error) {
+    if (error instanceof SessionOwnerConfigurationError) {
+      return jsonResponse({ error: '服务配置不完整' }, 503, { 'Retry-After': '30' });
+    }
+    throw error;
+  }
+
+  let session: AgentSession;
+  let activeRunLease: ProviderLease | undefined;
+  let sessionLease: ProviderLease | undefined;
+  let createdSessionId: string | undefined;
+  const requestSignal = request.signal;
+
+  try {
+    const resumableSession = requestData.sessionId
+      ? await getAgentSessionAsync(requestData.sessionId)
+      : null;
+
+    if (requestData.sessionId && (!resumableSession
+      || !sessionBelongsToOwner(resumableSession.ownerId, ownerContext.ownerId))) {
+      logger.warn('Agent session is missing or belongs to another owner');
+      return sessionExpiredResponse(ownerContext.setCookie);
+    }
+
+    if (resumableSession) {
+      claimLegacySessionOwner(resumableSession, ownerContext.ownerId);
+      session = resumableSession;
+      sessionLease = await acquireProviderLease(
+        providerSchedulerName('session', session.id),
+        getProviderSchedulerConfig('session'),
+        { signal: requestSignal }
+      );
+      activeRunLease = await acquireProviderLease(
+        providerSchedulerName('active-runs'),
+        getProviderSchedulerConfig('active-runs'),
+        { signal: requestSignal }
+      );
+    } else {
+      activeRunLease = await acquireProviderLease(
+        providerSchedulerName('active-runs'),
+        getProviderSchedulerConfig('active-runs'),
+        { signal: requestSignal }
+      );
+      session = await createAgentSessionAsync(
+        requestData.message ?? '',
+        requestData.location,
+        ownerContext.ownerId
+      );
+      createdSessionId = session.id;
+      sessionLease = await acquireProviderLease(
+        providerSchedulerName('session', session.id),
+        getProviderSchedulerConfig('session'),
+        { signal: requestSignal }
+      );
+    }
+
+  } catch (error) {
+    await Promise.allSettled([
+      activeRunLease?.release(),
+      sessionLease?.release(),
+      createdSessionId ? deleteAgentSessionAsync(createdSessionId) : Promise.resolve(),
+    ]);
+    return admissionErrorResponse(error, ownerContext.setCookie);
+  }
+
+  const runAbortController = new AbortController();
+  const abortFromRequest = (): void => runAbortController.abort(requestSignal?.reason);
+  if (requestSignal?.aborted) {
+    abortFromRequest();
+  } else {
+    requestSignal?.addEventListener('abort', abortFromRequest, { once: true });
+  }
+  const signal = runAbortController.signal;
+  let streamCancelled = false;
+  let admissionLeaseLost = false;
+  const abortForLostLease = (): void => {
+    admissionLeaseLost = true;
+    runAbortController.abort();
+  };
+  activeRunLease.startAutoRenew(abortForLostLease);
+  sessionLease.startAutoRenew(abortForLostLease);
+
   const stream = new ReadableStream({
     async start(controller) {
       let heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
@@ -191,41 +296,10 @@ export async function POST(request: Request) {
         }
       }
 
-      let activeSession: AgentSession | undefined;
+      const activeSession: AgentSession = session;
 
       try {
-        const resumableSession = requestData.sessionId
-          ? await getAgentSessionAsync(requestData.sessionId)
-          : null;
-
-        if (requestData.sessionId && !resumableSession) {
-          sendEvent(controller, {
-            type: 'error',
-            message: '会话已过期，请重新发起搜索',
-            code: 'SESSION_EXPIRED',
-            recoverable: false,
-          });
-          stopHeartbeat();
-          controller.close();
-          return;
-        }
-
-        const shouldResumeSession = Boolean(resumableSession);
-        let session = shouldResumeSession && resumableSession
-          ? resumableSession
-          : await createAgentSessionAsync(requestData.message ?? '', requestData.location);
-
-        if (!session) {
-          sendEvent(controller, {
-            type: 'error',
-            message: '会话已过期，请重新发起搜索',
-            code: 'SESSION_EXPIRED',
-            recoverable: false,
-          });
-          stopHeartbeat();
-          controller.close();
-          return;
-        }
+        const shouldResumeSession = Boolean(requestData.sessionId);
 
         // 会话消息记录用选项的展示文案，保证 messages 对人可读；
         // 但传给 Agent 的是 optionId，语义判断绝不依赖这段文案。
@@ -242,11 +316,11 @@ export async function POST(request: Request) {
           });
         }
 
-        activeSession = session;
         const previousLocation = session.location;
         session.location = requestData.location;
 
         const input: AgentInput = {
+          signal,
           query: requestData.message ?? '',
           optionId: requestData.optionId,
           location: requestData.location,
@@ -272,7 +346,7 @@ export async function POST(request: Request) {
 
         logger.info('Agent chat search started', {
           sessionId: session.id,
-          query: input.query,
+          queryLength: input.query.length,
           location: input.location,
         });
 
@@ -287,18 +361,52 @@ export async function POST(request: Request) {
                 plan.radiusMeters,
                 plan.poiType,
                 AGENT_POI_PAGES_PER_SEARCH,
-                { preferProvidedPoiType: Boolean(plan.poiType) && plan.keywords.length === 1 }
+                {
+                  preferProvidedPoiType: Boolean(plan.poiType) && plan.keywords.length === 1,
+                  signal,
+                }
               );
-              return enrichRestaurantsWithAmapDetails(restaurants, AGENT_DETAIL_ENRICH_LIMIT);
+              return enrichRestaurantsWithAmapDetails(restaurants, AGENT_DETAIL_ENRICH_LIMIT, signal);
             } catch (error) {
+              if (error instanceof Error && error.name === 'AbortError') {
+                throw error;
+              }
+              if (error instanceof AmapProviderError && error.category !== 'unavailable') {
+                throw new AgentError(
+                  error.message,
+                  error.category === 'rate_limited'
+                    ? 'RATE_LIMITED'
+                    : error.category === 'configuration' ? 'CONFIG_MISSING' : 'SEARCH_PROVIDER_FAILED',
+                  error.retryable,
+                  { cause: error }
+                );
+              }
+              if (error instanceof ProviderSchedulerError) {
+                const blockedByConfiguration = error.providerCategory === 'configuration';
+                const blockedByQuota = error.providerCategory === 'quota_exhausted';
+                throw new AgentError(
+                  error.message,
+                  blockedByConfiguration
+                    ? 'CONFIG_MISSING'
+                    : blockedByQuota ? 'SEARCH_PROVIDER_FAILED'
+                    : error.kind === 'busy' || error.kind === 'blocked'
+                    ? 'RATE_LIMITED'
+                    : 'SEARCH_PROVIDER_FAILED',
+                  !blockedByConfiguration && !blockedByQuota && error.kind !== 'configuration',
+                  { cause: error }
+                );
+              }
               logger.warn('Amap Agent search failed, falling back to OSM', {
                 error: error instanceof Error ? error.message : String(error),
                 plan,
               });
 
               try {
-                return await osmSearch(plan.keywords, input.location, plan.radiusMeters);
+                return await osmSearch(plan.keywords, input.location, plan.radiusMeters, signal);
               } catch (fallbackError) {
+                if (fallbackError instanceof Error && fallbackError.name === 'AbortError') {
+                  throw fallbackError;
+                }
                 // 两个数据源都挂了才走到这里，在抛出点定错误码，
                 // 而不是让下游对 message 做子串匹配。
                 throw new AgentError(
@@ -335,15 +443,23 @@ export async function POST(request: Request) {
         stopHeartbeat();
         controller.close();
       } catch (error) {
+        if (streamCancelled || requestSignal.aborted) {
+          logger.info('Agent chat stream cancelled', { sessionId: activeSession.id });
+          return;
+        }
         // 失败的 turn 也要留痕：AgentRunError 携带失败前的运行状态，
         // 先落库再报错，否则最需要 trace 的这一轮什么都查不到。
-        const code: AgentErrorCode = error instanceof AgentRunError
-          ? error.code
-          : error instanceof AgentError ? error.code : 'UNKNOWN';
-        const message = error instanceof Error ? error.message : 'Agent 对话搜索失败';
+        const code: AgentErrorCode = admissionLeaseLost
+          ? 'RATE_LIMITED'
+          : error instanceof AgentRunError
+            ? error.code
+            : error instanceof AgentError ? error.code : 'UNKNOWN';
+        const message = admissionLeaseLost
+          ? '请求运行租约已失效，请重试'
+          : error instanceof Error ? error.message : 'Agent 对话搜索失败';
         // 可恢复性由抛出点决定：配额耗尽这类错误重试 100% 失败，
         // 前端据此不展示重试入口。
-        const recoverable = resolveRecoverable(error, code);
+        const recoverable = admissionLeaseLost || resolveRecoverable(error, code);
 
         logger.error('Agent chat stream error', {
           sessionId: activeSession?.id,
@@ -370,7 +486,20 @@ export async function POST(request: Request) {
         });
         stopHeartbeat();
         controller.close();
+      } finally {
+        stopHeartbeat();
+        requestSignal?.removeEventListener('abort', abortFromRequest);
+        activeRunLease?.stopAutoRenew();
+        sessionLease?.stopAutoRenew();
+        await Promise.allSettled([
+          activeRunLease?.release(),
+          sessionLease?.release(),
+        ]);
       }
+    },
+    cancel() {
+      streamCancelled = true;
+      runAbortController.abort();
     },
   });
 
@@ -379,6 +508,7 @@ export async function POST(request: Request) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
+      ...(ownerContext.setCookie ? { 'Set-Cookie': ownerContext.setCookie } : {}),
     },
   });
 }
@@ -395,6 +525,58 @@ function jsonResponse(
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'Content-Type': 'application/json', ...extraHeaders },
+  });
+}
+
+function admissionErrorResponse(error: unknown, setCookie?: string): Response {
+  const cookieHeader: Record<string, string> = {};
+  if (setCookie) {
+    cookieHeader['Set-Cookie'] = setCookie;
+  }
+  if (error instanceof ProviderSchedulerError) {
+    const status = error.kind === 'busy' || error.kind === 'blocked' ? 429 : 503;
+    logger.warn('Agent admission rejected by provider scheduler', {
+      kind: error.kind,
+      providerCategory: error.providerCategory,
+      retryAfterMs: error.retryAfterMs,
+    });
+    return jsonResponse(
+      { error: status === 429 ? '当前请求较多，请稍后重试' : '服务暂时不可用' },
+      status,
+      {
+        'Retry-After': String(Math.max(1, Math.ceil(error.retryAfterMs / 1000))),
+        ...cookieHeader,
+      }
+    );
+  }
+
+  if (error instanceof Error && error.name === 'AbortError') {
+    return jsonResponse({ error: 'Request aborted' }, 499, cookieHeader);
+  }
+
+  logger.error('Agent admission failed', {
+    error: error instanceof Error ? error.message : String(error),
+  });
+  return jsonResponse(
+    { error: '服务暂时不可用' },
+    503,
+    { 'Retry-After': '30', ...cookieHeader }
+  );
+}
+
+function sessionExpiredResponse(setCookie?: string): Response {
+  const event = {
+    type: 'error',
+    message: '会话已过期，请重新发起搜索',
+    code: 'SESSION_EXPIRED',
+    recoverable: false,
+  };
+  return new Response(`data: ${JSON.stringify(event)}\n\n`, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      ...(setCookie ? { 'Set-Cookie': setCookie } : {}),
+    },
   });
 }
 

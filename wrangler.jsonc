@@ -1,7 +1,7 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "chisha",
-	"main": ".open-next/worker.js",
+	"main": "worker.ts",
 	"compatibility_date": "2024-12-01",
 	"compatibility_flags": [
 		"nodejs_compat"
@@ -12,6 +12,7 @@
 			"AMAP_API_KEY",
 			"AMAP_JS_API_KEY",
 			"AMAP_SECURITY_CODE",
+			"SESSION_OWNER_SECRET",
 			"OPENAI_API_KEY",
 			"OPENAI_BASE_URL",
 			"OPENAI_MODEL"
@@ -51,6 +52,25 @@
 			"name": "RL_GEOCODE",
 			"namespace_id": "1004",
 			"simple": { "limit": 3, "period": 60 }
+		},
+		{
+			"name": "RL_AGENT_SESSION",
+			"namespace_id": "1005",
+			"simple": { "limit": 60, "period": 60 }
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "PROVIDER_SCHEDULER",
+				"class_name": "ProviderSchedulerDurableObject"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ProviderSchedulerDurableObject"]
 		}
 	],
 	// Fork 之后必须换成你自己账号下的 database_id，下面这个你访问不了：

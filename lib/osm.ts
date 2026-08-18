@@ -9,6 +9,11 @@ import { logger } from './logger';
 import { fetchWithTimeout } from './withTimeout';
 import { haversineDistance } from './distance';
 import { ErrorCode } from './apiResponse';
+import {
+  getProviderSchedulerConfig,
+  providerSchedulerName,
+  runWithProviderLease,
+} from './providerScheduler';
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const OSM_TIMEOUT = 15000; // 15 秒超时
@@ -87,7 +92,8 @@ function buildOverpassQuery(
 export async function osmSearch(
   keywords: string[],
   location: Location,
-  distance: number = 2000
+  distance: number = 2000,
+  signal?: AbortSignal
 ): Promise<Restaurant[]> {
   const query = buildOverpassQuery(keywords, location, distance);
 
@@ -98,26 +104,32 @@ export async function osmSearch(
   });
 
   try {
-    const response = await fetchWithTimeout(
-      OVERPASS_URL,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: `data=${encodeURIComponent(query)}`,
+    const data = await runWithProviderLease(
+      providerSchedulerName('osm'),
+      getProviderSchedulerConfig('osm'),
+      async (_lease, leaseSignal) => {
+        const response = await fetchWithTimeout(
+          OVERPASS_URL,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `data=${encodeURIComponent(query)}`,
+            signal: leaseSignal,
+          },
+          OSM_TIMEOUT
+        );
+        if (!response.ok) {
+          throw new ApiError(
+            ErrorCode.SEARCH_API_ERROR,
+            `OSM API error: ${response.status}`
+          );
+        }
+        return response.json() as Promise<OverpassResponse>;
       },
-      OSM_TIMEOUT
+      { signal }
     );
-
-    if (!response.ok) {
-      throw new ApiError(
-        ErrorCode.SEARCH_API_ERROR,
-        `OSM API error: ${response.status}`
-      );
-    }
-
-    const data: OverpassResponse = await response.json();
 
     if (!data.elements || data.elements.length === 0) {
       logger.info('OSM search returned no results');
@@ -223,7 +235,7 @@ function transformOsmElement(
  * 使用 OSM Nominatim 反向地理编码：坐标转地址
  * 作为高德地图的降级方案
  */
-export async function osmReverseGeocode(location: Location): Promise<{
+export async function osmReverseGeocode(location: Location, signal?: AbortSignal): Promise<{
   address: string;
   formattedAddress?: string;
   province?: string;
@@ -245,20 +257,26 @@ export async function osmReverseGeocode(location: Location): Promise<{
   logger.info('Calling OSM Nominatim reverse geocode', { location, url });
 
   try {
-    const response = await fetchWithTimeout(url, {
-      headers: {
-        'User-Agent': 'Chisha-Restaurant-App/1.0',
+    const data = await runWithProviderLease(
+      providerSchedulerName('osm'),
+      getProviderSchedulerConfig('osm'),
+      async (_lease, leaseSignal) => {
+        const response = await fetchWithTimeout(url, {
+          headers: {
+            'User-Agent': 'Chisha-Restaurant-App/1.0',
+          },
+          signal: leaseSignal,
+        }, OSM_TIMEOUT);
+        if (!response.ok) {
+          throw new ApiError(
+            ErrorCode.GEOCODE_ERROR,
+            `Nominatim API error: ${response.status}`
+          );
+        }
+        return response.json();
       },
-    }, OSM_TIMEOUT);
-
-    if (!response.ok) {
-      throw new ApiError(
-        ErrorCode.GEOCODE_ERROR,
-        `Nominatim API error: ${response.status}`
-      );
-    }
-
-    const data = await response.json();
+      { signal }
+    );
 
     logger.info('OSM Nominatim response received', {
       hasDisplayName: !!data.display_name,

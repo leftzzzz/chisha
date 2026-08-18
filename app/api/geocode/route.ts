@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     logger.info('Processing geocode request', { address, city });
 
     // 调用高德地图地理编码
-    const location = await amapGeocode(address, city);
+    const location = await amapGeocode(address, city, request.signal);
 
     const response: GeocodeResponse = { location };
 

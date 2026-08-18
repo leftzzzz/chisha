@@ -40,6 +40,7 @@ const GOAL_UNDERSTANDING_MAX_TOKENS = STRUCTURED_MODEL_MAX_TOKENS;
 const GOAL_UNDERSTANDING_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
 
 export interface GoalUnderstandingInput {
+  signal?: AbortSignal;
   message: string;
   metricsSink?: MetricsSink;
   previousGoal?: UserGoal;
@@ -247,6 +248,7 @@ async function callGoalUnderstandingModel(
     maxTokens,
     retryMaxTokens: GOAL_UNDERSTANDING_RETRY_MAX_TOKENS,
     timeoutMs: GOAL_UNDERSTANDING_TIMEOUT,
+    signal: input.signal,
   }) as Promise<GoalUnderstandingOutput>;
 }
 

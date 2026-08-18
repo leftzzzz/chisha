@@ -90,6 +90,8 @@ async function readSseEvents(response: Response): Promise<Array<{ type: string; 
 function jsonRequest(body: unknown): Request {
   return {
     json: async () => body,
+    headers: new Headers(),
+    signal: new AbortController().signal,
   } as Request;
 }
 
@@ -122,6 +124,7 @@ class TestResponse {
 
 describe('/api/agent/chat', () => {
   const originalNodeEnv = process.env.NODE_ENV;
+  const originalProviderMaxWaitMs = process.env.PROVIDER_MAX_WAIT_MS;
   const originalReadableStream = globalThis.ReadableStream;
   const originalResponse = globalThis.Response;
   const originalTextEncoder = globalThis.TextEncoder;
@@ -141,7 +144,60 @@ describe('/api/agent/chat', () => {
     globalThis.Response = originalResponse;
     globalThis.TextEncoder = originalTextEncoder;
     globalThis.TextDecoder = originalTextDecoder;
+    if (originalProviderMaxWaitMs === undefined) delete process.env.PROVIDER_MAX_WAIT_MS;
+    else process.env.PROVIDER_MAX_WAIT_MS = originalProviderMaxWaitMs;
     jest.clearAllMocks();
+  });
+
+  it('rejects unbounded preference fanout before starting the Agent', async () => {
+    const response = await POST(jsonRequest({
+      message: '想吃日料',
+      location,
+      groupPreferenceSummaries: Array.from({ length: 9 }, () => ({
+        favoriteCuisines: [{ name: '日料', weight: 1 }],
+      })),
+    }));
+
+    expect((response as unknown as TestResponse).init?.status).toBe(400);
+    expect(runSearchAgentV3).not.toHaveBeenCalled();
+  });
+
+  it('rejects a concurrent turn for the same session before entering the Agent', async () => {
+    process.env.PROVIDER_MAX_WAIT_MS = '0';
+    const session = createAgentSession('想吃日料', location);
+    let finishFirst!: (value: {
+      restaurants: never[];
+      candidates: never[];
+      explanation: string;
+      unmetConstraints: never[];
+      runtimeState: undefined;
+    }) => void;
+    (runSearchAgentV3 as jest.Mock).mockImplementationOnce(() => new Promise((resolve) => {
+      finishFirst = resolve;
+    }));
+
+    const first = await POST(jsonRequest({
+      message: '继续找日料',
+      location,
+      sessionId: session.id,
+    }));
+    const second = await POST(jsonRequest({
+      message: '同时再找火锅',
+      location,
+      sessionId: session.id,
+    }));
+
+    expect((second as unknown as TestResponse).init?.status).toBe(429);
+    expect(runSearchAgentV3).toHaveBeenCalledTimes(1);
+
+    finishFirst({
+      restaurants: [],
+      candidates: [],
+      explanation: '测试结果',
+      unmetConstraints: [],
+      runtimeState: undefined,
+    });
+    await readSseEvents(first);
   });
 
   it('resumes a valid completed session id as a follow-up conversation', async () => {

@@ -46,7 +46,19 @@ export async function fetchWithTimeout(
   timeoutMs: number = 10000
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const callerSignal = options?.signal;
+  const abortFromCaller = (): void => controller.abort(callerSignal?.reason);
+
+  if (callerSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
 
   try {
     const response = await fetch(url, {
@@ -57,9 +69,18 @@ export async function fetchWithTimeout(
     return response;
   } catch (error) {
     clearTimeout(timeoutId);
+    callerSignal?.removeEventListener('abort', abortFromCaller);
+    if (!timedOut && callerSignal?.aborted) {
+      const aborted = new Error('Request aborted');
+      aborted.name = 'AbortError';
+      throw aborted;
+    }
     if (error instanceof Error && error.name === 'AbortError') {
       throw new TimeoutError(`Request timed out after ${timeoutMs}ms`);
     }
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    callerSignal?.removeEventListener('abort', abortFromCaller);
   }
 }

@@ -868,8 +868,11 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 | `AMAP_API_KEY` | 是 | 高德 Web 服务 API Key | - |
 | `NEXT_PUBLIC_AMAP_KEY` | 否 | 前端地图 JS API Key；只用于浏览器加载高德 JS API，不要使用服务端 `AMAP_API_KEY` 代替 | - |
 | `AMAP_SECURITY_CODE` | 否 | 高德安全码或签名密钥 | - |
-| `AMAP_MAX_QPS` | 否 | 高德 Web 服务每实例最高请求速率 | `4` |
+| `AMAP_SAFE_QPS` | 生产建议显式配置 | 高德 Web 服务跨 Worker 安全起始速率；取控制台账号/服务/Key 最小 QPS 的 70% | `4` |
+| `AMAP_MAX_QPS` | 否 | 旧部署兼容项，仅在未设置 `AMAP_SAFE_QPS` 时读取 | `4` |
+| `AMAP_MAX_INFLIGHT` | 否 | 高德跨 Worker 最大在途请求数 | `6` |
 | `AMAP_MAX_RETRIES` | 否 | 高德 QPS/网络错误重试次数 | `2` |
+| `AMAP_DETAIL_CONCURRENCY` | 否 | 单次 Agent 运行的高德详情补全并发 | `2` |
 | `AMAP_SEARCH_CACHE_TTL_MS` | 否 | POI 搜索页缓存时间 | `120000` |
 | `AMAP_DETAIL_CACHE_TTL_MS` | 否 | POI 详情缓存时间 | `86400000` |
 | `AMAP_GEOCODE_CACHE_TTL_MS` | 否 | 地理编码缓存时间 | `3600000` |
@@ -882,6 +885,7 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 | `AGENT_DETAIL_ENRICH_LIMIT` | 否 | 每次详情补全数量 | `6` |
 | `AGENT_PARALLEL_SEARCH` | 否 | 设为 `false` 关闭一轮内并行搜索（每批只跑 1 个计划） | 开启 |
 | `AGENT_SEARCH_CONCURRENCY` | 否 | 一批最多铺开几个搜索计划 | `3` |
+| `AGENT_MAX_ACTIVE_RUNS` | 否 | 全站同时执行的 Agent turn 上限 | `3` |
 | `AGENT_CONCURRENT_FIRST_SEARCH` | 否 | 设为 `false` 关闭"首搜与联想词并发" | 开启 |
 | `AGENT_HEARTBEAT_MS` | 否 | SSE 心跳间隔；改动需同步 `lib/api.ts` 的超时阈值 | `10000` |
 | `AGENT_DETERMINISTIC` | 否 | 设为 `1` 强制走确定性分支（测试默认开启） | - |
@@ -889,9 +893,18 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 | `OPENAI_MODEL_PLANNER` | 否 | replan 模型 | 继承 `OPENAI_MODEL` |
 | `OPENAI_MODEL_EVALUATION` | 否 | 候选验证模型，调用量最大，可配便宜模型 | 继承 `OPENAI_MODEL` |
 | `OPENAI_MODEL_KEYWORD` | 否 | 关键词联想模型 | 继承 `OPENAI_MODEL` |
+| `MODEL_MAX_INFLIGHT` | 否 | 同一模型端点与模型的跨 Worker 在途上限 | `4` |
+| `MODEL_RPM_LIMIT` | 否 | 模型 RPM；未知时为 0，仅关闭该速率维度 | `0` |
+| `MODEL_TPM_LIMIT` | 否 | 模型 TPM；发送前按估算 token 预留 | `0` |
+| `OSM_SAFE_QPS` | 否 | OSM fallback 的跨 Worker 安全速率 | `1` |
+| `OSM_MAX_INFLIGHT` | 否 | OSM fallback 最大在途请求数 | `1` |
+| `PROVIDER_MAX_WAIT_MS` | 否 | Provider/运行名额的调用方短等待预算，范围 0–5000ms | `3000` |
+| `PROVIDER_LEASE_TTL_MS` | 否 | 调度 lease TTL；长请求会自动续租 | `120000` |
+| `SESSION_OWNER_SECRET` | 生产必需 | 至少 32 字符的高熵 HMAC 密钥，可用 `openssl rand -base64 48` 生成 | - |
 | `NEXT_PUBLIC_APP_URL` | 否 | 应用 URL | `http://localhost:3000` |
 | `LOG_LEVEL` | 否 | 日志级别 | `info` |
 | `CHISHA_DB` | 生产必需 | Cloudflare D1 binding，用于持久化 session | - |
+| `PROVIDER_SCHEDULER` | 生产必需 | Cloudflare Durable Object binding，用于跨实例容量和会话互斥 | - |
 
 ## 测试建议
 
@@ -967,6 +980,10 @@ npm run build
 npm run build:cloudflare
 npm run deploy
 ```
+
+首次引入或新增 Durable Object migration 时必须使用非版本化的 `npm run deploy`；
+Cloudflare Version upload/PR 预览不能应用这类 migration。D1 migration 也由该项目命令
+显式执行，直接运行 `npx wrangler deploy` 不具备同等行为。
 
 生产环境如果使用 Cloudflare，需要配置 D1 binding：`CHISHA_DB`。如果缺少 D1 binding，代码会回退到内存 session store，不适合生产长期运行。
 

@@ -4,13 +4,7 @@ const { spawnSync } = require('node:child_process');
 const { existsSync, readdirSync, statSync } = require('node:fs');
 const { join } = require('node:path');
 
-const wranglerCommand = process.env.WRANGLER_COMMAND || '';
-const shouldRunRemoteMigrations = /^(deploy|versions upload)\b/.test(wranglerCommand);
 const isBuildDryRun = process.env.WRANGLER_BUILD_DRY_RUN === '1';
-const isWranglerDryRun = /\s--dry-run\b/.test(` ${wranglerCommand}`);
-const shouldSkipRemoteMigrations = process.env.SKIP_D1_MIGRATIONS === '1'
-  || isBuildDryRun
-  || isWranglerDryRun;
 const workerEntry = '.open-next/worker.js';
 const assetsDirectory = '.open-next/assets';
 const buildInputs = [
@@ -29,6 +23,7 @@ const buildInputs = [
   'tailwind.config.ts',
   'tsconfig.json',
   'wrangler.jsonc',
+  'worker.ts',
 ];
 
 function run(command, args) {
@@ -47,11 +42,10 @@ function run(command, args) {
   }
 }
 
-if (shouldRunRemoteMigrations && !shouldSkipRemoteMigrations) {
-  run('npx', ['wrangler', 'd1', 'migrations', 'apply', 'chisha', '--remote']);
-} else {
-  console.log(`[wrangler build] Skip remote D1 migrations for WRANGLER_COMMAND="${wranglerCommand}"`);
-}
+// Wrangler's custom-build environment does not preserve all CLI flags reliably. In
+// particular, `deploy --dry-run` used to look like `deploy` here and could mutate D1.
+// Remote migrations now run only in wrangler-deploy-with-migrations.js, before deploy.
+console.log('[wrangler build] Build only; remote D1 migrations are handled by the deploy wrapper');
 
 if (isBuildDryRun) {
   console.log('[wrangler build] Dry run complete');

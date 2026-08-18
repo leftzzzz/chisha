@@ -23,6 +23,7 @@ describe('amapPoiSearch', () => {
   const originalAmapKey = process.env.AMAP_API_KEY;
   const originalAmapMaxQps = process.env.AMAP_MAX_QPS;
   const originalAmapMaxRetries = process.env.AMAP_MAX_RETRIES;
+  const originalProviderMaxWaitMs = process.env.PROVIDER_MAX_WAIT_MS;
 
   afterEach(() => {
     jest.resetModules();
@@ -41,6 +42,11 @@ describe('amapPoiSearch', () => {
       delete process.env.AMAP_MAX_RETRIES;
     } else {
       process.env.AMAP_MAX_RETRIES = originalAmapMaxRetries;
+    }
+    if (originalProviderMaxWaitMs === undefined) {
+      delete process.env.PROVIDER_MAX_WAIT_MS;
+    } else {
+      process.env.PROVIDER_MAX_WAIT_MS = originalProviderMaxWaitMs;
     }
   });
 
@@ -187,8 +193,8 @@ describe('amapPoiSearch', () => {
         json: async () => ({
           status: '0',
           count: '0',
-          info: 'QPS超过限制',
-          infocode: '10020',
+          info: 'ACCESS_TOO_FREQUENT',
+          infocode: '10004',
           pois: [],
         }),
       })
@@ -210,5 +216,92 @@ describe('amapPoiSearch', () => {
 
     expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
     expect(restaurants.map((restaurant) => restaurant.id)).toEqual(['amap_retried']);
+  });
+
+  it('retries an HTTP 429 response instead of treating it as a configuration failure', async () => {
+    process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
+    process.env.AMAP_MAX_RETRIES = '1';
+    const fetchWithTimeout = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 429 })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          status: '1',
+          count: '1',
+          info: 'OK',
+          infocode: '10000',
+          pois: [amapPoi({ id: 'http-429-retried' })],
+        }),
+      });
+
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    const { amapPoiSearch } = await import('@/lib/amap');
+    const restaurants = await amapPoiSearch(['川菜'], location, 1800, undefined, 1);
+
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
+    expect(restaurants.map((restaurant) => restaurant.id)).toEqual(['amap_http-429-retried']);
+  });
+
+  it('does not retry exhausted quota and short-circuits subsequent requests', async () => {
+    process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
+    process.env.AMAP_MAX_RETRIES = '2';
+    process.env.PROVIDER_MAX_WAIT_MS = '0';
+    const fetchWithTimeout = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        status: '0',
+        count: '0',
+        info: 'DAILY_QUERY_OVER_LIMIT',
+        infocode: '10003',
+        pois: [],
+      }),
+    }));
+
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    const { amapPoiSearch, AmapProviderError } = await import('@/lib/amap');
+    const { ProviderSchedulerError } = await import('@/lib/providerScheduler');
+    const first = await amapPoiSearch(['川菜'], location, 1800, undefined, 1)
+      .catch((error) => error);
+    const second = await amapPoiSearch(['粤菜'], location, 1800, undefined, 1)
+      .catch((error) => error);
+
+    expect(first).toBeInstanceOf(AmapProviderError);
+    expect(first.category).toBe('quota_exhausted');
+    expect(second).toBeInstanceOf(ProviderSchedulerError);
+    expect(second.providerCategory).toBe('quota_exhausted');
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies account-level daily usage exhaustion as quota instead of QPS', async () => {
+    process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
+    process.env.AMAP_MAX_RETRIES = '2';
+    const fetchWithTimeout = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: '0',
+        count: '0',
+        info: 'USER_DAILY_QUERY_OVER_LIMIT',
+        infocode: '10044',
+        pois: [],
+      }),
+    }));
+
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    const { amapPoiSearch, AmapProviderError } = await import('@/lib/amap');
+    const result = await amapPoiSearch(['川菜'], location, 1800, undefined, 1)
+      .catch((error) => error);
+
+    expect(result).toBeInstanceOf(AmapProviderError);
+    expect(result.category).toBe('quota_exhausted');
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
   });
 });
