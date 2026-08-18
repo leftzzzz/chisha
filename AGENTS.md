@@ -13,11 +13,14 @@ ChiSha (今天吃啥) is a Next.js 16 restaurant recommendation app with AI-powe
 | Need | Read or search first |
 | --- | --- |
 | Current behavior, constraints, rules, or boundaries | [`docs/specs/AGENTS.md`](docs/specs/AGENTS.md) |
+| Common task execution and engineering rules | [`docs/specs/general-engineering-task-rules.md`](docs/specs/general-engineering-task-rules.md) |
 | Product intent, user needs, or acceptance criteria | [`docs/requirements/AGENTS.md`](docs/requirements/AGENTS.md) |
 | Architecture, implementation approach, or technical rationale | [`docs/technical/AGENTS.md`](docs/technical/AGENTS.md) |
 
 - Read or search [`docs/specs/AGENTS.md`](docs/specs/AGENTS.md) for current behavior, constraints,
   rules, and boundaries before changing code.
+- Read [`docs/specs/general-engineering-task-rules.md`](docs/specs/general-engineering-task-rules.md)
+  for every code, configuration, script, or review task.
 - Read or search [`docs/requirements/AGENTS.md`](docs/requirements/AGENTS.md) for product intent,
   user needs, and acceptance criteria.
 - Read or search [`docs/technical/AGENTS.md`](docs/technical/AGENTS.md) for architecture,

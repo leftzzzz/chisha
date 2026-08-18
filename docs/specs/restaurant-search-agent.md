@@ -6,7 +6,9 @@
 完整的架构理由和迁移方案见
 [`../technical/agent-architecture-root-decision-2026-08.md`](../technical/agent-architecture-root-decision-2026-08.md)，
 产品目标和验收标准见
-[`../requirements/restaurant-search-agent.md`](../requirements/restaurant-search-agent.md)。
+[`../requirements/restaurant-search-agent.md`](../requirements/restaurant-search-agent.md)；
+跨功能的输入、转盘和历史规则见
+[`../requirements/chisha-product-rules.md`](../requirements/chisha-product-rules.md)。
 
 ## 当前实现边界
 

@@ -1,5 +1,11 @@
 # 产品需求文档（PRD）
 
+> **历史立项文档，仅作背景追溯。** 本文保留早期产品设想，不作为当前业务规则或实现依据。
+> 其中固定 8 家、OSM 优先、候补自动补位和固定模型等描述可能已过时；当前规则见
+> [`../requirements/chisha-product-rules.md`](../requirements/chisha-product-rules.md)、
+> [`../requirements/restaurant-search-agent.md`](../requirements/restaurant-search-agent.md)
+> 和 [`../requirements/final-recommendation-publication.md`](../requirements/final-recommendation-publication.md)。
+
 ## 项目名称
 **今天吃啥** - 智能餐饮推荐转盘
 
