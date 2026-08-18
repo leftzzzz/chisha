@@ -141,7 +141,6 @@ async function pauseSessionWithQuestion(
     traceId: questionTraceId,
     sessionId: session.id,
   });
-  controller.close();
 }
 
 function sendSessionUpdated(
@@ -277,6 +276,35 @@ export async function POST(request: Request) {
   };
   activeRunLease.startAutoRenew(abortForLostLease);
   sessionLease.startAutoRenew(abortForLostLease);
+
+  let admissionReleasePromise: Promise<void> | undefined;
+  const releaseAdmissionLeases = (): Promise<void> => {
+    if (!admissionReleasePromise) {
+      activeRunLease?.stopAutoRenew();
+      sessionLease?.stopAutoRenew();
+      const leases = [
+        ['active-runs', activeRunLease],
+        ['session', sessionLease],
+      ] as const;
+      admissionReleasePromise = Promise.allSettled(
+        leases.map(([, lease]) => lease?.release())
+      ).then((results) => {
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            logger.warn('Agent admission lease release failed; expiry will reclaim it', {
+              provider: leases[index][0],
+              error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+            });
+          }
+        });
+      });
+    }
+    return admissionReleasePromise;
+  };
+  let resolveAdmissionCleanup!: () => void;
+  const admissionCleanupDone = new Promise<void>((resolve) => {
+    resolveAdmissionCleanup = resolve;
+  });
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -441,7 +469,6 @@ export async function POST(request: Request) {
         await saveAgentSessionAsync(session);
         sendSessionUpdated(controller, session);
         stopHeartbeat();
-        controller.close();
       } catch (error) {
         if (streamCancelled || requestSignal.aborted) {
           logger.info('Agent chat stream cancelled', { sessionId: activeSession.id });
@@ -485,21 +512,26 @@ export async function POST(request: Request) {
           recoverable,
         });
         stopHeartbeat();
-        controller.close();
       } finally {
         stopHeartbeat();
         requestSignal?.removeEventListener('abort', abortFromRequest);
-        activeRunLease?.stopAutoRenew();
-        sessionLease?.stopAutoRenew();
-        await Promise.allSettled([
-          activeRunLease?.release(),
-          sessionLease?.release(),
-        ]);
+        // Closing the body can end the Worker request immediately. Release the
+        // cross-instance admission ownership before exposing end-of-stream.
+        await releaseAdmissionLeases();
+        resolveAdmissionCleanup();
+        if (!streamCancelled) {
+          try {
+            controller.close();
+          } catch {
+            // Cancellation can race with final cleanup.
+          }
+        }
       }
     },
     cancel() {
       streamCancelled = true;
       runAbortController.abort();
+      return admissionCleanupDone;
     },
   });
 

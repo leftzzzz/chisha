@@ -16,10 +16,19 @@ jest.mock('@/lib/agent/orchestrator/runtime', () => ({
   }),
 }));
 
+jest.mock('@/lib/providerScheduler', () => {
+  const actual = jest.requireActual('@/lib/providerScheduler');
+  return {
+    ...actual,
+    acquireProviderLease: jest.fn(actual.acquireProviderLease),
+  };
+});
+
 import { POST } from '@/app/api/agent/chat/route';
 import { createAgentSession, getAgentSession, saveAgentSession } from '@/lib/agent/session';
 import { AgentRunError } from '@/lib/agent/types';
 import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
+import * as providerScheduler from '@/lib/providerScheduler';
 import type { RestaurantCandidate, SearchAttempt, UserGoal } from '@/lib/agent/types';
 import type { Location } from '@/types';
 import { ReadableStream } from 'stream/web';
@@ -120,6 +129,12 @@ class TestResponse {
 
     return text + decoder.decode();
   }
+
+  async cancel(): Promise<void> {
+    if (typeof this.body !== 'string') {
+      await this.body.cancel();
+    }
+  }
 }
 
 describe('/api/agent/chat', () => {
@@ -146,6 +161,7 @@ describe('/api/agent/chat', () => {
     globalThis.TextDecoder = originalTextDecoder;
     if (originalProviderMaxWaitMs === undefined) delete process.env.PROVIDER_MAX_WAIT_MS;
     else process.env.PROVIDER_MAX_WAIT_MS = originalProviderMaxWaitMs;
+    jest.restoreAllMocks();
     jest.clearAllMocks();
   });
 
@@ -198,6 +214,93 @@ describe('/api/agent/chat', () => {
       runtimeState: undefined,
     });
     await readSseEvents(first);
+  });
+
+  it('releases admission leases before ending a successful SSE stream', async () => {
+    const releaseResolvers: Array<() => void> = [];
+    const leases = ['active-runs', 'session'].map((leaseId) => ({
+      leaseId,
+      probe: false,
+      release: jest.fn(() => new Promise<void>((resolve) => releaseResolvers.push(resolve))),
+      renew: jest.fn(async () => true),
+      startAutoRenew: jest.fn(),
+      stopAutoRenew: jest.fn(),
+    }));
+    (providerScheduler.acquireProviderLease as jest.Mock)
+      .mockResolvedValueOnce(leases[0])
+      .mockResolvedValueOnce(leases[1]);
+
+    const response = await POST(jsonRequest({
+      message: '想吃日料',
+      location,
+    }));
+    let bodyEnded = false;
+    const bodyPromise = (response as unknown as TestResponse).text().then((text) => {
+      bodyEnded = true;
+      return text;
+    });
+
+    for (let attempt = 0; attempt < 20 && releaseResolvers.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(releaseResolvers).toHaveLength(2);
+    expect(bodyEnded).toBe(false);
+    releaseResolvers.forEach((resolve) => resolve());
+
+    await expect(bodyPromise).resolves.toContain('"type":"session_updated"');
+    expect(bodyEnded).toBe(true);
+  });
+
+  it('waits for an aborted run to unwind before releasing admission leases', async () => {
+    let runtimeSettled = false;
+    (runSearchAgentV3 as jest.Mock).mockImplementationOnce((input: { signal: AbortSignal }) => (
+      new Promise((_resolve, reject) => {
+        input.signal.addEventListener('abort', () => {
+          queueMicrotask(() => {
+            runtimeSettled = true;
+            const error = new Error('aborted');
+            error.name = 'AbortError';
+            reject(error);
+          });
+        }, { once: true });
+      })
+    ));
+    const releaseOrder: boolean[] = [];
+    const releaseResolvers: Array<() => void> = [];
+    const leases = ['active-runs', 'session'].map((leaseId) => ({
+      leaseId,
+      probe: false,
+      release: jest.fn(() => {
+        releaseOrder.push(runtimeSettled);
+        return new Promise<void>((resolve) => releaseResolvers.push(resolve));
+      }),
+      renew: jest.fn(async () => true),
+      startAutoRenew: jest.fn(),
+      stopAutoRenew: jest.fn(),
+    }));
+    (providerScheduler.acquireProviderLease as jest.Mock)
+      .mockResolvedValueOnce(leases[0])
+      .mockResolvedValueOnce(leases[1]);
+
+    const response = await POST(jsonRequest({
+      message: '想吃日料',
+      location,
+    }));
+    let cancelEnded = false;
+    const cancelPromise = (response as unknown as TestResponse).cancel().then(() => {
+      cancelEnded = true;
+    });
+
+    for (let attempt = 0; attempt < 20 && releaseResolvers.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(releaseOrder).toEqual([true, true]);
+    expect(cancelEnded).toBe(false);
+    releaseResolvers.forEach((resolve) => resolve());
+    await cancelPromise;
+    expect(cancelEnded).toBe(true);
   });
 
   it('resumes a valid completed session id as a follow-up conversation', async () => {
