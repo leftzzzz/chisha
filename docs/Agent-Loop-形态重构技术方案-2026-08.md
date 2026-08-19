@@ -1,8 +1,8 @@
 # Agent Loop 形态重构技术方案（2026-08）
 
-> **历史实施方案，目标边界已被取代。** 本文记录的确定性 policy 主控方案仍可用于
-> 理解当前实现，但不再指导新增 Agent 行为。当前生效决策见
-> `docs/technical/agent-architecture-root-decision-2026-08.md`。
+> **历史实施方案，仅作演进记录。** 本文记录了当前确定性 policy 主控 workflow 的形成
+> 过程；新增行为以当前 Spec 和架构决策为准。当前生效决策见
+> `docs/technical/current-agent-workflow.md`。
 
 > 对应评审：`docs/agent-loop-shape-review-2026-08.md`
 > 前置方案：`docs/Agent-Harness-优化技术方案-2026-08.md`（已落地，本方案不回退其成果）

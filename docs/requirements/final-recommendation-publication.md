@@ -3,17 +3,18 @@
 ## 目标
 
 ChiSha 对外发布的主推荐必须与搜索过程中已经记录的目标、授权、硬约束和证据一致。
-Agent 或当前 workflow 提议结束后，下游组件只能阻止不合格结果，不能为了凑满转盘而
+当前 workflow 提议结束后，下游组件只能阻止不合格结果，不能为了凑满转盘而
 重新选择、补位或提升证据等级。
 
-本需求关注“哪些结果可以离开 Agent 系统并进入产品界面”，不改变开放世界搜索目标和
-Lead Agent 目标架构。
+本需求关注“哪些结果可以离开搜索 workflow 并进入产品界面”，不改变开放世界搜索目标
+和当前模型角色、Policy、Runtime 的责任边界。
 
 ## 用户需求
 
 1. 用户看到的主推荐都已经通过当前目标、位置、硬约束、搜索授权和候选证据校验。
 2. 证据不足但可能相关的餐厅只能出现在明确标注的候补区，不能自动进入转盘。
-3. 如果部分提议结果不合格，系统宁可少给，也不能静默换成 Agent 没有选择的餐厅。
+3. 如果部分提议结果不合格，系统宁可少给，也不能静默换成上游 workflow 没有选择的
+   餐厅。
 4. 最终展示顺序应保留上游提议顺序；下游不得再按分数、距离、品牌或随机规则重排。
 5. 用户应能看到结果减少、证据不足或授权不足的真实原因，而不是由装配器推测出的搜索
    过程说明。
@@ -53,21 +54,21 @@ Lead Agent 目标架构。
   映射。
 - 前端 reducer 不会把 `candidates` 自动移动到 `restaurants`，也不会把超出展示上限的
   `restaurants` 重标为候补；同一品牌的不同门店不会被展示层静默折叠。
-- Agent eval 的证据删除、工具结果重排和未授权 broaden 用例保持上述不变量。
+- workflow eval 的证据删除、工具结果重排和未授权 broaden 用例保持上述不变量。
 
-## 当前迁移边界
+## 当前架构边界
 
-当前 `runSearchAgentV3` 仍是确定性 workflow。本次交付先修正发布边界和依赖方向：
+当前 `runSearchAgentV3` 的确定性 workflow 是已接受的生产架构：
 
 - Runtime 显式调用 FinalGuard，再调用 ResultAssembler；
 - 当前 workflow 对不合格提议执行单调降级，并按现有追问/安全结束逻辑收敛；
-- 不在本次改动中声称已经实现 Lead Agent model-tool loop；
-- 目标 Agent Runtime 落地后，可修正的 FinalGuard 拒绝应作为结构化 observation 回填同一
-  run，由 Lead Agent 决定补证、继续搜索、追问或结束。
+- 不为模拟 Lead Agent model-tool loop 增加伪 observation 重试；
+- 如果未来重新评估 Agent 架构，必须通过独立技术决策定义 FinalGuard 如何与新 loop 集成。
 
 ## 非目标
 
-- 不在本需求中实现完整的 `RestaurantSearchLeadAgent` 或 subagent lifecycle。
+- 不实现 `RestaurantSearchLeadAgent`、统一 `Agent` tool 或 subagent lifecycle；当前产品
+  架构不要求这些能力。
 - 不要求为凑满转盘而放宽主推荐证据标准。
 - 不把随机选择、品牌多样性或推荐排序重新实现为 FinalGuard 规则。
 - 不改变用户主动从候补区添加餐厅的能力。

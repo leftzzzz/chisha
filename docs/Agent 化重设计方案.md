@@ -1,8 +1,8 @@
 # AI 架构分析与 Agent 化重设计方案
 
-> **历史方案，仅作演进记录。** 本文描述的早期 Agent 化方案已被后续 workflow 改造和
-> 当前 orchestrator-workers 决策取代。当前依据见
-> `docs/technical/agent-architecture-root-decision-2026-08.md`。
+> **历史方案，仅作演进记录。** 本文描述的早期 Agent 化方案未被采用；后续形成的
+> deterministic multi-model workflow 是当前生产架构。当前依据见
+> `docs/technical/current-agent-workflow.md`。
 
 > 本文档分析 ChiSha 当前 AI 实现的 Workflow 模式局限性，并给出可落地的 Agent 化重设计方案。方案分为“先改核心 Agent Loop，再扩展多轮对话和记忆系统”，避免一次性大重构。
 
