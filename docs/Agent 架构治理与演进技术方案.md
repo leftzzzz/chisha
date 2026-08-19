@@ -1,8 +1,8 @@
 # Agent 架构治理与演进技术方案
 
 > **历史方案，仅作演进记录。** 本文对“集中全局语义所有权”的问题判断仍有参考价值，
-> 但 `SearchSupervisorAgent` 命名、单 Agent 方案、taxonomy 和降级细节均已被取代。当前依据见
-> `docs/technical/agent-architecture-root-decision-2026-08.md`。
+> 但 `SearchSupervisorAgent` 命名、单 Agent 方案、taxonomy 和降级细节均未成为当前架构。
+> 当前依据见 `docs/technical/current-agent-workflow.md`。
 
 > 本文档针对当前 ChiSha Agent 实现的架构问题给出可落地改造方案。目标不是继续增加子 Agent，而是收敛控制权、强化会话安全、降低模型调用成本，并把“可验证推荐”作为主推荐准入边界。
 

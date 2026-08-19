@@ -1,18 +1,23 @@
-# Agent 开发最佳实践与架构根治决策（2026-08）
+# Lead Agent / Orchestrator-Worker 备选设计（2026-08）
 
-> 状态：生效中的架构决策。本文描述目标架构和迁移方法，不代表目标架构已经实现。
+> 状态：已评估但暂缓。本文不是当前实现依据，所列迁移步骤不属于 backlog 或验收项。
 >
-> 当前强制边界以
+> 当前生效架构见
+> [`current-agent-workflow.md`](./current-agent-workflow.md)，强制边界以
 > [`../specs/restaurant-search-agent.md`](../specs/restaurant-search-agent.md) 为准；
 > 产品目标和验收标准见
 > [`../requirements/restaurant-search-agent.md`](../requirements/restaurant-search-agent.md)。
 
-本文取代旧文档中“确定性 `policy.ts` 应成为唯一 planner”的目标结论。旧文档继续
-记录已落地 workflow 的演进过程，但不再指导新增 Agent 行为。
+本文保留当时对 Anthropic orchestrator-worker 模式、Claude Code 风格 Handler 和
+model-tool loop 的调研与完整备选设计。项目随后接受了现有确定性 multi-model workflow
+作为生产架构；后续改动不得因为缺少本文组件而把当前实现判定为未完成。
 
-## 1. 最终决策
+只有当前架构决策列明的重新评估条件成立，并形成新的 requirement、technical decision、
+Spec 和对拍报告后，本文才可作为方案输入。不得直接恢复本文的迁移清单。
 
-目标架构采用 Anthropic 的 `orchestrator-worker pattern`：
+## 1. 备选方案概要（当前不采用）
+
+本备选方案采用 Anthropic 的 `orchestrator-worker pattern`：
 
 - `RestaurantSearchLeadAgent` 持有完整上下文和全局语义决策权；
 - Lead Agent 既可以直接调用 Domain tools，也可以通过统一 `Agent` tool 按需委派
@@ -29,7 +34,7 @@
 模型仍使用项目现有的 OpenAI-compatible endpoint。我们对齐 Claude Code 的 subagent
 handler 行为，不引入 Claude Agent SDK Runtime，也不把模型供应商写进领域架构。
 
-## 2. 旧系统是什么
+## 2. 当前生效的 workflow
 
 当前 `runSearchAgentV3` 是代码主控的 multi-model workflow：
 
@@ -44,7 +49,7 @@ handler 行为，不引入 Claude Agent SDK Runtime，也不把模型供应商�
 是代码调度的模型函数，而不是 orchestrator-workers。
 
 按 Anthropic 对 workflow 与 agent 的区分，当前系统属于预定义代码路径中嵌入模型步骤
-的 workflow。这个实现可以继续被维护，但不能以它的固定调用顺序定义目标 Agent。
+的 workflow。这是项目当前接受的执行形态；固定调用顺序本身不构成架构缺陷。
 
 ### 2.1 历史命名漂移
 
@@ -79,9 +84,10 @@ function 是当前传输协议细节，而不是这项能力的长期语义。�
 - Agent Runtime 使用能够返回 assistant message/tool calls 的单轮模型传输能力，重复推进
   loop 并执行工具，不能通过重命名单次调用器来冒充 Agent。
 
-## 3. 根因分类
+## 3. 提出备选方案时的根因假设
 
-反复出现的长尾失败不是缺少某个词条，而是六类系统问题叠加：
+当时的分析将反复出现的长尾失败归因于以下六类问题。当前决策只继续接受开放世界语义、
+语义权威、grounding 和评测边界；“workflow / agent 形态错配”不再是当前既定结论：
 
 1. **Workflow / Agent 形态错配**：产品期待动态推理，实现却由有限状态决定动作。
 2. **开放世界 / 闭集规则错配**：自然语言餐饮需求无限扩展，本地 taxonomy 只能覆盖
@@ -96,7 +102,7 @@ function 是当前传输协议细节，而不是这项能力的长期语义。�
 菜品、地域叫法、品牌词、否定表达和过敏约束仍然落出词表。一个词条还可能同时影响
 query 归一、POI type、搜索扩展、验证和准入，局部修复会持续制造交叉回归。
 
-## 4. 为什么保留 orchestrator-workers
+## 4. 备选方案为何保留 orchestrator-workers
 
 把语义控制权从 policy 移给 Lead Agent，不等于退化成单 Agent。最终形态仍然是：
 
@@ -386,7 +392,7 @@ admission record，但不能回写为 Agent 可控制的 action 字段。
 推荐资格。Runtime 不自行推断 relation，也不在搜索失败后自动放宽。范围获授权只是主
 推荐的必要条件；候选仍需通过 evidence verification、硬约束和 FinalGuard。
 
-## 11. 评测策略
+## 11. 重新评估本方案时的评测策略
 
 ### 11.1 两类评测分离
 
@@ -424,7 +430,10 @@ admission record，但不能回写为 Agent 可控制的 action 字段。
 
 具体菜名是通用不变量的样本。新增 eval 样本时，生产代码不应同步增加词条。
 
-## 12. 迁移顺序
+## 12. 暂缓的迁移顺序
+
+以下步骤仅记录原方案，不属于当前计划。重新启用前必须先满足当前架构决策的重新评估
+条件，并获得新的文档决策：
 
 1. 冻结新的业务语义特判和搜索向 CategoryRegistry 扩展。
 2. 补齐真实模型 capability eval、Agent trace 和 Lead-only 基线。
@@ -437,8 +446,8 @@ admission record，但不能回写为 Agent 可控制的 action 字段。
 8. 删除生产路径中的 taxonomy 搜索改写、分类选择和 `unverified` 主推荐补位。
 9. 加入 parent-child lifecycle、checkpoint/resume/cancel 和故障注入测试后再切主路径。
 
-迁移期间每个 PR 都必须说明：它是在维护当前 workflow，还是在推进目标 Agent。不能用
-两套相反的职责边界解释同一段代码。
+在新的技术决策正式生效前，PR 只能按当前 workflow 的职责边界实现，不得以推进本文
+备选方案为由引入两套相反的语义所有权。
 
 ## 13. 设计依据
 

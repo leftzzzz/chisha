@@ -1,9 +1,9 @@
 # Agent 优化技术方案
 
 > **历史方案，仅作演进记录。** 文中的 planner 选 action 流程已被当前 workflow 的
-> `policy.decideNextAction` 取代；其单一 `SupervisorPlannerAgent` 目标又被新的
-> orchestrator-workers 决策取代。当前依据见
-> `docs/technical/agent-architecture-root-decision-2026-08.md`。
+> `policy.decideNextAction` 取代；单一 `SupervisorPlannerAgent` 和后续
+> orchestrator-workers 都不是当前目标。当前依据见
+> `docs/technical/current-agent-workflow.md`。
 
 审计日期：2026-06-03  
 适用范围：`app/api/agent/chat/route.ts`、`lib/agent/runtimeV3.ts`、`lib/agent/supervisorPlanner.ts`、`lib/agent/supervisor.ts`、`lib/agent/session.ts`、`lib/agent/guards.ts`、`lib/agent/finalGuard.ts`、`lib/agent/subagents/evaluationAgent.ts`、前端 Agent 状态展示链路。

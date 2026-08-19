@@ -1,8 +1,8 @@
 # Agent Architecture Review
 
-> **历史评审，仅作演进记录。** 文中的 `supervisorAction.ts` 等文件已不存在，后续
-> workflow 改造也不再是目标 Agent 架构。当前依据见
-> `docs/technical/agent-architecture-root-decision-2026-08.md`。
+> **历史评审，仅作演进记录。** 文中的 `supervisorAction.ts` 等文件已不存在；后续形成的
+> workflow 已被接受为当前生产架构。当前依据见
+> `docs/technical/current-agent-workflow.md`。
 
 > 基于当前代码的 Agent 架构审计与问题分析。本文重点回答：现有 Agent 为什么难以自主决策、上下文管理为什么脆弱、哪些 runtime 硬约束已经越界，以及下一步应如何治理。
 

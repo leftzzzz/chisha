@@ -79,17 +79,19 @@ Core state files:
 
 **当前实现事实**：常规 action 由 `orchestrator/policy.ts` 的确定性策略控制，模型只
 执行目标理解、关键词扩展、候选验证和受限 replan；因此当前形态是 multi-model
-workflow，而不是模型主控的 Agent loop。不要把目标架构写成已经实现。
+workflow，而不是模型主控的 Agent loop。该 workflow 是当前已接受的生产架构，不是等待
+Lead Agent 替换的过渡实现。
 
 修改 Agent 代码、评测或架构文档前，必须阅读
-[`docs/specs/restaurant-search-agent.md`](docs/specs/restaurant-search-agent.md)。目标架构、
-技术理由和迁移顺序见
-[`docs/technical/agent-architecture-root-decision-2026-08.md`](docs/technical/agent-architecture-root-decision-2026-08.md)。
+[`docs/specs/restaurant-search-agent.md`](docs/specs/restaurant-search-agent.md)。当前架构理由和
+重新评估条件见
+[`docs/technical/current-agent-workflow.md`](docs/technical/current-agent-workflow.md)。此前的
+Lead Agent/model-tool loop 方案仅是暂缓备选，不是当前验收项。
 
 ### Agent 评测 (`evals/`)
 
 `npm run eval` 当前使用桩模型 + fixture 高德，适合度量 Runtime/workflow 的搜索步数、
-调用量、重复评估和事件行为；它不证明真实模型的 Agent 决策质量。Agent 语义改动还需
+调用量、重复评估和事件行为；它不证明真实模型的语义质量。模型语义改动还需
 覆盖真实模型或可审查 trace 中的工具选择、参数、目标关系、授权、证据和停止原因。
 
 ### External Services
@@ -145,7 +147,7 @@ Coverage threshold: 70% across all metrics.
 `@/lib/withTimeout` 的 `fetchWithTimeout`，参考
 `__tests__/lib/agent/models/searchReplanModel.test.ts`。
 
-改动 agent loop 行为时，单测之外还要跑 `npm run eval`——单测锁的是分支，
+改动 Agent workflow 行为时，单测之外还要跑 `npm run eval`——单测锁的是分支，
 eval 锁的是"这一轮总共搜了几步、评了几次"。
 
 ## Responsive Breakpoints

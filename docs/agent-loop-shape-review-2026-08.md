@@ -1,8 +1,8 @@
 # Agent Loop 形态评审（2026-08 第二轮）
 
-> **历史评审，结论已被取代。** 本文推动的“确定性 policy 成为唯一 planner”把系统
-> 明确收敛成 workflow，不能继续作为 Agent 目标架构。当前生效决策见
-> `docs/technical/agent-architecture-root-decision-2026-08.md`。
+> **历史评审，仅作演进记录。** 本文推动系统收敛为确定性 policy 主控 workflow；该
+> workflow 后续被接受为当前生产架构。当前生效决策见
+> `docs/technical/current-agent-workflow.md`。
 
 > 上一轮 `docs/agent-harness-review-2026-08.md` 审的是 harness 的**工程质量**（双写、观测、降级、清理），P0/P1 已基本落地（见 `44c5dbf`…`f9060f1`）。
 > 本轮不重复那些结论，只审一个问题：**这个 loop 的形态对不对**——模型和代码的分工是否放在了正确的位置。

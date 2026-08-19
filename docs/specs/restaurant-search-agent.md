@@ -3,8 +3,8 @@
 本 Spec 适用于 `lib/agent/**`、`app/api/agent/**`、`evals/**`、
 `__tests__/lib/agent/**` 以及 Restaurant Search Agent 架构文档。
 
-完整的架构理由和迁移方案见
-[`../technical/agent-architecture-root-decision-2026-08.md`](../technical/agent-architecture-root-decision-2026-08.md)，
+当前生效的架构决策见
+[`../technical/current-agent-workflow.md`](../technical/current-agent-workflow.md)，
 产品目标和验收标准见
 [`../requirements/restaurant-search-agent.md`](../requirements/restaurant-search-agent.md)；
 跨功能的输入、转盘和历史规则见
@@ -12,102 +12,48 @@
 
 ## 当前实现边界
 
-- 当前 `runSearchAgentV3` 是确定性 workflow：`orchestrator/policy.ts` 决定常规
-  action，模型只执行局部语义任务。
-- 目标 Agent 架构尚未落地。任何改动必须明确是在维护当前 workflow，还是在推进
-  目标 Agent；不能把目标组件描述成当前事实。
+- `runSearchAgentV3` 的确定性 multi-model workflow 是当前已接受的生产架构，不是等待
+  Lead Agent 替换的过渡实现。
+- `orchestrator/policy.ts` 决定常规 action；模型只执行目标理解、关键词扩展、候选验证和
+  受限 replan 等局部语义任务；Runtime 负责执行、预算、并发、持久化和发布边界。
+- 当前架构不要求实现 `RestaurantSearchLeadAgent`、统一模型可见 `Agent` tool、
+  model-tool loop 或 subagent lifecycle。此前方案保留为已评估但暂缓的备选架构，不得
+  作为当前实现缺口或 PR 验收项。
 - 新增行为不得继续扩大菜品、菜系、品牌、地域叫法或失败 query 的语义特判集合。
 
-## 目标命名
+## 模型角色与调用命名
 
-- 架构模式称 `orchestrator-worker pattern`。
-- 主 Agent 固定命名为 `RestaurantSearchLeadAgent`，通用角色称 `lead agent` 或
-  `main agent`。
-- 下级是 `specialized subagents`，具体名称使用 `<Domain>Subagent`。
-- 子 Agent 调用入口是统一、模型可见的 `Agent` tool。
-- 执行基础设施称 `Agent Runtime`，内部拆分 guard、limits、scheduler、session、
-  trace 和 child-run lifecycle。
-- `ManagerAgent`、`OrchestratorAgent`、`SearchSupervisorAgent` 或 `Policy` 不得作为
-  目标主 Agent 名称。旧代码中的同名概念只表示迁移前事实。
+- 一次强制结构化输出的模型请求是 model role，不是能够自主使用工具和循环执行的
+  subagent。当前目标理解、关键词扩展、候选验证和 replan 都属于这种模型角色。
+- 单次结构化模型调用的公共名称使用 `callStructuredModel`；一次性角色使用
+  `<Purpose>Model`。历史名称可以兼容迁移，但不能据此宣称实现了 Agent 或 subagent。
+- 单次调用的日志和指标维度使用 `modelRole` 或 `operationName`，不得用 `agentName` 混淆
+  执行形态。
+- `RestaurantSearchLeadAgent`、`<Purpose>Subagent` 和 `AgentToolHandler` 只用于描述
+  未来经过独立决策重新启用的真正 model-tool loop，不属于当前命名要求。
 
-## Agent 资格与模型调用命名
+## Workflow 职责
 
-- `Agent` 只指由 Runtime 驱动、能够在多轮 model-tool loop 中自主选择动作、观察工具
-  结果并决定继续或结束的执行主体。Lead Agent 和 subagent 都必须满足这个定义。
-- 一次强制结构化输出的模型请求不是 Agent，即使它通过 prompt 扮演一个特定角色。
-  当前 `KeywordExpansionAgent`、`EvaluationAgent`、`GoalUnderstandingAgent`、
-  `SearchReplanAgent` 和 `callJsonFunctionAgent` 都是迁移前的历史命名，不能据此声称已经
-  实现 Agent 或 subagent。
-- 单次结构化模型调用的目标公共名称固定为 `callStructuredModel`；仍需保留的一次性
-  模型角色使用 `<Purpose>Model`，真实子 Agent 才使用 `<Purpose>Subagent`。
-- 单次调用的日志和指标维度使用 `modelRole` 或 `operationName`，不得继续用
-  `agentName` 把模型角色伪装成 Agent。
-- `callStructuredModel` 最多是 Runtime 可复用的单次模型请求能力。完整 Agent 必须由
-  Runtime 反复推进 assistant/tool-call/tool-result 循环；不得把公共调用器本身描述为
-  Agent Runtime 或 Agent loop。
+1. Goal understanding model 把用户表达解析为保留原文和显式约束的 `UserGoal`。
+2. Keyword expansion model 产生有限、可追踪的自然语言搜索建议，不拥有最终搜索策略。
+3. `policy.ts` 基于目标、授权、观察结果和预算决定常规 action、追问、受限 replan 与结束。
+4. Evaluation model 只判断候选证据，不改变目标、授权或搜索关系。
+5. Runtime 执行 action，并负责 schema、预算、超时、重试、并发、幂等、会话恢复、取消、
+   状态持久化、trace 和 FinalGuard。
 
-## Lead Agent 与 Subagent
-
-1. `RestaurantSearchLeadAgent` 是唯一全局语义决策者，负责用户目标、计划、任务拆分、
-   下一动作、搜索与目标的关系、是否补证/追问/结束以及最终综合。
-2. 简单任务默认由 Lead Agent 直接调用 Domain tools 完成。只有可以独立探索或验证、
-   适合并行，或确实需要不同 instructions、工具或模型的任务才委派 subagent。
-3. Subagent definitions 由 Runtime 静态注册；Lead Agent 根据 definition 的
-   `description` 通过 `Agent` tool 动态创建 subagent instances。运行时不得动态发明
-   Agent 类型，也不得由代码固定 GoalUnderstanding -> KeywordExpansion -> Evaluation
-   -> Replan 顺序。
-4. 每个 subagent 必须有独立上下文、明确 task、专用 instructions、受限工具集、
-   `maxTurns`、成本上限和结构化输出。它不能修改全局 UserGoal 或做最终推荐。
-5. Lead Agent 必须综合 subagent 的压缩 findings/evidence，并对继续委派、追问或结束
-   保持最终责任。
-
-## Agent Tool Handler
-
-- 模型传输层继续使用 OpenAI-compatible endpoint；目标架构不依赖 Claude Agent SDK
-  或 Anthropic 模型。
-- Runtime 必须实现与 Claude Code subagent 行为一致的 `Agent` tool handler：模型可见
-  的统一入口、definition-based selection、独立 child context、受限 tool loop、结构化
-  result、child run id、预算和 trace。
-- `Agent` tool handler 只执行 Lead Agent 已发出的调用，不决定何时委派或调用哪个
-  subagent。
-- 模型客户端必须支持完整的 assistant/tool 循环，不能把一次强制 JSON function call
-  当成 Agent loop。上线前必须通过目标 OpenAI-compatible endpoint 的 tool-calling
-  capability eval。
-
-## Subagent Task Snapshot
-
-第一版委派使用自包含、不可变快照，不使用 `goalSliceIds`、`knownEvidenceRefs` 等要求
-subagent 回读共享可变状态的间接引用。
-
-```ts
-interface SubagentTaskSnapshot {
-  taskId: string;
-  objective: string;
-  goalSnapshot: UserGoal;
-  authorizationSnapshot: AuthorizationSnapshot;
-  location: Location;
-  attemptSummary: SearchAttemptSummary[];
-  candidateFacts?: RestaurantCandidateFact[];
-  excludedScope: string[];
-  successCriteria: string[];
-  outputSchemaVersion: string;
-  budget: SubagentBudget;
-}
-```
-
-只有真实 payload 超出评测确定的上下文预算后，才允许引入只读 artifact store；不得先用
-不透明 id 缩短 task brief。
+固定的 workflow 顺序是当前有意保留的调度机制。正确性来自通用契约、证据边界和覆盖
+整个运行轨迹的 eval，而不是来自为某个 query 追加分支。
 
 ## Runtime 与 Policy
 
-- `Policy` 不是目标架构组件。开放世界 semantic planning 迁入 Lead Agent；现有
-  `policy.ts` 中仍需保留的确定性逻辑拆入 Runtime 的 guard、limits、scheduler 和
-  authorization，不得整体堆进一个巨型 `runtime.ts`。
-- Runtime 负责 Agent/tool loop、schema、鉴权、预算、超时、重试、并发、幂等、
-  parent-child task tree、checkpoint/resume、取消、部分失败、状态持久化和 trace。
-- Runtime 可以拒绝非法动作，但不能把它改写成语义不同的“合法动作”。
-- 硬距离、明确排除项、停业、安全与用户授权是 Runtime 可执行的确定性边界，任何
-  Agent 和工具都不能绕过。
+- `Policy` 是当前架构中的受限 action planner。它可以在明确、有限的策略空间内决定下一
+  action，但不得用菜品、菜系、品牌或地域 taxonomy 代替开放世界语义理解。
+- Runtime 执行并约束 workflow，不得把模型或 policy 已产生的 action 改写成语义不同的
+  “合法动作”。
+- 硬距离、明确排除项、停业、安全与用户授权是 Runtime 可执行的确定性边界，任何模型
+  角色和 Provider 工具都不能绕过。
+- 当前 Runtime 不承担 parent-child task tree、subagent context 或 model-tool loop；只有
+  在新的技术决策和对拍 eval 证明收益后，才允许引入这些能力。
 
 ## 最终推荐发布边界
 
@@ -128,14 +74,13 @@ interface SubagentTaskSnapshot {
 - UI reducer 可以裁剪固定展示上限和去除同一物理地点，但不能用候补补足转盘、按品牌
   折叠不同门店或改变 primary/backup 分区，超出展示上限的 primary 也不得重标为 backup。
   候补进入转盘必须来自显式用户动作。
-- 当前确定性 workflow 对不合格 finish proposal 执行上述单调降级，并复用现有追问/
-  安全结束逻辑。目标 model-tool loop 落地后，可修正的拒绝必须作为结构化 observation
-  回填同一 run；Runtime 不能代替 Lead Agent 选择修正动作。
+- 当前 workflow 对不合格 finish proposal 执行上述单调降级，并复用现有追问/安全结束
+  逻辑。不得为模拟尚不存在的 model-tool loop 增加伪模型重试。
 
-## Domain Tool Contract
+## 地点搜索契约
 
-Lead Agent 和 Search subagent 只接触少量、面向任务的高层 Domain tools。地点召回只
-暴露自然语言搜索工具：
+当前 workflow 的搜索 action 使用少量、面向任务的高层契约。地点召回以自然语言 query
+为主：
 
 ```ts
 interface SearchPlacesInput {
@@ -150,10 +95,10 @@ interface SearchPlacesInput {
 }
 ```
 
-- 不得向 Agent 暴露 `lookup_place_categories`、`list_place_categories`、
+- 不得向模型角色或搜索规划层暴露 `lookup_place_categories`、`list_place_categories`、
   `CategoryRegistry`、`categoryRef`、POI typecode 列表或任何
   `natural-language -> provider-code` 步骤。
-- `search_places.query` 必须保留 Agent 给出的自然语言，不得通过 taxonomy、子串、别名
+- `search_places.query` 必须保留上游 action 给出的自然语言，不得通过 taxonomy、子串、别名
   表或 Adapter 静默改写。
 - Amap adapter 固定使用 `keywords = query`、`types = 050000`。`050000` 只限定本产品
   搜索餐饮场所，是稳定 Provider 范围配置，不表达菜品、菜系或目标匹配。
@@ -161,9 +106,9 @@ interface SearchPlacesInput {
   意图、broaden、搜索方向或候选资格判断。
 - 高德分类码表只能把返回的 `typecode` 解释为 Provider 事实，例如
   `050202 -> 日本料理`；不得反向参与搜索 planning，也不能证明餐厅提供寿司。
-- 第一次搜索不足时，由 Lead Agent 产生新的自然语言 action。任何 `broader` 或
-  `alternative` action 都必须显式记录 relation、rationale 和用户授权，不能由 Runtime
-  或 Adapter 自动生成。
+- 第一次搜索不足时，由受限 replan model 提议、`policy.ts` 接受新的自然语言 action。
+  任何 `broader` 或 `alternative` action 都必须显式记录 relation、rationale 和用户授权，
+  不能由 Runtime 或 Adapter 自动生成。
 
 每个搜索 action 至少包含：
 
@@ -178,7 +123,7 @@ interface SearchAction {
 }
 ```
 
-- `allowedForPrimary` 不属于 Agent 产生的 `SearchAction`。Runtime 必须根据 action 的
+- `allowedForPrimary` 不属于模型产生的 `SearchAction`。Runtime 必须根据 action 的
   `relation` 和授权记录派生搜索范围资格，模型不能直接声明或覆盖该结果：
 
 ```ts
@@ -204,7 +149,7 @@ const primaryScopeAuthorized =
   一次显式追问的授权记录。
 - 召回 query、Provider category 和目标证据是三个不同概念。搜索命中和 POI category
   只能作为召回或候选事实，不能直接证明菜品供应。
-- Verification subagent 只返回 `supported`、`contradicted` 或 `unknown` 及证据来源。
+- Evaluation model 只返回 `supported`、`contradicted` 或 `unknown` 及证据来源。
   菜单项、商家页面或其他可追溯资料可以支持菜品结论；仅有“高德归类为日本料理”时，
   “提供寿司”仍为 `unknown`。
 - FinalGuard 只能删除、降级或分区，不能把 `unknown/unverified` 提升为 `supported` 或
@@ -225,24 +170,25 @@ const primaryScopeAuthorized =
   taxonomy 词条来改变决策、搜索或准入。
 - 不得用子串词表做有损语义归一或丢弃未知修饰词。
 - 不得把 prompt 中的开放世界语义规则机械搬到 TypeScript 常量。
-- 不得把 Provider 分类目录包装成 Agent 搜索工具或让 Agent 选择 typecode/ref。
+- 不得把 Provider 分类目录包装成模型可见搜索能力或让模型选择 typecode/ref。
 - 不得让 FinalGuard、结果装配器、Runtime 或 Adapter 重新决定用户意图、broaden
   关系、搜索方向或证据状态。
-- 不得把固定 action 序列、planner 模型调用为零或单个 golden case 通过当作 Agent
-  质量证明。
+- 不得把固定 action 序列、planner 模型调用为零或单个 golden case 通过当作 workflow
+  质量证明；固定调度本身不是被禁止的架构。
 
 允许的确定性逻辑包括 Unicode/空白规整、精确去重、schema 校验、数值边界、安全与
 合规、用户明确授权检查、固定的 Provider 产品范围，以及不增加语义结论的过滤。
 
 ## Eval 要求
 
-- 现有模型桩 + fixture eval 只证明 Runtime/workflow 回归，不证明真实模型质量。
-- Agent eval 必须检查工具选择、自然语言 query、relation、授权、证据、停止原因和最终
-  分区，并覆盖目标 OpenAI-compatible endpoint。
-- 必须分别评测 Lead-only 和 Lead + subagents，只有独立探索带来的质量收益超过延迟、
-  token 和失败面成本时才启用委派。
-- 多 Agent eval 必须检查调用时机、subagent description 选择、task snapshot 完整性、
-  重复/空洞委派、child failure 和 Lead 综合质量。
+- 模型桩 + fixture eval 用于证明 Runtime/workflow 的搜索步数、调用量、重复评估、事件、
+  缓存、持久化和最终分区回归；它不证明真实模型语义质量。
+- 模型角色 eval 必须检查自然语言 query、relation、授权、证据、停止原因和最终分区；
+  模型或 Provider 不可用路径必须显式覆盖。
+- 对真实 OpenAI-compatible endpoint 的评测应报告目标保真、证据覆盖、成本、延迟和失败
+  率，不要求 Lead-only、subagent 调用或 child lifecycle 指标。
+- 必须区分确定性 policy 分支与受限模型角色的质量和成本，避免用其中一侧的指标替代
+  整体 workflow 表现。
 - 评测集覆盖 typical、edge、adversarial、生产分布和 metamorphic/property cases：
   同义改写、修饰词/排除项追加、工具结果重排、证据删除、未授权 broaden。
 - 新增具体菜名 eval 时，生产代码不得同步增加对应语义词条。
@@ -253,9 +199,9 @@ const primaryScopeAuthorized =
 2. 是否保留用户原始目标、自然语言 query 和全部修饰词？
 3. 是否出现分类目录、taxonomy 或 Adapter 对语义的静默改写？
 4. 是否有任何 `unknown` 被提升？
-5. Subagent 是由 Lead Agent 通过 `Agent` tool 动态选择，还是代码固定调用？
-6. 简单任务是否被不必要地委派？
+5. 下一 action 属于 policy/Runtime 的确定性职责，还是模型角色的语义职责？
+6. 模型角色的输入输出是否收敛，且没有引入 query-specific 特判？
 7. 测试锁定的是通用不变量还是单个样例？
-8. PR 是否说明当前 workflow 维护与目标 Agent 迁移的边界？
+8. PR 是否把已暂缓的 Lead Agent/model-tool loop 误写成当前验收项？
 
-相关契约改动至少运行适用的 Agent 单测、`npm run eval` 和文档结构检查。
+相关契约改动至少运行适用的 workflow/模型角色单测、`npm run eval` 和文档结构检查。
