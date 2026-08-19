@@ -19,6 +19,8 @@ rg -n "组件名|方案|权衡|迁移" docs/technical docs \
   FinalGuard、纯 ResultAssembler、UI 发布边界和当前实现方案。
 - [供应商容量调度与公网运行保护](./provider-capacity-scheduling.md) - Durable Object 容量协调、
   Agent fanout 分层、短等待、会话归属、故障降级和发布方案。
+- [CI/CD 质量门禁与发布隔离](./ci-cd-quality-gates.md) - GitHub Actions 分层、覆盖率基线、
+  Cloudflare dry-run、Workers Builds 分支过滤和后续生产门禁迁移条件。
 
 ## Deferred Alternatives
 

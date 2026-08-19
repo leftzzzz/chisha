@@ -84,18 +84,20 @@ npm run type-check
 # ESLint 代码检查
 npm run lint
 
-# 运行测试
-npm test
+# 运行与 CI 相同的全量测试和覆盖率门禁
+npm run test:ci
 
-# 生成测试覆盖率
-npm run test:coverage
+# 验证 Cloudflare 构建与 binding，不上传版本、不迁移远程 D1
+npm run build:cloudflare
+npm run deploy -- --dry-run
 ```
 
 **要求**：
 - ✅ 无 TypeScript 错误
 - ✅ 无 ESLint 错误或警告
 - ✅ 所有测试通过
-- ⏳ 测试覆盖率 ≥ 70% （目标）
+- ✅ 覆盖率不低于 `jest.config.js` 中的当前防回退基线
+- ⏳ 四项覆盖率 ≥ 70%（长期目标）
 
 ### 2. 功能测试
 
@@ -407,41 +409,27 @@ lighthouse https://your-domain.com
 
 ## 持续部署（CI/CD）
 
-### GitHub Actions 示例
+### 当前流水线
 
-创建 `.github/workflows/deploy.yml`：
+`.github/workflows/ci.yml` 在 PR 和 `main` push 上运行两个 job：
 
-```yaml
-name: Deploy to Production
+1. `type-check / lint / coverage / eval`：执行静态检查、带防回退阈值的全量 Jest 和使用
+   桩模型/fixture 的 Agent 行为评测。
+2. `OpenNext build / Workers dry-run`：仅在质量 job 通过后构建 Worker，并用
+   `npm run deploy -- --dry-run` 校验入口、assets、Durable Object、D1 和 Rate Limit bindings。
 
-on:
-  push:
-    branches: [main]
+这两个 job 不读取生产 API Key，不运行远程 D1 migration，也不上传 Worker Version。
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run type-check
-      - run: npm test
+生产发布当前仍由 Cloudflare Workers Builds 的 Git 集成负责。Cloudflare Dashboard 中必须
+把 production branch 设置为 `main`，并关闭 non-production branch builds；否则每个 PR 仍会
+执行 connected build 并上传一个不承载生产流量的 Version。本项目使用 Durable Object，
+这类分支构建也没有可用 preview URL。
 
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: vercel/vercel-action@v1
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-```
+Cloudflare connected build 不会等待 GitHub Actions。仓库目前没有 Cloudflare deploy token
+或受保护的 GitHub production environment，因此不要把当前流程描述为“CI 全绿后才部署”。
+若以后把生产部署迁入 GitHub Actions，必须先建立最小权限 token 和 environment，再关闭
+Cloudflare Git 集成，避免两条生产发布链路并存。完整约束见
+[`specs/ci-cd-quality-gates.md`](./specs/ci-cd-quality-gates.md)。
 
 ## 监控和维护
 
@@ -740,9 +728,9 @@ upload 不能应用新的 Durable Object migration。首次引入
 `ProviderSchedulerDurableObject`，或以后新增任何 DO migration 时，必须先执行一次非版本化
 的 `npm run deploy`。迁移应用后，后续 Version upload 才可正常使用。
 
-因此首次合并含新 DO migration 的 PR 时，Cloudflare 预览构建可能以错误 `10211` 拒绝
-Version upload。这是一次性的发布引导约束：确认常规 CI、OpenNext 构建和 binding 校验
-通过后，合并代码并执行 `npm run deploy`，不得通过删除 DO migration 绕过。直接运行
+如果 Cloudflare non-production branch builds 尚未关闭，含新 DO migration 的 PR 构建可能
+以错误 `10211` 拒绝 Version upload。正确处理是关闭该分支触发，并在合并后通过非版本化的
+`npm run deploy` 应用 migration；不得通过删除 DO migration 绕过。直接运行
 `npx wrangler versions upload` 既不会补 D1 migration，也不能解决这一限制。
 
 ### 搬环境检查清单
