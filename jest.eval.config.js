@@ -16,8 +16,16 @@ module.exports = createJestConfig({
     '^nanoid$': '<rootDir>/__mocks__/nanoid.js',
   },
   testMatch: ['**/evals/**/*.eval.ts'],
-  testPathIgnorePatterns: ['<rootDir>/.claude/'],
-  modulePathIgnorePatterns: ['<rootDir>/.claude/'],
+  testPathIgnorePatterns: [
+    '<rootDir>/.claude/',
+    '<rootDir>/.next/',
+    '<rootDir>/.open-next/',
+  ],
+  modulePathIgnorePatterns: [
+    '<rootDir>/.claude/',
+    '<rootDir>/.next/',
+    '<rootDir>/.open-next/',
+  ],
   setupFiles: ['<rootDir>/evals/setup.js'],
   testTimeout: 120000,
 })

@@ -55,6 +55,9 @@ EVAL_MODE=live npm run eval   # 改用真实模型（需要 OPENAI_API_KEY）
 # 运行所有测试
 npm test
 
+# 运行 CI 模式的全量测试和覆盖率门禁
+npm run test:ci
+
 # 监听模式（开发推荐）
 npm run test:watch
 
@@ -83,22 +86,13 @@ start coverage/lcov-report/index.html # Windows
 
 ### 目录组织
 
-```
-__tests__/
-├── storage.test.ts       # Storage 模块测试
-├── api/                  # API 测试（待实现）
-│   ├── understand.test.ts
-│   ├── search.test.ts
-│   └── geocode.test.ts
-├── hooks/                # Hooks 测试（待实现）
-│   ├── useAppState.test.ts
-│   ├── useLocation.test.ts
-│   └── useMediaQuery.test.ts
-└── components/           # 组件测试（待实现）
-    ├── Button.test.tsx
-    ├── Turntable.test.tsx
-    └── HistoryPage.test.tsx
-```
+测试统一位于 `__tests__/`，并按源码责任分为 `app/api/`、`components/`、`context/`、
+`hooks/` 与 `lib/`。Agent 的模型角色、orchestrator、session 和契约测试继续细分在
+`__tests__/lib/agent/`。API 路由与 Durable Object 边界测试使用 Node test environment；
+组件和 hooks 使用 jsdom。
+
+当前全量测试包含 API、组件、Context/Reducer、hooks、存储、供应商调度、Agent Runtime 与
+架构约束，不再以早期“待实现”目录清单作为覆盖状态依据。
 
 ## 已实现的测试
 
@@ -395,13 +389,21 @@ describe('功能测试', () => {
 
 ## 覆盖率目标
 
-### 全局目标
-- 总体覆盖率：≥ 70%
-- 分支覆盖率：≥ 70%
-- 函数覆盖率：≥ 70%
-- 语句覆盖率：≥ 70%
+### 当前门禁与长期目标
 
-### 模块目标
+`npm run test:ci` 在 CI 中真实执行 `jest --coverage`。截至 2026-08-19 的防回退阈值是：
+
+| 指标 | 当前门禁 | 本轮实测 | 长期目标 |
+|------|---------:|---------:|---------:|
+| Statements | 56% | 56.69% | ≥ 70% |
+| Branches | 49% | 49.33% | ≥ 70% |
+| Functions | 63% | 63.48% | ≥ 70% |
+| Lines | 57% | 57.88% | ≥ 70% |
+
+阈值的唯一真源是 `jest.config.js`。正常变更不得下调；后续应优先补 hooks、UI 工作流与
+低覆盖公共库的行为测试，再逐步提高阈值。不要通过排除可执行业务代码制造覆盖率增长。
+
+### 长期模块目标
 | 模块 | 目标 | 优先级 |
 |------|------|--------|
 | lib/ | ≥ 80% | 高 |

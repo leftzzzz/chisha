@@ -75,6 +75,7 @@ npm run lint
 
 # 测试
 npm test
+npm run test:ci
 npm run test:watch
 npm run test:coverage
 
@@ -980,6 +981,11 @@ npm run build
 npm run build:cloudflare
 npm run deploy
 ```
+
+PR 和 `main` push 会运行 GitHub CI：type-check、lint、带覆盖率门禁的全量单测、Agent eval、
+OpenNext 构建和 Cloudflare dry-run。PR 不应上传 Worker Version；Cloudflare Workers Builds
+需在控制台关闭 non-production branch builds，只保留 `main` 生产构建。详见
+[CI/CD 质量门禁与发布隔离](./docs/specs/ci-cd-quality-gates.md)。
 
 首次引入或新增 Durable Object migration 时必须使用非版本化的 `npm run deploy`；
 Cloudflare Version upload/PR 预览不能应用这类 migration。D1 migration 也由该项目命令

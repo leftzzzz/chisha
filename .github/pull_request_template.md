@@ -15,7 +15,9 @@
 
 - [ ] `npm run type-check`
 - [ ] `npm run lint`
-- [ ] `npm test`
+- [ ] `npm run test:ci`
+- [ ] `npm run build:cloudflare`
+- [ ] `npm run deploy -- --dry-run`
 - [ ] `npm run eval`（**改动 `lib/agent/` 下的 policy / runtime / 缓存时必填**，
       并在下面贴出与基线的 diff）
 
