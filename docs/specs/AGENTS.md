@@ -22,3 +22,5 @@ rg -n "关键词|组件名|文件路径" docs/specs
   命名、语义所有权、工具、Provider、证据、Runtime、委派和 eval 强制边界。
 - [Public Runtime Protection](./public-runtime-protection.md) - 公网入口、匿名会话、跨实例
   Provider 调度、短等待、错误分类和部署验证强制边界。
+- [Model Provider Routing](./model-provider-routing.md) - 结构化模型配置、角色分流、百炼工具
+  调用兼容、模型指标和发布强制边界。

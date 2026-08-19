@@ -833,9 +833,24 @@ describe('runSearchAgentV3', () => {
 
   it('fails the turn instead of guessing when the Supervisor is unavailable', async () => {
     const supervisorMock = runGoalUnderstandingModel as jest.Mock;
-    supervisorMock.mockRejectedValueOnce(
-      new AgentError('Free quota exhausted', 'MODEL_QUOTA_EXHAUSTED', false)
-    );
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    supervisorMock.mockImplementationOnce(async (modelInput: {
+      metricsSink?: { modelCallMetrics?: unknown[] };
+    }) => {
+      if (modelInput.metricsSink) {
+        modelInput.metricsSink.modelCallMetrics = [{
+          modelRole: 'GoalUnderstandingModel',
+          model: 'qwen3.7-flash',
+          startedAt: Date.now(),
+          durationMs: 12,
+          attempts: 2,
+          mode: 'tools',
+          truncated: false,
+          ok: false,
+        }];
+      }
+      throw new AgentError('Free quota exhausted', 'MODEL_QUOTA_EXHAUSTED', false);
+    });
     const searchedPlans: SearchPlan[] = [];
 
     const error = await runSearchAgentV3(
@@ -862,6 +877,16 @@ describe('runSearchAgentV3', () => {
     expect(searchedPlans).toEqual([]);
     // 目标还没解析出来，本轮不写任何会话状态，已有结果不会被抹掉。
     expect(error.runtimeState).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('agent turn failed before runtime context'));
+    const metricLog = JSON.parse(errorSpy.mock.calls.at(-1)?.[0] as string);
+    expect(metricLog.data).toEqual(expect.objectContaining({
+      modelCalls: 1,
+      failedModelCalls: 1,
+      byModel: expect.objectContaining({
+        'qwen3.7-flash': expect.objectContaining({ failures: 1 }),
+      }),
+    }));
+    errorSpy.mockRestore();
   });
 
   it('does not fall back to raw-query search when the Supervisor fails', async () => {

@@ -131,10 +131,17 @@ describe('turn 指标汇总', () => {
 
     const modelCallTrace = (result.runtimeState?.trace ?? [])
       .filter((item) => item.type === 'model_call')
-      .at(-1)?.output as { modelCalls: number; byModelRole: Record<string, { calls: number }> };
+      .at(-1)?.output as {
+        modelCalls: number;
+        modelWallMs: number;
+        byModelRole: Record<string, { calls: number }>;
+        byModel: Record<string, { calls: number }>;
+      };
 
     expect(modelCallTrace.byModelRole.KeywordExpansionModel?.calls).toBe(1);
     expect(modelCallTrace.byModelRole.EvaluationModel?.calls).toBeGreaterThanOrEqual(1);
     expect(modelCallTrace.modelCalls).toBeGreaterThanOrEqual(2);
+    expect(modelCallTrace.modelWallMs).toBeGreaterThanOrEqual(0);
+    expect(modelCallTrace.byModel['test-model']?.calls).toBeGreaterThanOrEqual(2);
   });
 });

@@ -44,12 +44,11 @@ npm run dev
 
 ```env
 OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=deepseek-v4-flash-0731
+OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# 不设置 OPENAI_MODEL 时：目标理解/重规划使用 qwen3.7-flash，关键词/候选验证使用 qwen-flash
+# OPENAI_MODEL=qwen3.7-flash
 # 兼容旧 OpenAI-compatible 端点时可选
 # OPENAI_TOOL_CALL_MODE=functions
-# Qwen/DashScope 强制工具调用会自动关闭 thinking mode；通常不要改
-# QWEN_ENABLE_THINKING=false
 
 AMAP_API_KEY=...
 NEXT_PUBLIC_AMAP_KEY=...
@@ -861,10 +860,9 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 | 变量 | 必需 | 说明 | 默认值 |
 |---|---|---|---|
 | `OPENAI_API_KEY` | 是 | OpenAI 或兼容服务 API Key | - |
-| `OPENAI_BASE_URL` | 否 | OpenAI 兼容 API 地址 | `https://api.openai.com/v1` |
-| `OPENAI_MODEL` | 否 | Agent 使用的模型 | 代码默认 `deepseek-v4-flash-0731` |
+| `OPENAI_BASE_URL` | 否 | OpenAI 兼容 API 地址；百炼生产环境优先使用业务空间专属域名 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `OPENAI_MODEL` | 否 | 全角色模型覆盖；未设置时使用下方角色默认值 | - |
 | `OPENAI_TOOL_CALL_MODE` | 否 | 模型函数调用请求格式；默认使用 `tools/tool_choice`，旧兼容端点可设为 `functions` | - |
-| `QWEN_ENABLE_THINKING` | 否 | Qwen/DashScope 兼容端点的 thinking mode 开关；强制工具调用场景默认自动关闭 | - |
 | `AMAP_API_KEY` | 是 | 高德 Web 服务 API Key | - |
 | `NEXT_PUBLIC_AMAP_KEY` | 否 | 前端地图 JS API Key；只用于浏览器加载高德 JS API，不要使用服务端 `AMAP_API_KEY` 代替 | - |
 | `AMAP_SECURITY_CODE` | 否 | 高德安全码或签名密钥 | - |
@@ -889,10 +887,10 @@ Agent 对话搜索主入口。返回 `text/event-stream`。
 | `AGENT_CONCURRENT_FIRST_SEARCH` | 否 | 设为 `false` 关闭"首搜与联想词并发" | 开启 |
 | `AGENT_HEARTBEAT_MS` | 否 | SSE 心跳间隔；改动需同步 `lib/api.ts` 的超时阈值 | `10000` |
 | `AGENT_DETERMINISTIC` | 否 | 设为 `1` 强制走确定性分支（测试默认开启） | - |
-| `OPENAI_MODEL_SUPERVISOR` | 否 | 目标理解模型 | 继承 `OPENAI_MODEL` |
-| `OPENAI_MODEL_PLANNER` | 否 | replan 模型 | 继承 `OPENAI_MODEL` |
-| `OPENAI_MODEL_EVALUATION` | 否 | 候选验证模型，调用量最大，可配便宜模型 | 继承 `OPENAI_MODEL` |
-| `OPENAI_MODEL_KEYWORD` | 否 | 关键词联想模型 | 继承 `OPENAI_MODEL` |
+| `OPENAI_MODEL_SUPERVISOR` | 否 | 目标理解模型；优先于 `OPENAI_MODEL` | `qwen3.7-flash` |
+| `OPENAI_MODEL_PLANNER` | 否 | replan 模型；优先于 `OPENAI_MODEL` | `qwen3.7-flash` |
+| `OPENAI_MODEL_EVALUATION` | 否 | 候选验证模型，调用量最大；优先于 `OPENAI_MODEL` | `qwen-flash` |
+| `OPENAI_MODEL_KEYWORD` | 否 | 关键词联想模型；优先于 `OPENAI_MODEL` | `qwen-flash` |
 | `MODEL_MAX_INFLIGHT` | 否 | 同一模型端点与模型的跨 Worker 在途上限 | `4` |
 | `MODEL_RPM_LIMIT` | 否 | 模型 RPM；未知时为 0，仅关闭该速率维度 | `0` |
 | `MODEL_TPM_LIMIT` | 否 | 模型 TPM；发送前按估算 token 预留 | `0` |

@@ -1,5 +1,6 @@
 import type { SearchPlan, UserGoal } from '@/lib/agent/types';
 import type { Location, Restaurant } from '@/types';
+import { DEFAULT_BAILIAN_BASE_URL } from '@/lib/agent/modelConfig';
 
 const location: Location = { lat: 31.2304, lng: 121.4737 };
 const originalApiKey = process.env.OPENAI_API_KEY;
@@ -150,7 +151,7 @@ describe('EvaluationModel', () => {
       })
     );
     expect(global.fetch).toHaveBeenCalledWith(
-      'https://api.openai.com/v1/chat/completions',
+      `${DEFAULT_BAILIAN_BASE_URL}/chat/completions`,
       expect.objectContaining({
         method: 'POST',
       })

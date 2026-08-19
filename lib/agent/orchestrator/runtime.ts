@@ -118,9 +118,12 @@ export async function runSearchAgentV3(
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>
 ): Promise<AgentFinalResult> {
   const contextRef: { current?: AgentV3Context } = {};
+  // 目标理解完成前还没有可持久化的 RuntimeState；单独保留指标，确保
+  // 这条失败边界仍能在日志中看见真实模型调用，而不改变“不写半成品状态”的契约。
+  const turnMetrics: MetricsSink = {};
 
   try {
-    return await runAgentTurn(input, emit, searchPlaces, contextRef);
+    return await runAgentTurn(input, emit, searchPlaces, contextRef, turnMetrics);
   } catch (error) {
     if (isAbortError(error)) {
       throw error;
@@ -140,6 +143,14 @@ export async function runSearchAgentV3(
       throw new AgentRunError(message, code, snapshotRuntimeState(context), error);
     }
 
+    const metrics = summarizeTurnMetrics(turnMetrics);
+    if (metrics.modelCalls > 0) {
+      createTurnLogger(input.sessionId).error('agent turn failed before runtime context', {
+        code,
+        ...metrics,
+      });
+    }
+
     throw new AgentRunError(message, code, undefined, error);
   }
 }
@@ -148,13 +159,13 @@ async function runAgentTurn(
   input: AgentInput,
   emit: EmitAgentEvent,
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
-  contextRef: { current?: AgentV3Context }
+  contextRef: { current?: AgentV3Context },
+  turnMetrics: MetricsSink
 ): Promise<AgentFinalResult> {
   emit({ type: 'thinking', message: '正在理解你的需求...' });
   emit({ type: 'status', message: '正在分析您的需求...' });
 
   // context 要等目标解析完才能构造，先用独立容器收集这一阶段的模型指标。
-  const turnMetrics: MetricsSink = {};
   const resolution = await resolveTurnGoal(input, turnMetrics);
   const supervisorOutput = resolution.supervisorOutput;
   const conversationMode = resolution.conversationMode;

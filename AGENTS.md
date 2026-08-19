@@ -108,18 +108,18 @@ workflow，而不是模型主控的 Agent loop。不要把目标架构写成已�
 
 Required in `.env.local`:
 ```
-OPENAI_API_KEY=         # OpenAI API key
+OPENAI_API_KEY=         # 百炼或其他 OpenAI-compatible API key
 AMAP_API_KEY=           # 高德地图 API key
 ```
 
 Optional:
 ```
-OPENAI_BASE_URL=        # Custom OpenAI endpoint
-OPENAI_MODEL=           # Model override (default: deepseek-v4-flash-0731)
-OPENAI_MODEL_SUPERVISOR= # 目标理解模型（默认继承 OPENAI_MODEL）
-OPENAI_MODEL_PLANNER=   # replan 模型（默认继承 OPENAI_MODEL）
-OPENAI_MODEL_EVALUATION= # 候选验证模型，调用量最大，可配便宜模型
-OPENAI_MODEL_KEYWORD=   # 关键词联想模型（默认继承 OPENAI_MODEL）
+OPENAI_BASE_URL=        # OpenAI-compatible endpoint（默认百炼通用端点）
+OPENAI_MODEL=           # 可选的全角色模型覆盖
+OPENAI_MODEL_SUPERVISOR= # 目标理解模型（默认 qwen3.7-flash）
+OPENAI_MODEL_PLANNER=   # replan 模型（默认 qwen3.7-flash）
+OPENAI_MODEL_EVALUATION= # 候选验证模型（默认 qwen-flash）
+OPENAI_MODEL_KEYWORD=   # 关键词联想模型（默认 qwen-flash）
 AGENT_PARALLEL_SEARCH=  # false 关闭一轮内并行搜索（默认开启）
 AGENT_SEARCH_CONCURRENCY= # 一批最多铺开几个搜索计划（默认 3）
 AGENT_CONCURRENT_FIRST_SEARCH= # false 关闭"首搜与联想词并发"（默认开启）

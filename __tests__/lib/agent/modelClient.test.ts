@@ -5,6 +5,7 @@ import {
 } from '@/lib/agent/modelClient';
 import { fetchWithTimeout } from '@/lib/withTimeout';
 import { AgentError } from '@/lib/agent/types';
+import type { ModelCallMetrics } from '@/lib/agent/metrics';
 
 jest.mock('@/lib/withTimeout', () => ({
   fetchWithTimeout: jest.fn(),
@@ -18,20 +19,13 @@ const TestSchema = z.object({
 
 describe('modelClient', () => {
   let warnSpy: jest.SpyInstance;
-  const originalQwenEnableThinking = process.env.QWEN_ENABLE_THINKING;
 
   beforeEach(() => {
     fetchWithTimeoutMock.mockReset();
-    delete process.env.QWEN_ENABLE_THINKING;
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
-    if (originalQwenEnableThinking === undefined) {
-      delete process.env.QWEN_ENABLE_THINKING;
-    } else {
-      process.env.QWEN_ENABLE_THINKING = originalQwenEnableThinking;
-    }
     warnSpy.mockRestore();
   });
 
@@ -190,6 +184,105 @@ describe('modelClient', () => {
     expect(requestBody.enable_thinking).toBe(false);
   });
 
+  it('disables thinking for a Bailian-compatible endpoint even when the model is not Qwen', async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
+
+    await callStructuredModel({
+      ...agentOptions(),
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      model: 'deepseek-v4-flash',
+    });
+
+    const requestBody = JSON.parse(fetchWithTimeoutMock.mock.calls[0][1].body);
+    expect(requestBody.enable_thinking).toBe(false);
+  });
+
+  it('disables thinking for a Bailian workspace endpoint', async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
+
+    await callStructuredModel({
+      ...agentOptions(),
+      baseUrl: 'https://workspace-id.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+      model: 'deepseek-v4-flash',
+    });
+
+    const requestBody = JSON.parse(fetchWithTimeoutMock.mock.calls[0][1].body);
+    expect(requestBody.enable_thinking).toBe(false);
+  });
+
+  it('does not send Bailian thinking parameters to an unrelated compatible endpoint', async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{"value":"ok"}'));
+
+    await callStructuredModel(agentOptions());
+
+    const requestBody = JSON.parse(fetchWithTimeoutMock.mock.calls[0][1].body);
+    expect(requestBody.enable_thinking).toBeUndefined();
+  });
+
+  it('records the provider response model for successful calls', async () => {
+    const metricsSink = { modelCallMetrics: [] as ModelCallMetrics[] };
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      modelResponse('{"value":"ok"}', undefined, 'qwen3.7-flash-2026-07-15')
+    );
+
+    await callStructuredModel({ ...agentOptions(), metricsSink });
+
+    expect(metricsSink.modelCallMetrics).toEqual([
+      expect.objectContaining({
+        model: 'test-model',
+        responseModel: 'qwen3.7-flash-2026-07-15',
+        attempts: 1,
+        ok: true,
+      }),
+    ]);
+  });
+
+  it('ignores an empty or non-string provider response model', async () => {
+    const metricsSink = { modelCallMetrics: [] as ModelCallMetrics[] };
+    fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{"value":"ok"}', undefined, 42));
+
+    await callStructuredModel({ ...agentOptions(), metricsSink });
+
+    expect(metricsSink.modelCallMetrics[0]).toEqual(expect.objectContaining({
+      model: 'test-model',
+      responseModel: undefined,
+    }));
+  });
+
+  it('records every failed provider attempt', async () => {
+    const metricsSink = { modelCallMetrics: [] as ModelCallMetrics[] };
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(errorResponse({ error: { message: 'tools unsupported' } }))
+      .mockResolvedValueOnce(errorResponse({ error: { message: 'functions unsupported' } }));
+
+    await expect(callStructuredModel({ ...agentOptions(), metricsSink })).rejects.toThrow();
+
+    expect(metricsSink.modelCallMetrics).toEqual([
+      expect.objectContaining({
+        attempts: 2,
+        mode: 'functions',
+        ok: false,
+      }),
+    ]);
+  });
+
+  it('records an attempt when the provider request fails before an HTTP response', async () => {
+    const metricsSink = { modelCallMetrics: [] as ModelCallMetrics[] };
+    fetchWithTimeoutMock.mockRejectedValueOnce(new Error('network unavailable'));
+
+    await expect(callStructuredModel({ ...agentOptions(), metricsSink })).rejects.toThrow(
+      'network unavailable'
+    );
+
+    expect(metricsSink.modelCallMetrics).toEqual([
+      expect.objectContaining({
+        attempts: 1,
+        mode: 'tools',
+        ok: false,
+      }),
+    ]);
+  });
+
   it('includes API error details when a chat completion request fails', async () => {
     fetchWithTimeoutMock
       .mockResolvedValueOnce(errorResponse({
@@ -311,10 +404,11 @@ function agentOptions() {
   };
 }
 
-function modelResponse(argumentsJson: string, finishReason?: string) {
+function modelResponse(argumentsJson: string, finishReason?: string, model?: unknown) {
   return {
     ok: true,
     json: async () => ({
+      model,
       choices: [{
         finish_reason: finishReason,
         message: {

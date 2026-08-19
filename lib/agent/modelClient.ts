@@ -122,7 +122,7 @@ async function runStructuredModelCall<T>(
   tracker: MetricsTracker
 ): Promise<T> {
   const first = parseStructuredModelResponse(
-    tracker.track(await requestStructuredModel(options, options.maxTokens)),
+    tracker.track(await requestStructuredModel(options, options.maxTokens, tracker)),
     options
   );
 
@@ -137,7 +137,7 @@ async function runStructuredModelCall<T>(
     });
 
     const retry = parseStructuredModelResponse(
-      tracker.track(await requestStructuredModel(options, options.retryMaxTokens!)),
+      tracker.track(await requestStructuredModel(options, options.retryMaxTokens!, tracker)),
       options
     );
 
@@ -168,7 +168,8 @@ async function runStructuredModelCall<T>(
     const retry = parseStructuredModelResponse(
       tracker.track(await requestStructuredModel(
         withSchemaRepairInstruction(options, first.error),
-        options.maxTokens
+        options.maxTokens,
+        tracker
       )),
       options
     );
@@ -188,6 +189,8 @@ async function runStructuredModelCall<T>(
 }
 
 interface MetricsTracker {
+  /** Record one request only after the provider lease has been acquired. */
+  startAttempt(mode: ChatToolCallMode): void;
   /** 记录一次 HTTP 往返，并原样返回响应体供后续解析。 */
   track(outcome: RequestOutcome): ChatCompletionFunctionResponse;
   finish(ok: boolean): void;
@@ -198,6 +201,7 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
   const state: Omit<ModelCallMetrics, 'durationMs' | 'ok'> = {
     modelRole: options.modelRole,
     model: options.model,
+    responseModel: undefined,
     startedAt,
     promptTokens: undefined,
     completionTokens: undefined,
@@ -207,9 +211,13 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
   };
 
   return {
+    startAttempt(mode) {
+      state.attempts += 1;
+      state.mode = mode;
+    },
     track(outcome) {
-      state.attempts += outcome.attempts;
-      state.mode = outcome.mode;
+      const responseModel = normalizeResponseModel(outcome.data.model);
+      state.responseModel = responseModel ?? state.responseModel;
       state.promptTokens = addTokens(state.promptTokens, outcome.data.usage?.prompt_tokens);
       state.completionTokens = addTokens(state.completionTokens, outcome.data.usage?.completion_tokens);
       if (outcome.data.choices?.[0]?.finish_reason === 'length') {
@@ -225,6 +233,15 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
       });
     },
   };
+}
+
+function normalizeResponseModel(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  return normalized || undefined;
 }
 
 function addTokens(current: number | undefined, next: number | undefined): number | undefined {
@@ -285,24 +302,26 @@ export function parseStructuredModelResponse<T>(
 
 interface RequestOutcome {
   data: ChatCompletionFunctionResponse;
-  mode: ChatToolCallMode;
-  attempts: number;
 }
 
 async function requestStructuredModel<T>(
   options: StructuredModelOptions<T>,
-  maxTokens: number
+  maxTokens: number,
+  tracker: MetricsTracker
 ): Promise<RequestOutcome> {
   const modes = preferredToolCallModes();
   let lastError: Error | undefined;
-  let attempts = 0;
 
   for (const mode of modes) {
-    attempts += 1;
-    const response = await requestChatCompletion(options, maxTokens, mode);
+    const response = await requestChatCompletion(
+      options,
+      maxTokens,
+      mode,
+      () => tracker.startAttempt(mode)
+    );
 
     if (response.ok) {
-      return { data: await response.json(), mode, attempts };
+      return { data: await response.json() };
     }
 
     const error = await buildChatCompletionError(options.modelRole, options.model, mode, response);
@@ -330,7 +349,8 @@ async function requestStructuredModel<T>(
 async function requestChatCompletion<T>(
   options: StructuredModelOptions<T>,
   maxTokens: number,
-  mode: ChatToolCallMode
+  mode: ChatToolCallMode,
+  onRequestStart: () => void
 ): Promise<Response> {
   try {
     const body = buildChatCompletionRequestBody(options, maxTokens, mode);
@@ -338,6 +358,7 @@ async function requestChatCompletion<T>(
       providerSchedulerName('model', `${options.baseUrl}|${options.model}`),
       getProviderSchedulerConfig('model'),
       async (_lease, leaseSignal) => {
+        onRequestStart();
         const response = await fetchWithTimeout(
           `${options.baseUrl}/chat/completions`,
           {
@@ -440,7 +461,7 @@ function buildChatCompletionRequestBody<T>(
     body.temperature = options.temperature;
   }
 
-  if (shouldDisableQwenThinkingForForcedTool(options)) {
+  if (shouldDisableBailianThinkingForForcedTool(options)) {
     body.enable_thinking = false;
   }
 
@@ -462,24 +483,16 @@ function isReasoningChatModel(model: string): boolean {
   return /^o\d/.test(normalized) || normalized.startsWith('gpt-5');
 }
 
-function shouldDisableQwenThinkingForForcedTool<T>(options: StructuredModelOptions<T>): boolean {
-  const override = process.env.QWEN_ENABLE_THINKING?.toLowerCase();
-  if (override === 'true') {
-    return false;
-  }
-
-  if (override === 'false') {
-    return true;
-  }
-
-  return isQwenCompatibleRequest(options.model, options.baseUrl);
+function shouldDisableBailianThinkingForForcedTool<T>(options: StructuredModelOptions<T>): boolean {
+  return isBailianOrQwenRequest(options.model, options.baseUrl);
 }
 
-function isQwenCompatibleRequest(model: string, baseUrl: string): boolean {
+function isBailianOrQwenRequest(model: string, baseUrl: string): boolean {
   const normalizedModel = model.toLowerCase();
   const normalizedBaseUrl = baseUrl.toLowerCase();
   return normalizedModel.startsWith('qwen')
     || normalizedBaseUrl.includes('dashscope')
+    || normalizedBaseUrl.includes('.maas.aliyuncs.com')
     || normalizedBaseUrl.includes('qwen');
 }
 

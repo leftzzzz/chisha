@@ -8,7 +8,10 @@
 
 export interface ModelCallMetrics {
   modelRole: string;
+  /** Request model id or stable alias. */
   model: string;
+  /** Provider-reported model id, when the response includes one. */
+  responseModel?: string;
   /** 调用发起时刻；用于把并发调用合并成"串行步数" */
   startedAt: number;
   durationMs: number;
@@ -31,6 +34,8 @@ export interface TurnMetrics {
    * 这是衡量 loop 形态的核心指标：调用总数可以增加，串行步数必须下降。
    */
   serialModelSteps: number;
+  /** Sum of merged model-call intervals, excluding gaps and concurrent double counting. */
+  modelWallMs: number;
   modelMs: number;
   promptTokens: number;
   completionTokens: number;
@@ -40,6 +45,7 @@ export interface TurnMetrics {
   legacyModeCalls: number;
   truncatedCalls: number;
   byModelRole: Record<string, { calls: number; ms: number; tokens: number }>;
+  byModel: Record<string, { calls: number; ms: number; tokens: number; failures: number }>;
 }
 
 /** 指标容器；AgentContext 结构性满足。 */
@@ -62,6 +68,7 @@ export function recordModelCall(sink: MetricsSink | undefined, metrics: ModelCal
 export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics {
   const calls = sink?.modelCallMetrics ?? [];
   const byModelRole: TurnMetrics['byModelRole'] = {};
+  const byModel: TurnMetrics['byModel'] = {};
 
   for (const call of calls) {
     const bucket = byModelRole[call.modelRole] ?? { calls: 0, ms: 0, tokens: 0 };
@@ -69,14 +76,24 @@ export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics
     bucket.ms += call.durationMs;
     bucket.tokens += (call.promptTokens ?? 0) + (call.completionTokens ?? 0);
     byModelRole[call.modelRole] = bucket;
+
+    const model = call.responseModel ?? call.model;
+    const modelBucket = byModel[model] ?? { calls: 0, ms: 0, tokens: 0, failures: 0 };
+    modelBucket.calls += 1;
+    modelBucket.ms += call.durationMs;
+    modelBucket.tokens += (call.promptTokens ?? 0) + (call.completionTokens ?? 0);
+    modelBucket.failures += call.ok ? 0 : 1;
+    byModel[model] = modelBucket;
   }
 
   const promptTokens = sum(calls.map((call) => call.promptTokens ?? 0));
   const completionTokens = sum(calls.map((call) => call.completionTokens ?? 0));
+  const intervalSummary = summarizeCallIntervals(calls);
 
   return {
     modelCalls: calls.length,
-    serialModelSteps: countSerialSteps(calls),
+    serialModelSteps: intervalSummary.steps,
+    modelWallMs: intervalSummary.wallMs,
     modelMs: sum(calls.map((call) => call.durationMs)),
     promptTokens,
     completionTokens,
@@ -86,6 +103,7 @@ export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics
     legacyModeCalls: calls.filter((call) => call.mode === 'functions').length,
     truncatedCalls: calls.filter((call) => call.truncated).length,
     byModelRole,
+    byModel,
   };
 }
 
@@ -99,7 +117,7 @@ function sum(values: number[]): number {
  * 同一批并发发起的调用区间互相重叠，合并成一段；串行链上的调用不重叠，
  * 各算一段。缺少 startedAt 的历史记录按各自独立一段处理。
  */
-function countSerialSteps(calls: ModelCallMetrics[]): number {
+function summarizeCallIntervals(calls: ModelCallMetrics[]): { steps: number; wallMs: number } {
   const intervals = calls
     .map((call) => ({
       start: call.startedAt ?? 0,
@@ -108,16 +126,26 @@ function countSerialSteps(calls: ModelCallMetrics[]): number {
     .sort((left, right) => left.start - right.start);
 
   let steps = 0;
+  let wallMs = 0;
+  let currentStart = 0;
   let currentEnd = -Infinity;
 
   for (const interval of intervals) {
     if (interval.start >= currentEnd) {
+      if (steps > 0) {
+        wallMs += currentEnd - currentStart;
+      }
       steps += 1;
+      currentStart = interval.start;
       currentEnd = interval.end;
     } else {
       currentEnd = Math.max(currentEnd, interval.end);
     }
   }
 
-  return steps;
+  if (steps > 0) {
+    wallMs += currentEnd - currentStart;
+  }
+
+  return { steps, wallMs };
 }

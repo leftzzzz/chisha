@@ -14,12 +14,8 @@ import type {
   UserGoal,
   UserPreferenceSummary,
 } from '../types';
+import { resolveStructuredModelConfig, type StructuredModelConfig } from '../modelConfig';
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const OPENAI_MODEL = process.env.OPENAI_MODEL_EVALUATION
-  || process.env.OPENAI_MODEL
-  || 'deepseek-v4-flash-0731';
 const EVALUATION_TIMEOUT = 60000;
 const EVALUATION_MAX_TOKENS = STRUCTURED_MODEL_MAX_TOKENS;
 const EVALUATION_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
@@ -110,23 +106,27 @@ const EVALUATION_FUNCTION = {
 };
 
 export async function runEvaluationModel(input: EvaluationModelInput): Promise<EvaluationModelOutput> {
-  if (!OPENAI_API_KEY) {
+  const modelConfig = resolveStructuredModelConfig('evaluation');
+  if (!modelConfig.apiKey) {
     throw new AgentError('EvaluationModel requires OPENAI_API_KEY', 'CONFIG_MISSING', false);
   }
 
   return {
-    ...await callEvaluationModel(input),
+    ...await callEvaluationModel(input, modelConfig),
     source: 'model' as const,
   };
 }
 
-async function callEvaluationModel(input: EvaluationModelInput): Promise<EvaluationModelOutput> {
+async function callEvaluationModel(
+  input: EvaluationModelInput,
+  modelConfig: StructuredModelConfig
+): Promise<EvaluationModelOutput> {
   return callStructuredModel({
     modelRole: 'EvaluationModel',
     metricsSink: input.metricsSink,
-    apiKey: OPENAI_API_KEY!,
-    baseUrl: OPENAI_BASE_URL,
-    model: OPENAI_MODEL,
+    apiKey: modelConfig.apiKey!,
+    baseUrl: modelConfig.baseUrl,
+    model: modelConfig.model,
     systemPrompt: SYSTEM_PROMPT,
     input: buildEvaluationModelInput(input),
     functionDefinition: EVALUATION_FUNCTION,
