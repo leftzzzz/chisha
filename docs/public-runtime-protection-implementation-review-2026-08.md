@@ -27,6 +27,7 @@
 | P1 | session DELETE 未参与互斥 | 运行结束可把刚删除的 session 重新写回 | DELETE 取得同一 session lease；API 并发测试验证第二 turn 在 Runtime 前 429 |
 | P1 | owner token 只靠浏览器 `Max-Age` 过期 | 被复制的旧 token 可无限期重放 | 到期时间纳入 HMAC，服务端校验并在合法访问时重新签发；生产密钥至少 32 字符 |
 | P1 | owner Cookie 与 session 都是 30 分钟 | 长运行结束续期后，Cookie 可能先于 session 过期 | Cookie 调整为 60 分钟并滚动续期，session 保持 30 分钟 |
+| P1 | 公网 HTTP 页面仍可进入应用，但生产 owner Cookie 带 `Secure` | 手机内置浏览器从 HTTP 链接进入后不会回传 owner Cookie；追问答案被识别成另一 owner，错误显示“会话已过期” | Worker 在 OpenNext、会话和限流逻辑前将非本地 HTTP 以同 URL `308` 升级到 HTTPS；线上 trace 已确认失败请求使用 HTTP 且缺少原 owner，单测锁定协议、目标 URL 和本地例外 |
 | P1 | 同批所有 Provider 调用失败被当作零结果 | 故障被误报为“附近没有餐厅”，继续浪费预算 | 保留部分成功；整批失败时抛出首个类型化错误 |
 | P1 | 生产接受普通转发头作为客户端 IP | 攻击者可伪造 IP 绕过入口提示限流 | 生产只信任 `CF-Connecting-IP`；缺失时统一进入保守 key |
 | P2 | 偏好数组、地址、session id 等字段无界 | 单请求可放大解析、合并和 prompt 体积 | schema 增加数量、长度、坐标和值域上限，并对声明体积做早拒绝 |
@@ -42,6 +43,8 @@
 - `npm test -- --runInBand --silent`：48 suites、425 tests 全部通过；其中两项延迟 cleanup
   测试分别锁定正常 close 顺序与 cancel 后的运行退出顺序。
 - `npm run eval`：15/15 通过，搜索步数、关键词、评估调用和并发基线无变化。
+- 移动端 HTTP 会话修复增量：`npm test -- --runInBand` 49 suites、432 tests 通过；
+  `npm run type-check`、`npm run lint`、`npm run build:cloudflare` 和真实 Worker dry-run 均通过。
 - `npm run build`：通过。
 - `npm run build:cloudflare`：通过。
 - `npm run deploy -- --dry-run`：通过，bundle 中包含 DO、D1、五个 Rate Limiting binding；
@@ -66,6 +69,9 @@
    再验证 Version upload 已恢复。
 5. 单元测试验证算法与 API 竞争，Wrangler dry-run 验证绑定和 bundle；真实多 PoP 协调、
    secret 和供应商调用只能在合并部署后的线上验收最终确认。
+6. `308` 只把请求升级到同一 host、path 和 query，不接受外部跳转目标；永久缓存符合“公网
+   永不提供 HTTP 应用”的不变量。部署前已经打开的 HTTP 标签页可能需要刷新一次，部署后
+   新的页面导航必须在加载应用前进入 HTTPS。Zone 的 Always Use HTTPS 可继续作为纵深保护。
 
 审查结论：代码层无未处理 P0/P1；可以进入 PR 与生产灰度，但必须完成上述线上验收后才算
 目标完成。

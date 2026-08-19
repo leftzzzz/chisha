@@ -30,6 +30,9 @@ Durable Object 调度和相关测试。产品要求见
 
 ## 公网入口
 
+- Worker 最外层必须将非本地公网 `http:` 请求以 `308` 重定向到同 host、path 和 query 的
+  `https:` URL，再交给 OpenNext。不得使用会把 POST 改写为 GET 的 `301/302`；`localhost`、
+  `*.localhost`、`127.0.0.1`、`0.0.0.0` 和 `[::1]` 保留 HTTP 本地开发能力。
 - 请求体必须在昂贵准入前完成有界 schema 校验。
 - `getClientIP` 在 Cloudflare 环境优先 `CF-Connecting-IP`，其次才使用平台确认的其他头；
   `X-Forwarded-For` 不能覆盖可信头。
