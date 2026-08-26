@@ -71,9 +71,9 @@
   发布 trace 必须能与该 verdict 对照。
 - ResultAssembler 只接收 guarded result，执行字段映射和基于已有事实的展示格式处理；
   不得调用 FinalGuard、推断搜索策略或改变候选集合和顺序。
-- UI reducer 可以裁剪固定展示上限和去除同一物理地点，但不能用候补补足转盘、按品牌
-  折叠不同门店或改变 primary/backup 分区，超出展示上限的 primary 也不得重标为 backup。
-  候补进入转盘必须来自显式用户动作。
+- guarded result 进入 UI 后的裁剪、地点去重、primary/backup 分区和候补显式加入行为由
+  [Application Behavior Spec](./application-behavior.md) 统一约束；本 Spec 不再维护第二份
+  reducer 规则。
 - 当前 workflow 对不合格 finish proposal 执行上述单调降级，并复用现有追问/安全结束
   逻辑。不得为模拟尚不存在的 model-tool loop 增加伪模型重试。
 

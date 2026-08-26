@@ -5,56 +5,78 @@ body:
   - type: markdown
     attributes:
       value: |
-        请**不要**在 issue 里粘贴任何 API Key。日志里的 key、jscode、坐标请自行打码。
-        安全问题不要开 issue，见 [SECURITY.md](../blob/main/SECURITY.md)。
+        不要粘贴 API Key、Cookie 或未打码的坐标、完整对话和 trace。
+        安全问题不要创建公开 issue，请使用 [GitHub 私密安全通告](https://github.com/leftzzzz/chisha/security/advisories/new)。
 
   - type: textarea
-    id: what-happened
+    id: actual
     attributes:
-      label: 现象
-      description: 实际发生了什么，你期望发生什么
+      label: 实际现象
+      description: 实际发生了什么？包含可见错误码或界面状态。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
     validations:
       required: true
 
   - type: textarea
     id: repro
     attributes:
-      label: 复现步骤
-      description: 包括你输入的自然语言查询原文——Agent 的行为高度依赖具体措辞
+      label: 最小复现步骤
+      description: Agent 行为问题请保留原始措辞，但把位置和个人信息替换为测试数据。
       placeholder: |
-        1. 输入「附近有什么不辣的川菜」
-        2. ...
+        1. 选择测试位置
+        2. 输入「附近有什么不辣的川菜」
+        3. ...
     validations:
       required: true
 
   - type: dropdown
     id: area
     attributes:
-      label: 出问题的部分
+      label: 影响范围
       options:
-        - Agent 行为（搜索/追问/推荐结果不对）
-        - 前端交互（转盘、地图、输入）
-        - 部署（Vercel / Cloudflare Workers / D1）
+        - Agent 搜索、追问或推荐分区
+        - 转盘、地图、历史或分享
+        - API、会话或流式事件
+        - Cloudflare 部署、D1 或 Durable Object
+        - 文档或开发工具
         - 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: 运行环境
+      options:
+        - 本地 Next.js 开发模式
+        - 本地 Cloudflare preview
+        - Cloudflare Workers 生产环境
+        - 其他或未知
     validations:
       required: true
 
   - type: input
     id: model
     attributes:
-      label: 使用的模型
-      description: OPENAI_MODEL 及各子 Agent 的模型覆盖（不要贴 key 和 base_url 里的凭证）
-      placeholder: deepseek-v4-flash-0731
+      label: 模型配置（适用时）
+      description: 只写模型名称和 model role 覆盖；不要粘贴 Key 或带凭证的 base URL。
+      placeholder: OPENAI_MODEL=...
 
   - type: textarea
     id: logs
     attributes:
-      label: 日志 / trace
-      description: 相关的服务端日志或 agent trace，打码后粘贴
+      label: 已打码日志或 trace 摘要
+      description: 优先提供事件类型、错误码和 trace id，不要提供完整 session 内容。
       render: text
 
   - type: input
     id: env
     attributes:
-      label: 环境
-      placeholder: Node 20.11 / macOS 15 / Chrome 130
+      label: 系统与浏览器
+      placeholder: Node 20 / macOS / Chrome

@@ -1,569 +1,188 @@
-# 测试指南
+# 测试与验证指南
 
-## 概述
+ChiSha 使用 Jest、React Testing Library、deterministic Agent eval、文档检查和 Cloudflare
+dry-run。测试应证明行为与契约，不依赖伪造的命令输出或过时的文件清单。
 
-本文档介绍"今天吃啥"项目的测试策略、测试工具和测试方法。
-
-## 测试框架
-
-### 技术栈
-- **测试运行器**：Jest 29.7
-- **组件测试**：React Testing Library
-- **用户交互**：@testing-library/user-event
-- **断言增强**：@testing-library/jest-dom
-- **测试环境**：jsdom
-
-### 配置文件
-- `jest.config.js` - Jest 配置
-- `jest.setup.js` - Jest 设置文件（其中 `AGENT_DETERMINISTIC=1` 让 Agent 默认
-  走确定性分支；要测模型分支的用例需在用例内删除该变量并 mock
-  `@/lib/withTimeout`）
-- `jest.eval.config.js` - Agent 行为评测配置（`npm run eval`，见下）
-
-## Agent 行为评测（`npm run eval`）
-
-单测锁的是分支，锁不住"这一轮总共搜了几步、评了几次、追没追问"。
-`evals/` 用桩模型 + fixture 高德驱动真实 `runSearchAgentV3`，度量串行搜索步数、
-评估调用数、重复评估数、追问率和主推荐数，并与 `evals/baseline.json` 对比。
+## 快速命令
 
 ```bash
-npm run eval             # 跑 golden case，输出报告与基线 diff
-npm run eval:baseline    # 同上并更新基线
-EVAL_MODE=live npm run eval   # 改用真实模型（需要 OPENAI_API_KEY）
-```
+# 文档结构与检查器回归
+npm run docs:check
+npm run test:docs
 
-改 `lib/agent/orchestrator/**` / `evaluationCache.ts` 之后必须跑，
-新增策略要在 `evals/cases/` 配套加 golden case。
-
-**改模型角色的桩时要连契约一起改**：eval 桩若仍按旧契约返回数据，
-会用旧行为掩盖新行为的差异，"基线无变化"就不再是证据（阶段 4 踩过）。
-
-### 架构约束测试
-
-两条约束写成了会变红的测试，不要绕过它们：
-
-- `__tests__/lib/agent/layering.test.ts` — 依赖方向（模型角色不得依赖编排层、
-  模型角色之间不得互相依赖、规则库不得反向依赖）
-- `__tests__/lib/agent/models/modelRoleContracts.test.ts` — 编排状态
-  （authorizations / attempts / goalVersion 等）不得出现在一次性模型角色的输入里
-
-## 运行测试
-
-### 基本命令
-
-```bash
-# 运行所有测试
+# 快速单测
 npm test
 
-# 运行 CI 模式的全量测试和覆盖率门禁
+# CI 单测、串行执行并采集 coverage
 npm run test:ci
 
-# 监听模式（开发推荐）
+# watch / 单独 coverage
 npm run test:watch
-
-# 生成覆盖率报告
 npm run test:coverage
 
-# 运行特定测试文件
-npm test storage.test.ts
+# TypeScript 与 ESLint
+npm run type-check
+npm run lint
 
-# 运行匹配模式的测试
-npm test -- --testNamePattern="搜索"
+# Agent workflow 行为评测
+npm run eval
+
+# 构建与 Cloudflare 部署包验证
+npm run build
+npm run build:cloudflare
+npm run deploy -- --dry-run
 ```
 
-### 查看覆盖率报告
+## 测试分层
+
+### Jest 单元与集成测试
+
+`__tests__/` 镜像主要源码边界：
+
+- `__tests__/context/` - Reducer 状态、主推荐/候补分区和转盘操作。
+- `__tests__/hooks/`、`__tests__/components/` - 客户端搜索和进度展示。
+- `__tests__/app/api/` - chat/search/session、geocode、map config 和 Amap proxy。
+- `__tests__/lib/agent/` - goal、model roles、policy、runtime、FinalGuard、D1 session 和 trace。
+- `__tests__/lib/` - provider scheduler、rate limit、storage、HTTPS 与 provider adapters。
+
+测试环境是 `jsdom`，公共 alias `@/*` 与应用一致。`npm test -- <pattern>` 可以运行最接近
+改动的用例，例如：
 
 ```bash
-# 生成覆盖率
-npm run test:coverage
-
-# 在浏览器中查看
-open coverage/lcov-report/index.html  # Mac
-start coverage/lcov-report/index.html # Windows
+npm test -- AppReducer.test.ts
+npm test -- chat.test.ts
+npm test -- finalGuard.test.ts
 ```
 
-## 测试结构
-
-### 目录组织
-
-测试统一位于 `__tests__/`，并按源码责任分为 `app/api/`、`components/`、`context/`、
-`hooks/` 与 `lib/`。Agent 的模型角色、orchestrator、session 和契约测试继续细分在
-`__tests__/lib/agent/`。API 路由与 Durable Object 边界测试使用 Node test environment；
-组件和 hooks 使用 jsdom。
-
-当前全量测试包含 API、组件、Context/Reducer、hooks、存储、供应商调度、Agent Runtime 与
-架构约束，不再以早期“待实现”目录清单作为覆盖状态依据。
-
-## 已实现的测试
-
-### Storage 测试 (`__tests__/storage.test.ts`)
-
-#### 测试覆盖
-
-##### 1. 基础功能测试
-```typescript
-describe('Storage - 基础功能', () => {
-  test('getRecords - 空历史记录')
-  test('saveRecord - 保存新记录')
-  test('deleteRecord - 删除记录')
-  test('clearRecords - 清空所有记录')
-});
-```
-
-##### 2. 搜索功能测试
-```typescript
-describe('Storage - 搜索功能', () => {
-  test('searchHistory - 搜索餐厅名称')
-  test('searchHistory - 空关键词返回所有记录')
-});
-```
-
-##### 3. 统计功能测试
-```typescript
-describe('Storage - 统计功能', () => {
-  test('getStats - 空记录返回零值')
-  test('getStats - 统计最常去的餐厅')
-});
-```
-
-##### 4. 导入导出测试
-```typescript
-describe('Storage - 导入导出', () => {
-  test('exportHistory - 导出为JSON')
-  test('importHistory - 导入JSON数据')
-  test('importHistory - 去重合并')
-});
-```
-
-##### 5. 边界情况测试
-```typescript
-describe('Storage - 边界情况', () => {
-  test('保存记录数量限制')
-  test('删除不存在的记录')
-  test('导入无效JSON')
-});
-```
-
-#### 运行示例
+### Agent deterministic eval
 
 ```bash
-npm test storage.test.ts
-
-# 输出：
-PASS  __tests__/storage.test.ts
-  Storage - 基础功能
-    ✓ getRecords - 空历史记录 (2 ms)
-    ✓ saveRecord - 保存新记录 (1 ms)
-    ✓ deleteRecord - 删除记录 (1 ms)
-    ✓ clearRecords - 清空所有记录 (1 ms)
-  Storage - 搜索功能
-    ✓ searchHistory - 搜索餐厅名称 (2 ms)
-    ✓ searchHistory - 空关键词返回所有记录 (1 ms)
-  ...
-
-Test Suites: 1 passed, 1 total
-Tests:       17 passed, 17 total
+npm run eval
 ```
 
-## 编写测试指南
-
-### 1. 单元测试模板
-
-```typescript
-import { functionToTest } from '@/lib/module';
-
-describe('模块名 - 功能描述', () => {
-  // 每个测试前执行
-  beforeEach(() => {
-    // 初始化测试数据
-  });
-
-  // 每个测试后执行
-  afterEach(() => {
-    // 清理测试环境
-  });
-
-  test('应该正确处理正常情况', () => {
-    // Arrange - 准备测试数据
-    const input = 'test';
-
-    // Act - 执行测试函数
-    const result = functionToTest(input);
-
-    // Assert - 验证结果
-    expect(result).toBe('expected');
-  });
-
-  test('应该正确处理边界情况', () => {
-    expect(() => functionToTest(null)).toThrow();
-  });
-});
-```
-
-### 2. 组件测试模板（待实现）
-
-```typescript
-import { render, screen, fireEvent } from '@testing-library/react';
-import { Button } from '@/components/ui/Button';
-
-describe('Button 组件', () => {
-  test('应该正确渲染', () => {
-    render(<Button>点击</Button>);
-    expect(screen.getByText('点击')).toBeInTheDocument();
-  });
-
-  test('应该响应点击事件', () => {
-    const handleClick = jest.fn();
-    render(<Button onClick={handleClick}>点击</Button>);
-
-    fireEvent.click(screen.getByText('点击'));
-    expect(handleClick).toHaveBeenCalledTimes(1);
-  });
-
-  test('禁用状态不应响应点击', () => {
-    const handleClick = jest.fn();
-    render(
-      <Button disabled onClick={handleClick}>
-        点击
-      </Button>
-    );
-
-    fireEvent.click(screen.getByText('点击'));
-    expect(handleClick).not.toHaveBeenCalled();
-  });
-});
-```
-
-### 3. Hooks 测试模板（待实现）
-
-```typescript
-import { renderHook, act } from '@testing-library/react';
-import { useAppState } from '@/hooks/useAppState';
-
-describe('useAppState Hook', () => {
-  test('应该返回初始状态', () => {
-    const { result } = renderHook(() => useAppState());
-
-    expect(result.current.state.step).toBe('INPUT');
-    expect(result.current.state.restaurants).toEqual([]);
-  });
-
-  test('应该更新查询', () => {
-    const { result } = renderHook(() => useAppState());
-
-    act(() => {
-      result.current.setQuery('我想吃火锅');
-    });
-
-    expect(result.current.state.userQuery).toBe('我想吃火锅');
-  });
-});
-```
-
-## Mock 使用指南
-
-### 1. Mock localStorage
-
-```typescript
-const localStorageMock = (() => {
-  let store: Record<string, string> = {};
-
-  return {
-    getItem: (key: string) => store[key] || null,
-    setItem: (key: string, value: string) => {
-      store[key] = value;
-    },
-    removeItem: (key: string) => {
-      delete store[key];
-    },
-    clear: () => {
-      store = {};
-    },
-  };
-})();
-
-Object.defineProperty(window, 'localStorage', {
-  value: localStorageMock,
-});
-```
-
-### 2. Mock fetch
-
-```typescript
-global.fetch = jest.fn(() =>
-  Promise.resolve({
-    ok: true,
-    json: () => Promise.resolve({ data: 'test' }),
-  })
-) as jest.Mock;
-
-// 使用后清理
-afterEach(() => {
-  jest.restoreAllMocks();
-});
-```
-
-### 3. Mock 环境变量
-
-```typescript
-const originalEnv = process.env;
-
-beforeEach(() => {
-  process.env = {
-    ...originalEnv,
-    AMAP_KEY: 'test-key',
-  };
-});
-
-afterEach(() => {
-  process.env = originalEnv;
-});
-```
-
-## 最佳实践
-
-### 1. 测试命名
-- 使用描述性名称
-- 说明测试的功能和预期
-- 格式：`应该/应该正确 + 动作 + 结果`
-
-```typescript
-✅ test('应该在输入为空时返回空数组')
-✅ test('应该正确处理无效的 JSON 格式')
-❌ test('测试1')
-❌ test('it works')
-```
-
-### 2. AAA 模式
-- **Arrange**（准备）：设置测试数据
-- **Act**（执行）：调用被测函数
-- **Assert**（断言）：验证结果
-
-```typescript
-test('示例', () => {
-  // Arrange
-  const input = 'test';
-  const expected = 'TEST';
-
-  // Act
-  const result = toUpperCase(input);
-
-  // Assert
-  expect(result).toBe(expected);
-});
-```
-
-### 3. 独立性
-- 每个测试独立运行
-- 不依赖其他测试
-- 使用 beforeEach/afterEach 清理
-
-```typescript
-let testData;
-
-beforeEach(() => {
-  testData = createTestData(); // 每次都重新创建
-});
-
-afterEach(() => {
-  cleanup(); // 清理副作用
-});
-```
-
-### 4. 测试覆盖
-- 正常情况
-- 边界情况
-- 错误情况
-- 异步情况
-
-```typescript
-describe('功能测试', () => {
-  test('正常情况')
-  test('空输入')
-  test('无效输入')
-  test('超大输入')
-  test('异步成功')
-  test('异步失败')
-});
-```
-
-## 覆盖率目标
-
-### 当前门禁与长期目标
-
-`npm run test:ci` 在 CI 中真实执行 `jest --coverage`。截至 2026-08-19 的防回退阈值是：
-
-| 指标 | 当前门禁 | 本轮实测 | 长期目标 |
-|------|---------:|---------:|---------:|
-| Statements | 56% | 56.69% | ≥ 70% |
-| Branches | 49% | 49.33% | ≥ 70% |
-| Functions | 63% | 63.48% | ≥ 70% |
-| Lines | 57% | 57.88% | ≥ 70% |
-
-阈值的唯一真源是 `jest.config.js`。正常变更不得下调；后续应优先补 hooks、UI 工作流与
-低覆盖公共库的行为测试，再逐步提高阈值。不要通过排除可执行业务代码制造覆盖率增长。
-
-### 长期模块目标
-| 模块 | 目标 | 优先级 |
-|------|------|--------|
-| lib/ | ≥ 80% | 高 |
-| hooks/ | ≥ 70% | 高 |
-| components/ui/ | ≥ 60% | 中 |
-| components/功能/ | ≥ 60% | 中 |
-| app/ | ≥ 50% | 低 |
-
-## 常用断言
-
-### Jest 断言
-
-```typescript
-// 相等性
-expect(value).toBe(expected);           // 严格相等 ===
-expect(value).toEqual(expected);        // 深度相等
-expect(value).not.toBe(expected);       // 不相等
-
-// 真假性
-expect(value).toBeTruthy();
-expect(value).toBeFalsy();
-expect(value).toBeNull();
-expect(value).toBeUndefined();
-expect(value).toBeDefined();
-
-// 数字
-expect(number).toBeGreaterThan(3);
-expect(number).toBeLessThan(5);
-expect(number).toBeCloseTo(0.3);        // 浮点数
-
-// 字符串
-expect(string).toMatch(/pattern/);
-expect(string).toContain('substring');
-
-// 数组
-expect(array).toContain(item);
-expect(array).toHaveLength(3);
-
-// 对象
-expect(object).toHaveProperty('key');
-expect(object).toMatchObject({ key: 'value' });
-
-// 异常
-expect(() => fn()).toThrow();
-expect(() => fn()).toThrow('error message');
-
-// 异步
-await expect(promise).resolves.toBe(value);
-await expect(promise).rejects.toThrow();
-```
-
-### Testing Library 断言
-
-```typescript
-// DOM 查询
-screen.getByText('text');               // 存在且唯一
-screen.queryByText('text');             // 可能不存在
-screen.findByText('text');              // 异步查找
-
-// 断言
-expect(element).toBeInTheDocument();
-expect(element).toBeVisible();
-expect(element).toBeDisabled();
-expect(element).toHaveClass('class-name');
-expect(element).toHaveAttribute('attr', 'value');
-expect(input).toHaveValue('value');
-```
-
-## 调试技巧
-
-### 1. 查看 DOM 结构
-
-```typescript
-import { screen, render } from '@testing-library/react';
-
-test('调试', () => {
-  render(<Component />);
-  screen.debug(); // 打印整个 DOM
-  screen.debug(screen.getByRole('button')); // 打印特定元素
-});
-```
-
-### 2. 使用 test.only
-
-```typescript
-test.only('只运行这个测试', () => {
-  // 只运行这一个测试
-});
-```
-
-### 3. 查看失败详情
+eval 使用桩模型和 `evals/fixtures/amap.json` 驱动真实 Runtime，适合检查：
+
+- 每轮搜索步数、批次和 Provider 调用量；
+- 候选评估次数、重复评估和缓存；
+- 事件、追问、停止原因和主推荐/候补分区；
+- 会话恢复、退化路径和预算行为。
+
+它不证明真实模型能正确理解所有自然语言，也不应产生真实供应商请求。修改 baseline 只能
+在行为变化已审查且被接受后执行：
 
 ```bash
-npm test -- --verbose
+npm run eval:baseline
 ```
 
-### 4. 使用 VSCode 断点
+PR 中应说明 baseline 为什么变化，而不是只提交新快照。
 
-在 `.vscode/launch.json` 中添加：
+### 文档检查
 
-```json
-{
-  "type": "node",
-  "request": "launch",
-  "name": "Jest Debug",
-  "program": "${workspaceFolder}/node_modules/.bin/jest",
-  "args": ["--runInBand", "--no-cache"],
-  "console": "integratedTerminal"
-}
+```bash
+npm run docs:check
+npm run test:docs
 ```
 
-## 待实现的测试
+`docs:check` 检查本地 Markdown 链接、Requirements/Specs/Technical 索引覆盖、归档状态和
+私有 LoopX/Codex 状态 ignore。`test:docs` 使用三个 fixture 验证：
 
-### 高优先级
-- [ ] API 端点测试
-  - [ ] `/api/understand`
-  - [ ] `/api/search`
-  - [ ] `/api/geocode`
-- [ ] Hooks 测试
-  - [ ] `useAppState`
-  - [ ] `useLocation`
-  - [ ] `useMediaQuery`
+- 普通 Markdown 中的断链会失败；
+- fenced code block 中的示例链接是允许例外；
+- 相邻非 Markdown 文件不进入检查。
 
-### 中优先级
-- [ ] UI 组件测试
-  - [ ] Button
-  - [ ] Input
-  - [ ] Modal
-  - [ ] Card
-- [ ] 功能组件测试
-  - [ ] Turntable
-  - [ ] SearchPanel
-  - [ ] RestaurantCard
+Agent 路由结构还需运行外部 `agents-spec` guard；仓库不复制该工具实现。
 
-### 低优先级
-- [ ] 页面测试
-  - [ ] HomePage
-  - [ ] HistoryPage
-- [ ] E2E 测试
-  - [ ] 完整用户流程
-  - [ ] 跨页面交互
+### 构建与部署验证
 
-## 参考资源
+- `npm run build` 检查标准 Next.js build。
+- `npm run build:cloudflare` 生成 OpenNext Worker。
+- `npm run deploy -- --dry-run` 验证 Worker bundle 和 bindings，不上传 Worker、不迁移远程
+  D1。
 
-### 文档
-- [Jest 官方文档](https://jestjs.io/)
-- [React Testing Library](https://testing-library.com/react)
-- [Testing Library 备忘单](https://testing-library.com/docs/react-testing-library/cheatsheet)
+Cloudflare runtime、binding、migration、HTTPS 或 Provider 调度变化必须运行后两项。
 
-### 示例
-- 项目中的 `__tests__/storage.test.ts`
-- React Testing Library [示例](https://testing-library.com/docs/react-testing-library/example-intro)
+## 覆盖率门槛
 
-## 总结
+唯一真源是 [`jest.config.js`](../jest.config.js)：
 
-好的测试应该：
-- ✅ 快速运行
-- ✅ 独立可靠
-- ✅ 易于维护
-- ✅ 清晰明了
-- ✅ 覆盖关键路径
+| Metric | Current global threshold |
+| --- | ---: |
+| Branches | 49% |
+| Functions | 63% |
+| Lines | 57% |
+| Statements | 56% |
 
-记住：**测试不是负担，而是信心的来源！**
+70% 是长期方向，不是当前门禁。正常变更不得下调阈值、排除可执行代码或用无行为价值的
+断言制造覆盖率。提高阈值时先验证 CI 结果稳定，再修改 `jest.config.js` 和
+[CI/CD Spec](./specs/ci-cd-quality-gates.md)。
+
+## 模型分支测试
+
+`jest.setup.js` 默认设置：
+
+```ts
+process.env.AGENT_DETERMINISTIC = '1';
+```
+
+需要覆盖真实模型调用分支的单测必须在用例内：
+
+1. `delete process.env.AGENT_DETERMINISTIC`；
+2. mock `@/lib/withTimeout` 的 `fetchWithTimeout`；
+3. 返回符合模型 schema 的结构化数据；
+4. 在用例结束后恢复环境和 mock。
+
+参考 `__tests__/lib/agent/models/searchReplanModel.test.ts`。单元测试不得依赖公网模型端点。
+
+## 新增用例
+
+### 行为修复
+
+- 先写能复现问题的失败用例，再修复实现。
+- 断言外部行为、状态或契约，不锁定无关内部调用顺序。
+- 同时覆盖成功、边界和确定失败；保留合法零值、缺失、未知与失败的差异。
+
+### API
+
+- 直接调用 route handler，mock Provider、D1/DO 和 request headers。
+- 同时检查请求上限、状态码、`Retry-After`、owner 越权和 abort/cleanup。
+- SSE 用例要检查事件分区、终止顺序和 heartbeat，不只检查 HTTP 200。
+
+### Agent workflow
+
+- Policy 测试锁定输入状态到 action 的决定。
+- Runtime 测试锁定 I/O、并发、事件、持久化和错误回收。
+- 模型角色测试锁定 schema、prompt 输入边界和类型化失败。
+- FinalGuard 测试锁定单调删除/降级/保序，不允许自动补位。
+- 行为改变除 Jest 外还必须有 `npm run eval` 证据。
+
+### 文档规则
+
+新的确定性规则必须有违反用例、允许例外或明确无例外，以及相邻无关用例。规则无法稳定
+自动判断时留在 Spec 和 review，不要加入脚本。
+
+## 手工 API smoke
+
+`npm run test:api` 会请求 `NEXT_PUBLIC_APP_URL`（默认 `http://localhost:3000`），并打印请求
+与响应。它需要已经启动的服务和可用凭证，可能消耗真实模型/地图额度，因此：
+
+- 不在 CI 中运行；
+- 不使用真实用户查询或位置；
+- 不把输出直接提交到 issue、PR 或仓库；
+- 失败不替代 route handler 单测的诊断。
+
+## 按改动选择验证
+
+| Change | Minimum validation |
+| --- | --- |
+| 文档或模板 | `docs:check`, `test:docs`; AGENTS/Specs 变更再跑 agents-spec guard |
+| Reducer、storage、UI hook | 对应 Jest + type-check + lint |
+| API schema、SSE、session | 对应 API/Jest + type-check + lint |
+| Agent policy/runtime/model role | 对应 Jest + `npm run eval` + type-check + lint |
+| Cloudflare binding/DO/migration | 相关 Jest + type-check + lint + OpenNext build + dry-run |
+| 共享或跨模块契约 | `npm run test:ci`，并扩大到受影响的 eval/build |
+
+## CI
+
+GitHub Actions 使用 Node 20，先运行文档检查，再运行 type-check、lint、`test:ci` 和 eval；
+质量 job 成功后才执行 Cloudflare build 与 dry-run。CI 不持有生产凭证，也不证明真实模型
+或真实账号配额的线上质量。

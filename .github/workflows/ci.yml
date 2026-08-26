@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   quality:
-    name: type-check / lint / coverage / eval
+    name: docs / type-check / lint / coverage / eval
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -29,6 +29,12 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Documentation structure and links
+        run: npm run docs:check
+
+      - name: Documentation checker tests
+        run: npm run test:docs
 
       - name: Type check
         run: npm run type-check
