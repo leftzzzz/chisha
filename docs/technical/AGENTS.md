@@ -7,12 +7,13 @@
 搜索方式：
 
 ```bash
-rg -n "组件名|方案|权衡|迁移" docs/technical docs \
-  --glob '*.md' --glob '!specs/**' --glob '!requirements/**'
+rg -n "组件名|方案|权衡|迁移" docs/technical --glob '*.md'
 ```
 
 ## Active Decisions
 
+- [ChiSha 应用架构](./application-architecture.md) - 浏览器、API、Agent、持久化、Cloudflare
+  生产拓扑和质量边界的当前技术说明。
 - [当前餐厅搜索 Workflow 架构决策（2026-08）](./current-agent-workflow.md) - 当前生效的
   multi-model workflow、模型角色、Policy、Runtime、Provider 和重新评估边界。
 - [Runtime FinalGuard 与结果装配](./runtime-final-guard.md) - Runtime 完成协议、单调
@@ -27,5 +28,5 @@ rg -n "组件名|方案|权衡|迁移" docs/technical docs \
 - [Lead Agent / orchestrator-worker 备选方案](./agent-architecture-root-decision-2026-08.md) -
   已评估但暂不采用；仅供未来重新评估，不是当前实现依据或迁移清单。
 
-历史 review、实施方案和完成报告继续保留在 `docs/` 与 `docs/archive/`，用于理解当前代码
-来源；文件顶部的状态说明决定其是否仍可作为实现依据。
+历史 review、实施方案和完成报告统一保留在 `docs/archive/`，仅用于理解当前代码来源，
+不作为实现依据。

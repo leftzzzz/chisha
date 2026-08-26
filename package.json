@@ -36,6 +36,8 @@
     "test:api": "node scripts/test-api.js",
     "eval": "jest --config jest.eval.config.js --runInBand",
     "eval:baseline": "EVAL_UPDATE_BASELINE=1 jest --config jest.eval.config.js --runInBand",
+    "docs:check": "node scripts/check-docs.mjs",
+    "test:docs": "node --test scripts/__tests__/check-docs.test.mjs",
     "check": "node scripts/check-setup.js"
   },
   "dependencies": {

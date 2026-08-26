@@ -1,3 +1,5 @@
+> 状态：历史归档。仅用于追溯，不是当前实现依据。
+
 # Phase 2 实现完成报告
 
 ## 项目信息
@@ -313,10 +315,10 @@ curl -X POST http://localhost:3000/api/search \
 
 | 文档 | 路径 | 内容 |
 |------|------|------|
-| 项目主文档 | [README.md](../README.md) | 项目概述、快速开始 |
-| API 文档 | [Phase2-API-Documentation.md](./Phase2-API-Documentation.md) | API 详细说明 |
+| 项目主文档 | [README.md](../../README.md) | 项目概述、快速开始 |
+| API 文档 | [Phase2-API-Documentation.md](./project-foundation/Phase2-API-Documentation.md) | API 详细说明 |
 | 技术总结 | [Phase2-Technical-Summary.md](./Phase2-Technical-Summary.md) | 技术实现细节 |
-| 快速启动 | [QUICKSTART.md](./QUICKSTART.md) | 详细安装步骤 |
+| 快速启动 | [QUICKSTART.md](./project-foundation/QUICKSTART.md) | 详细安装步骤 |
 | 文件清单 | [Phase2-Files-Checklist.md](./Phase2-Files-Checklist.md) | 所有文件说明 |
 
 ## 命令速查

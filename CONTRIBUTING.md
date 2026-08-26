@@ -1,399 +1,141 @@
-# Contributing to 今天吃啥 (ChiSha)
+# 参与 ChiSha 开发
 
-First off, thank you for considering contributing to ChiSha! It's people like you that make ChiSha such a great tool.
+感谢你参与 ChiSha。提交前请先确认问题属于当前产品边界，并让代码、测试和权威文档在同一
+变更中保持一致。
 
-## Code of Conduct
+## 报告问题
 
-By participating in this project, you are expected to uphold our Code of Conduct:
+- 先搜索已有 issue，避免重复。
+- Bug 请使用仓库的 Bug 模板，提供最小复现、期望/实际结果和环境。
+- Agent 行为问题保留原始查询措辞，但删除或打码位置、Cookie、Key、完整对话和私有 trace。
+- 功能建议先描述用户问题与验收结果，不要求提交者判断内部实现层。
+- 安全漏洞不要创建公开 issue；按 [SECURITY.md](./SECURITY.md) 使用 GitHub 私密安全通告。
 
-- Be respectful and inclusive
-- Welcome newcomers and encourage diversity
-- Focus on what is best for the community
-- Show empathy towards other community members
-
-## How Can I Contribute?
-
-### Reporting Bugs
-
-Before creating bug reports, please check the existing issues to avoid duplicates. When you create a bug report, please include as many details as possible:
-
-**Bug Report Template:**
-
-```markdown
-**Describe the bug**
-A clear and concise description of what the bug is.
-
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
-
-**Expected behavior**
-A clear and concise description of what you expected to happen.
-
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
-
-**Environment:**
- - OS: [e.g. iOS, Windows, macOS]
- - Browser: [e.g. chrome, safari]
- - Version: [e.g. 22]
- - Device: [e.g. iPhone 12, Desktop]
-
-**Additional context**
-Add any other context about the problem here.
-```
-
-### Suggesting Enhancements
-
-Enhancement suggestions are tracked as GitHub issues. When creating an enhancement suggestion, please include:
-
-**Enhancement Suggestion Template:**
-
-```markdown
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
-
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
-
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
-
-**Additional context**
-Add any other context or screenshots about the feature request here.
-```
-
-### Pull Requests
-
-1. **Fork the repository** and create your branch from `main`.
+## 开发环境
 
 ```bash
-git clone https://github.com/your-username/chisha.git
+git clone https://github.com/leftzzzz/chisha.git
 cd chisha
-git checkout -b feature/amazing-feature
-```
-
-2. **Install dependencies**
-
-```bash
 npm install
-```
-
-3. **Set up environment variables**
-
-```bash
 cp .env.example .env.local
-# Edit .env.local with your API keys
+npm run dev
 ```
 
-4. **Make your changes**
+推荐 Node.js 20。真实凭证只写入 `.env.local` 或本机的 Cloudflare secret store，不得进入
+提交、日志 fixture、截图或 issue。
 
-- Follow the existing code style
-- Write meaningful commit messages
-- Add tests for new features
-- Update documentation as needed
+## 分支与提交
 
-5. **Test your changes**
+仓库使用 `main` 作为唯一长期分支。请从最新 `main` 创建短生命周期分支：
 
 ```bash
-# Run type check
+git switch main
+git pull --ff-only
+git switch -c fix/short-description
+```
+
+不使用 `develop`、release branch 或 Git Flow。分支前缀可以使用 `feat/`、`fix/`、
+`docs/`、`refactor/`、`test/`、`chore/`。
+
+提交信息使用 Conventional Commits，优先沿用近期提交的中文 subject：
+
+```text
+feat: 增加候补餐厅筛选
+fix: 保留追问选项稳定标识
+docs: 整理公开部署说明
+```
+
+创建提交前查看近期风格：
+
+```bash
+git log -5 --pretty=format:"%s"
+```
+
+## 先读哪份文档
+
+| Change | Read first |
+| --- | --- |
+| 当前工程行为或约束 | [docs/specs/AGENTS.md](./docs/specs/AGENTS.md) |
+| 产品目标或验收标准 | [docs/requirements/AGENTS.md](./docs/requirements/AGENTS.md) |
+| 架构、方案或理由 | [docs/technical/AGENTS.md](./docs/technical/AGENTS.md) |
+| 本地开发、测试或部署 | [docs/README.md](./docs/README.md) |
+
+`docs/archive/` 只用于追溯，不能作为当前实现依据。接受新的 requirement 或 technical
+decision 时，必须在同一 PR 更新受影响的 Spec。
+
+## 实现原则
+
+- 先读目标实现、最近调用方、相关测试和适用 Spec。
+- 保持最小但完整的改动，避免无关重构和推测性兼容。
+- 在不可信输入边界校验与归一化，内部代码使用已确认契约。
+- 同一业务定义、默认值、状态语义或字段映射只保留一个权威来源。
+- 保留合法零值、缺失、未知、无结果和失败之间的差异。
+- 复用仓库现有 TypeScript、React、Zod 和测试模式；不要引入 `any` 或隐藏类型错误。
+- 注释解释非直观不变量、业务原因或失败后果，不逐行复述实现。
+
+详细规则见 [通用工程任务规则](./docs/specs/general-engineering-task-rules.md)。
+
+## Agent 相关改动
+
+当前架构是确定性 policy 控制的 multi-model workflow。一次结构化模型调用是 model role，
+不是 subagent；Lead Agent/model-tool loop 是已暂缓备选，不是当前 PR 验收项。
+
+修改 `lib/agent/`、`app/api/agent/` 或 `evals/` 前阅读：
+
+- [Restaurant Search Agent Spec](./docs/specs/restaurant-search-agent.md)
+- [当前餐厅搜索 Workflow](./docs/technical/current-agent-workflow.md)
+- [Public API and Streaming Spec](./docs/specs/public-api-and-streaming.md)
+
+不要通过新增菜名、菜系、品牌或失败 query 词表修复语义问题。Agent 行为变化必须有通用
+回归测试，并运行 `npm run eval`。
+
+## 验证
+
+所有 PR 至少运行与改动最近的检查：
+
+```bash
+npm run docs:check
+npm run test:docs
 npm run type-check
-
-# Run linter
 npm run lint
-
-# Run tests
 npm test
-
-# Build the project
-npm run build
 ```
 
-6. **Commit your changes**
+根据范围扩大验证：
 
-We follow [Conventional Commits](https://www.conventionalcommits.org/):
+| Change | Additional checks |
+| --- | --- |
+| 共享行为或大范围代码 | `npm run test:ci` |
+| Agent policy/runtime/model role | 相关 Jest + `npm run eval` |
+| Cloudflare binding、DO、migration | `npm run build:cloudflare` + `npm run deploy -- --dry-run` |
+| 标准 Next.js 构建行为 | `npm run build` |
+| AGENTS/Specs 路由 | agents-spec `audit_agents_md.py --check` |
 
-```bash
-git commit -m "feat: add amazing feature"
-git commit -m "fix: resolve issue with turntable"
-git commit -m "docs: update README"
-```
+覆盖率门槛以 `jest.config.js` 为唯一真源，不得通过降低阈值或排除业务代码绕过。
 
-**Commit types:**
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes (formatting, etc.)
-- `refactor`: Code refactoring
-- `test`: Adding or updating tests
-- `chore`: Maintenance tasks
-- `perf`: Performance improvements
+## Pull Request
 
-7. **Push to your fork**
+PR 应包含：
 
-```bash
-git push origin feature/amazing-feature
-```
+- 要解决的问题和用户/系统影响；
+- 实际行为变化与保持不变的外部契约；
+- 新增或更新的测试；
+- 已执行命令及结果；
+- 未执行检查、环境限制和剩余风险；
+- Agent eval baseline 变化的原因（适用时）；
+- 数据、部署或迁移步骤（适用时）。
 
-8. **Open a Pull Request**
+不要复制 issue/PR 模板到正文文档，直接填写仓库提供的模板。普通 CI 不应需要生产凭证，
+PR 也不得执行远程 D1 migration 或真实部署。
 
-- Go to the original repository
-- Click "New Pull Request"
-- Select your branch
-- Fill out the PR template
-- Wait for review
+## 文档
 
-**Pull Request Template:**
-
-```markdown
-## Description
-Brief description of the changes
-
-## Type of Change
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
-
-## How Has This Been Tested?
-Describe the tests you ran to verify your changes.
-
-## Checklist:
-- [ ] My code follows the code style of this project
-- [ ] I have performed a self-review of my own code
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] I have made corresponding changes to the documentation
-- [ ] My changes generate no new warnings
-- [ ] I have added tests that prove my fix is effective or that my feature works
-- [ ] New and existing unit tests pass locally with my changes
-- [ ] Any dependent changes have been merged and published
-```
-
-## Development Guidelines
-
-### Code Style
-
-- **TypeScript**: Use strict mode, no `any` types
-- **Naming Conventions**:
-  - Components: PascalCase (`MyComponent.tsx`)
-  - Hooks: camelCase with `use` prefix (`useMyHook.ts`)
-  - Utils: camelCase (`myUtil.ts`)
-  - Constants: UPPER_CASE (`MY_CONSTANT`)
-- **File Organization**:
-  - Components in `components/`
-  - Hooks in `hooks/`
-  - Utils in `lib/`
-  - Types in `types/`
-  - API routes in `app/api/`
-
-### Component Guidelines
-
-```typescript
-/**
- * Brief description of what the component does
- *
- * @example
- * ```tsx
- * <MyComponent prop1="value" />
- * ```
- */
-export default function MyComponent({ prop1 }: MyComponentProps) {
-  // Component logic
-  return (
-    // JSX
-  );
-}
-
-interface MyComponentProps {
-  /** Description of prop1 */
-  prop1: string;
-  /** Description of prop2 */
-  prop2?: number;
-}
-```
-
-### Hook Guidelines
-
-```typescript
-/**
- * Brief description of what the hook does
- *
- * @returns Object with hook functionality
- *
- * @example
- * ```tsx
- * const { data, loading } = useMyHook();
- * ```
- */
-export function useMyHook() {
-  // Hook logic
-  return {
-    data,
-    loading,
-    error,
-  };
-}
-```
-
-### API Route Guidelines
-
-```typescript
-/**
- * Brief description of the API endpoint
- *
- * @route POST /api/my-endpoint
- * @param {MyRequestType} request - Request body
- * @returns {MyResponseType} Response data
- */
-export async function POST(request: Request) {
-  try {
-    // Validate input
-    const body = await request.json();
-    const validated = MySchema.parse(body);
-
-    // Process request
-    const result = await processRequest(validated);
-
-    // Return success response
-    return successResponse(result);
-  } catch (error) {
-    // Handle errors
-    return errorResponse(error);
-  }
-}
-```
-
-### Testing Guidelines
-
-```typescript
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import MyComponent from './MyComponent';
-
-describe('MyComponent', () => {
-  it('renders correctly', () => {
-    render(<MyComponent prop1="test" />);
-    expect(screen.getByText('test')).toBeInTheDocument();
-  });
-
-  it('handles user interaction', async () => {
-    const user = userEvent.setup();
-    render(<MyComponent prop1="test" />);
-
-    await user.click(screen.getByRole('button'));
-    expect(screen.getByText('clicked')).toBeInTheDocument();
-  });
-});
-```
-
-### Documentation Guidelines
-
-- Add JSDoc comments to all public functions/components
-- Update README.md if adding new features
-- Update docs/ folder for significant changes
-- Include examples in documentation
-- Keep documentation in sync with code
-
-## Project Structure
-
-```
-chisha/
-├── app/                      # Next.js App Router
-│   ├── api/                 # API routes
-│   ├── history/             # History page
-│   └── page.tsx             # Home page
-├── components/              # React components
-│   ├── ui/                  # Basic UI components
-│   ├── input/               # Input components
-│   ├── turntable/           # Turntable components
-│   ├── restaurant/          # Restaurant components
-│   ├── map/                 # Map components
-│   └── layout/              # Layout components
-├── context/                 # React Context
-├── hooks/                   # Custom hooks
-├── lib/                     # Utility libraries
-├── types/                   # TypeScript types
-├── styles/                  # Global styles
-├── __tests__/               # Tests
-├── docs/                    # Documentation
-└── scripts/                 # Build/utility scripts
-```
-
-## Git Workflow
-
-We use **Git Flow** branching model:
-
-- `main`: Production-ready code
-- `develop`: Integration branch for features
-- `feature/*`: New features
-- `fix/*`: Bug fixes
-- `hotfix/*`: Urgent production fixes
-
-### Branch Naming
-
-- `feature/add-user-auth`
-- `fix/turntable-animation-bug`
-- `docs/update-api-documentation`
-- `refactor/simplify-search-logic`
-
-### Commit Message Format
-
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-**Example:**
-```
-feat(turntable): add custom spin duration
-
-Allow users to configure turntable spin duration between 2-10 seconds.
-Includes validation and UI controls.
-
-Closes #123
-```
-
-## Release Process
-
-1. Update version in `package.json`
-2. Update `CHANGELOG.md`
-3. Create release branch
-4. Run tests and build
-5. Create pull request to `main`
-6. After merge, create Git tag
-7. Deploy to production
-
-## Getting Help
-
-- **Documentation**: Check the [docs/](./docs) folder
-- **Issues**: Search existing issues or create a new one
-- **Discussions**: Use GitHub Discussions for questions
-- **Email**: Contact maintainers (if urgent)
-
-## Recognition
-
-Contributors will be recognized in:
-- README.md contributors section
-- Release notes
-- GitHub contributors page
+- 当前公开指南只保留在 `README.md`、`docs/README.md`、`USER-GUIDE.md`、`TESTING.md`、
+  `DEPLOYMENT.md`、`SECURITY.md` 和本文件。
+- 当前约束进入 Specs，产品意图进入 Requirements，架构理由进入 Technical。
+- 被替代方案进入 `docs/archive/` 并加历史归档标记。
+- 移动或新增 Markdown 后运行 `npm run docs:check`，不要提交断链。
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
-
-## Questions?
-
-Feel free to ask questions by:
-- Opening an issue with the `question` label
-- Starting a discussion in GitHub Discussions
-- Contacting the maintainers
-
----
-
-**Thank you for contributing to ChiSha!** 🎉
+提交贡献即表示你同意该贡献按仓库的 [MIT License](./LICENSE) 发布。

@@ -9,8 +9,8 @@
 
 - CI 在 pull request 和 `main` push 上运行；同一 workflow 与同一 ref 只保留最新运行。
 - workflow 顶层权限保持 `contents: read`，普通 CI 不配置生产供应商或部署 secret。
-- quality job 必须依次执行 `npm ci`、type-check、lint、`npm run test:ci` 和
-  deterministic `npm run eval`。
+- quality job 必须依次执行 `npm ci`、`npm run docs:check`、`npm run test:docs`、type-check、
+  lint、`npm run test:ci` 和 deterministic `npm run eval`。
 - cloudflare-validation job 必须依赖 quality 成功，使用独立 checkout 和依赖安装，然后执行
   `npm run build:cloudflare` 与 `npm run deploy -- --dry-run`。
 - 任一命令非零退出都必须使 job 失败；不得用 `continue-on-error` 把门禁改成提示。

@@ -7,8 +7,7 @@
 搜索方式：
 
 ```bash
-rg -n "用户场景|能力|验收条件" docs/requirements docs/立项文档 \
-  --glob '*.md'
+rg -n "用户场景|能力|验收条件" docs/requirements --glob '*.md'
 ```
 
 ## Current Requirements
@@ -24,5 +23,4 @@ rg -n "用户场景|能力|验收条件" docs/requirements docs/立项文档 \
 - [CI/CD 质量门禁与发布隔离](./ci-cd-quality-gates.md) - PR 无副作用验证、覆盖率防回退、
   Cloudflare 分支触发和生产发布责任边界。
 
-历史需求仍保留在 `docs/` 和 `docs/立项文档/`，用于追溯已有产品决策，不自动覆盖当前
-Spec。
+历史需求统一保留在 `docs/archive/`，用于追溯已有产品决策，不自动覆盖当前 Spec。
