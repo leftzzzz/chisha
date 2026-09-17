@@ -143,11 +143,18 @@ describe('候选排序', () => {
     }];
     const targetEvidence = [{
       target: '火锅', kind: 'category' as const,
+      observationRef: 'plan-1',
       references: [{ restaurantId: facts.id, field: 'cuisineType' as const, value: facts.cuisineType }],
     }];
     const output = EvaluationModelOutputSchema.parse(evaluation({
       verdicts: [{ ...verdict('high', 0.9), targetEvidence }],
     }));
+    ctx.observations = [{
+      actionId: 'action-1', plan: { ...plan, planId: 'plan-1' },
+      provider: facts.source, fetchedAt: 1_800_000_000_000,
+      rawCount: 1, hardRejected: [], verdicts: output.verdicts,
+      acceptedPrimaryIds: [], candidateIds: [facts.id], unmetConstraints: [],
+    }];
     ctx.candidates = evaluateSearchResult([facts], ctx, plan, 1, output).acceptedCandidates;
     expect(ctx.candidates[0].verification.targetEvidence).toEqual(targetEvidence);
     const restored = JSON.parse(JSON.stringify(ctx)) as AgentContext;

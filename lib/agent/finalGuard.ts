@@ -252,10 +252,11 @@ function primaryAdmissionViolation(
       if (!parsed.success) return [];
       const { target, kind, references, observationRef } = parsed.data;
       const observation = observationRef
-        ? (context.observations as AgentObservation[] | undefined)?.find((item) => item.plan.planId === observationRef)
+        ? context.observations?.find((item) => item.plan.planId === observationRef)
         : undefined;
-      const observationValid = !observationRef || (
-        observation?.plan.planId === observationRef
+      const observationValid = Boolean(
+        observation
+        && observation.plan.planId === observationRef
         && observation.provider === candidate.restaurant.source
         && typeof observation.fetchedAt === 'number'
       );

@@ -176,7 +176,7 @@ const primaryScopeAuthorized =
 - Runtime 逐计划提交 observation 来源后，才合并候选并计算 `acceptedPrimaryIds`；
   不得在来源尚未进入当前上下文时计算准入。每个计划只保存一次 observation，事件、
   trace 与会话快照使用该次准入结果，不在整批结束时重复追加 observation。
-- 非分组必选目标的 `targetEvidence.observationRef` 必须指向本次 Runtime 生成并持久
+- 显式目标组与非分组必选目标的 `targetEvidence.observationRef` 必须指向本次 Runtime 生成并持久
   的 observation `planId`，且 Provider 与候选来源一致。引用缺失表示旧会话兼容输入，
   可读取但不能支持主推荐；引用不存在或来源不一致时，该目标证据失效，候选只能降级，
   不能因字段快照仍相同而豁免。
