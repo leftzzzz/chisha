@@ -151,7 +151,7 @@ describe('EvaluationModel', () => {
     expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r2')?.targetEvidence)
       .toEqual([{
         target: '牛排', kind: 'item',
-        verdict: 'supported',
+          verdict: 'supported',
         references: [{ restaurantId: 'r2', field: 'name', value: '城中牛排馆' }],
       }]);
     expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r1')).toEqual(
@@ -181,7 +181,7 @@ describe('EvaluationModel', () => {
         targetEvidence: [{
           target: '牛排',
           kind: 'item',
-          verdict: 'supported',
+        verdict: 'supported',
           references: [{ restaurantId: 'r1', field: 'name', value: '城中牛排馆' }],
         }],
         conflicts: [],

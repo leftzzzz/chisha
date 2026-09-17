@@ -35,6 +35,7 @@ import type {
   EvalTurnResult,
   TurnMetricsSnapshot,
 } from './types';
+import { resolveEvalMode } from './config';
 
 const CASES_DIR = join(__dirname, 'cases');
 const FIXTURE_PATH = join(__dirname, 'fixtures', 'amap.json');
@@ -50,7 +51,9 @@ export function loadCases(): EvalCase[] {
     .flatMap((file) => JSON.parse(readFileSync(join(CASES_DIR, file), 'utf8')) as EvalCase[]);
 }
 
-export async function runSuite(mode: 'offline' | 'live' = 'offline'): Promise<EvalSuiteResult> {
+export async function runSuite(modeOverride?: 'offline' | 'live'): Promise<EvalSuiteResult> {
+  const mode = modeOverride ?? resolveEvalMode();
+
   if (mode === 'live') {
     // fixture provider 的行为不能用 live 标签发布；真实 Provider 模式需要独立
     // 的入口、预算、超时和失败报告后再接入。
