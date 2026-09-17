@@ -1,4 +1,5 @@
 import type { SearchPlan, UserGoal } from '@/lib/agent/types';
+import { EvaluationModelOutputSchema } from '@/lib/agent/schemas/verdict';
 import type { Location, Restaurant } from '@/types';
 
 const location: Location = { lat: 31.2304, lng: 121.4737 };
@@ -166,6 +167,38 @@ describe('EvaluationModel', () => {
         method: 'POST',
       })
     );
+  });
+
+  it('parses per-condition verdict metadata with an invalid status fallback', () => {
+    const parsed = EvaluationModelOutputSchema.parse({
+      verdicts: [{
+        restaurantId: 'r1',
+        status: 'not-a-status',
+        primaryEligible: true,
+        confidence: 0.9,
+        matchedItems: ['牛排'],
+        matchedCategories: [],
+        targetEvidence: [{
+          target: '牛排',
+          kind: 'item',
+          verdict: 'supported',
+          references: [{ restaurantId: 'r1', field: 'name', value: '城中牛排馆' }],
+        }],
+        conflicts: [],
+        evidence: [],
+        warnings: [],
+      }],
+      selectedIds: [],
+      candidateIds: [],
+      explanation: 'ok',
+      unmetConstraints: [],
+    });
+
+    expect(parsed.verdicts[0].status).toBe('unverified');
+    expect(parsed.verdicts[0].targetEvidence).toEqual([{
+      target: '牛排', kind: 'item', verdict: 'supported',
+      references: [{ restaurantId: 'r1', field: 'name', value: '城中牛排馆' }],
+    }]);
   });
 
   it('requires OPENAI_API_KEY instead of falling back to hardcoded validation', async () => {
