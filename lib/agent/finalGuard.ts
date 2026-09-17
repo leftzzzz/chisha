@@ -270,8 +270,11 @@ function primaryAdmissionViolation(
   }
 
   if (
-    hasRequiredItems(context)
-    && candidate.verification.itemMatches.length === 0
+    context.goal.requestedItems.some((item) =>
+      item.required
+      && !context.goal.alternativeGroups.some((group) => group.items.includes(item.name))
+      && !candidate.verification.itemMatches.some((match) => match.requestedItem === item.name)
+    )
     && !(
       isBroadSearchIntent(sourceAttempt.searchIntent)
       && isSearchIntentAuthorizedForPrimary(
@@ -457,10 +460,6 @@ function buildUnmetConstraints(
   }
 
   return Array.from(new Set(unmet.filter(Boolean)));
-}
-
-function hasRequiredItems(context: CandidateAdmissionContext): boolean {
-  return context.goal.requestedItems.some((item) => item.required);
 }
 
 function deterministicHardConstraintMessage(

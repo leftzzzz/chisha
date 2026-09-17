@@ -348,6 +348,64 @@ describe('FinalGuard evidence monotonicity', () => {
     allowedForPrimary: true,
   });
 
+  it('rejects unrelated matches for an ungrouped required item', () => {
+    const selected = candidate('ungrouped', '测试店', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '奶茶', matchedBy: 'llm_semantic', confidence: 1,
+    }];
+    const before = JSON.stringify(selected);
+    const guarded = applyFinalGuard(context({
+      goal: lemonTeaGoal,
+      attempts: [exactAttempt],
+      candidates: [selected],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toEqual([selected]);
+    expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+    expect(JSON.stringify(selected)).toBe(before);
+  });
+
+  it.each([
+    { matches: ['柠檬茶'], admitted: false },
+    { matches: ['柠檬茶', '柠檬茶'], admitted: false },
+    { matches: ['柠檬茶', '蛋糕'], admitted: true },
+  ])('checks every ungrouped requirement for $matches', ({ matches, admitted }) => {
+    const selected = candidate('ungrouped', '测试店', 100);
+    selected.verification.itemMatches = matches.map((requestedItem) => ({
+      requestedItem, matchedBy: 'llm_semantic', confidence: 1,
+    }));
+    const guarded = applyFinalGuard(context({
+      goal: goal({ requestedItems: [
+        { name: '柠檬茶', required: true, aliases: [] },
+        { name: '蛋糕', required: true, aliases: [] },
+        { name: '咖啡', required: false, aliases: [] },
+      ] }),
+      attempts: [exactAttempt], candidates: [selected],
+    }));
+    expect(guarded.primaryCandidates).toEqual(admitted ? [selected] : []);
+    expect(guarded.backupCandidates).toEqual(admitted ? [] : [selected]);
+  });
+
+  it('does not turn grouped any-of items into ungrouped all-of requirements', () => {
+    const selected = candidate('grouped', '测试店', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '柠檬茶', matchedBy: 'llm_semantic', confidence: 1,
+    }];
+    selected.verification.targetEvidence = [{
+      target: '柠檬茶', kind: 'item',
+      references: [{ restaurantId: 'grouped', field: 'name', value: '测试店' }],
+    }];
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        requestedItems: ['柠檬茶', '奶茶'].map((name) => ({ name, required: true, aliases: [] })),
+        alternativeGroups: [{ mode: 'any_of', items: ['柠檬茶', '奶茶'] }],
+      }),
+      attempts: [exactAttempt], candidates: [selected],
+    }));
+    expect(guarded.primaryCandidates).toEqual([selected]);
+  });
+
   it.each([
     { mode: 'all_of' as const, matches: ['目标甲'], admitted: false },
     { mode: 'all_of' as const, matches: ['目标甲', '目标甲'], admitted: false },
