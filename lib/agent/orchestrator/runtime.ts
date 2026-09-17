@@ -375,7 +375,6 @@ async function runSearchStep(
   );
 
   for (const observation of observations) {
-    context.observations.push(observation);
     emit({
       type: 'observation',
       actionId: observation.actionId,
@@ -1310,13 +1309,7 @@ function commitSearchPlanResult(
     found: restaurants.length,
     accepted: evaluated.acceptedCandidates.length,
   });
-  mergeCandidates(context, evaluated.acceptedCandidates);
-
   const verdicts = verdictGuard.output.verdicts;
-  // 口径与 FinalGuard 严格准入一致：observation.accepted 是可进入主推荐的家数。
-  const acceptedPrimaryIds = evaluated.acceptedCandidates
-    .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
-    .map((candidate) => candidate.restaurant.id);
   const candidateIds = evaluated.acceptedCandidates
     .map((candidate) => candidate.restaurant.id);
   const unmetConstraints = Array.from(new Set([
@@ -1331,6 +1324,29 @@ function commitSearchPlanResult(
       ...candidate.verification.warnings,
     ]),
   ]));
+
+  const observation: AgentObservation = {
+    actionId,
+    plan,
+    provider,
+    fetchedAt: result.fetchedAt,
+    rawCount: restaurants.length,
+    hardRejected: hardGuard.rejected.slice(0, MAX_HARD_REJECTED_OBSERVATIONS).map((item) => ({
+      restaurantId: item.restaurant.id,
+      reasons: item.reasons,
+    })),
+    verdicts,
+    acceptedPrimaryIds: [],
+    candidateIds,
+    unmetConstraints,
+  };
+  // 合并及准入都反查 observation；先提交来源，再计算准入，不能等整批搜索结束。
+  context.observations.push(observation);
+  mergeCandidates(context, evaluated.acceptedCandidates);
+  const acceptedPrimaryIds = evaluated.acceptedCandidates
+    .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
+    .map((candidate) => candidate.restaurant.id);
+  observation.acceptedPrimaryIds = acceptedPrimaryIds;
 
   emit({
     type: 'partial_results',
@@ -1350,22 +1366,7 @@ function commitSearchPlanResult(
       unmetConstraints,
     },
   });
-  const observation: AgentObservation = {
-    actionId,
-    traceId: observationTrace.id,
-    plan,
-    provider,
-    fetchedAt: result.fetchedAt,
-    rawCount: restaurants.length,
-    hardRejected: hardGuard.rejected.slice(0, MAX_HARD_REJECTED_OBSERVATIONS).map((item) => ({
-      restaurantId: item.restaurant.id,
-      reasons: item.reasons,
-    })),
-    verdicts,
-    acceptedPrimaryIds,
-    candidateIds,
-    unmetConstraints,
-  };
+  observation.traceId = observationTrace.id;
   appendTrace(context, 'state_update', {
     actionId,
     output: {

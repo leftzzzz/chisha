@@ -153,13 +153,26 @@ describe('runtime observation assembly', () => {
 
   it('binds ungrouped target evidence to the current observation', async () => {
     const runSearchAgentV3 = await loadRuntime();
-    const result = await runSearchAgentV3(agentInput('寿司'), () => undefined, async () => [restaurant()]);
+    const emit = jest.fn();
+    const result = await runSearchAgentV3(agentInput('寿司'), emit, async () => [restaurant()]);
 
     const observations = result.runtimeState?.observations ?? [];
     const candidate = result.runtimeState?.candidates?.[0];
     const evidence = candidate?.verification.targetEvidence?.[0];
     expect(result.restaurants.map((restaurant) => restaurant.name)).toEqual(['寿司店']);
     expect(observations.length).toBeGreaterThan(0);
+    expect(observations[0].acceptedPrimaryIds).toEqual(['r1']);
+    expect(new Set(observations.map((observation) => observation.plan.planId)).size)
+      .toBe(observations.length);
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'observation', traceId: observations[0].traceId, accepted: 1,
+    }));
+    const restored = JSON.parse(JSON.stringify(result.runtimeState));
+    expect(restored.observations[0].acceptedPrimaryIds).toEqual(['r1']);
+    expect(restored.trace.find((entry: { id: string }) => entry.id === observations[0].traceId))
+      .toEqual(expect.objectContaining({
+        output: expect.objectContaining({ acceptedPrimaryIds: ['r1'] }),
+      }));
     expect(evidence?.observationRef).toBe(observations[0]?.plan.planId);
     expect(observations.some((observation) =>
       observation.plan.planId === evidence?.observationRef

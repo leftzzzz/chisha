@@ -561,3 +561,16 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
 - 全量验证 73 suites / 656 tests 通过；offline eval 15/15，type-check、lint、
   docs:check 通过。真实模型/地图、浏览器、数据库和部署验收仍未执行；逐条件裁决
   未实现，R03 不能结项。
+
+### Observation 提交顺序回归修复
+
+- 复查上一切片发现：`commitSearchPlanResult` 在 observation 尚未保存到上下文时，
+  就执行候选合并和准入统计。最终发布可接受的候选，其 `acceptedPrimaryIds` 却为空，
+  导致搜索统计与最终结果不一致，并影响合并时的来源资格比较。
+- 回归测试先复现空列表，再将来源保存移动到同一计划的合并与准入之前；批次完成时
+  只发事件，不再次追加。没有放宽 FinalGuard 或改变模型证据结论。
+- 验证：73 suites / 656 tests、offline eval 15/15、type-check、lint 通过；补充断言
+  核对事件、trace、JSON 会话快照和 observation 唯一性。该切片只修复提交顺序。
+- 后续审查仍发现 `!observationRef` 兼容分支允许缺引用的字段证据，与 Spec 的失败关闭
+  要求不一致；现有正向测试也依赖该分支。必须先补来源缺失回归并迁移测试来源，不能
+  以本次全绿宣称来源契约闭合。完整逐条件裁决、真实服务与浏览器验收仍未完成。
