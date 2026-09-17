@@ -1,6 +1,6 @@
 import { AgentActionSchema } from '@/lib/agent/schemas/action';
 import { GoalUnderstandingOutputSchema } from '@/lib/agent/schemas/clarification';
-import { UserGoalSchema } from '@/lib/agent/schemas/goal';
+import { GoalPatchSchema, UserGoalSchema } from '@/lib/agent/schemas/goal';
 import { KeywordExpansionOutputSchema } from '@/lib/agent/schemas/keywordExpansion';
 import { SearchPlanSchema } from '@/lib/agent/schemas/plan';
 import { EvaluationModelOutputSchema } from '@/lib/agent/schemas/verdict';
@@ -81,6 +81,28 @@ describe('Agent schema defaults', () => {
       rawQuery: '500米内的羊肉火锅，不要辣',
       hardConstraints: [strictDistance, invalidConstraint],
     })).toThrow(/Invalid enum value.*menu_contains_unsupported_field/);
+  });
+
+  it('rejects a patch with mixed valid and invalid added constraints', () => {
+    expect(() => GoalPatchSchema.parse({
+      addConstraints: [
+        { kind: 'distance', maxMeters: 500, strict: true },
+        { kind: 'invalid_constraint_kind' },
+      ],
+      reason: '增加距离与其他限制',
+    })).toThrow();
+  });
+
+  it('preserves optional and scalar constraint patch inputs', () => {
+    expect(GoalPatchSchema.parse({}).addConstraints).toBeUndefined();
+    expect(GoalPatchSchema.parse({ addConstraints: null }).addConstraints).toBeUndefined();
+    expect(GoalPatchSchema.parse({ addConstraints: [] }).addConstraints).toEqual([]);
+    const constraint = { kind: 'distance', label: '500米内', maxMeters: 500, strict: true };
+    expect(GoalPatchSchema.parse({ addConstraints: constraint }).addConstraints)
+      .toEqual([constraint]);
+    expect(GoalPatchSchema.parse({ addConstraints: [constraint] }).addConstraints)
+      .toEqual([constraint]);
+    expect(() => GoalPatchSchema.parse({ addConstraints: 'invalid' })).toThrow();
   });
 
   it('defaults optional explanation fields in action and plan outputs', () => {

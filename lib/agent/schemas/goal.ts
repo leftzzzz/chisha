@@ -348,7 +348,10 @@ export const GoalPatchSchema = z.object({
   addRequestedItems: optionalArray(RequestedItemSchema),
   addCategories: optionalArray(GoalCategorySchema),
   addSoftPreferences: optionalArray(PreferenceSchema),
-  addConstraints: optionalArray(ConstraintSchema),
+  addConstraints: z.preprocess(
+    (value) => value === null ? undefined : value,
+    HardConstraintListSchema.optional()
+  ),
   removeConstraints: OptionalStringArraySchema,
   addAuthorizations: optionalArray(AgentAuthorizationSchema),
   allowBroaden: OptionalBooleanSchema,
