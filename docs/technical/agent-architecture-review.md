@@ -416,7 +416,7 @@ LoopX CLI 可读取本地状态，但 bootstrap 返回身份选择 gate 且没�
 | 已确认缺陷：Policy 的 buildPlanBatch 原先用归一化结果去重 | 中/高 | 两组合成修饰词只保留第一个；根因是规划层语义真源分散 | 两组失败测试先复现后通过；改为原始关键词空白规整后保序精确去重，policy 38 项通过 |
 | 已确认缺陷：buildSearchPlan 原先附加 target、taxonomy 或 goal 的 POI 分类码 | 高/高 | 分类码反向参与 planning，缩小召回范围；根因是 Provider 事实被当作搜索意图 | 3 个反向规划测试先失败后通过；计划不再设置 poiType，旧兼容入口固定返回 undefined，policy 文件 36 项通过 |
 | 已确认契约缺口：旧 buildCandidate 把自由文本 matchedItems 转为匹配；Guard 无证据引用核验 | 高/高 | 模型自报匹配仍缺少可核验来源，覆盖完整也不能证明供应；根因是证据数据契约缺失 | 显式组已增加字段快照引用核验；独立 observation、时间、非分组目标和完整逐条件证据仍缺失，见后续切片记录 |
-| 已确认契约缺口：`evals/runner.ts` 的 runSuite 接收 live 标签但固定 createFixtureSearchPlaces | 中/高 | 调用者可能把固定地图评测误读为实调；根因是模式标签与执行路径未绑定 | 未修复；本次全部明确报告 offline |
+| 已确认契约缺口：`evals/runner.ts` 的 runSuite 接收 live 标签但固定 createFixtureSearchPlaces | 中/高 | 调用者可能把固定地图评测误读为实调；根因是模式标签与执行路径未绑定 | live 标签先显式拒绝 fixture 执行；真实模型/地图模式待独立实现 |
 
 显式组的缺项、重复匹配充数、无关匹配、空组、证据删除、搜索授权豁免和分类冒充菜品
 均有合成回归测试。分类冒充用例同时放入无关菜品匹配，避免测试仅被旧的空数组检查拦住。
@@ -456,6 +456,17 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
 
 值得，但应在下一切片实现后对照具体契约继续，不重复全仓扫描或无改动全量测试。
 完整需求未完成，本记录仅验收上述局部行为，不是上线批准或项目结项。
+
+### 后续切片：R04 评测模式保护
+
+范围只绑定 `runSuite` 的模式标签与执行路径；不实现真实模型/地图，不改 workflow 或 UI。
+新增回归先证明 `live` 标签会错误执行 fixture 地图，修复后该标签显式抛出
+`CONFIG_MISSING`。offline 模式和 15 个基线用例不变。
+
+本地验收：模式回归通过；完整 `npm test -- --runInBand --silent` 为 72 suites /
+640 tests 通过；`npm run type-check`、`npm run lint`、`npm run docs:check` 和
+`npm run eval` 通过，eval 基线无变化。未调用真实模型或地图；真实模型/地图模式
+仍未实现。LoopX 身份修复不是架构项目完成，自动调度仍未启用。
 
 ### 后续切片：显式目标组的字段引用
 

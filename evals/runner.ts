@@ -17,7 +17,15 @@ import type {
   SearchPlan,
 } from '@/lib/agent/types';
 import type { Restaurant } from '@/types';
-import { beginTurn, createFixtureSearchPlaces, EVAL_LOCATION, readCounters } from './harness';
+import {
+  AgentError,
+} from '@/lib/agent/types';
+import {
+  beginTurn,
+  createFixtureSearchPlaces,
+  EVAL_LOCATION,
+  readCounters,
+} from './harness';
 import type {
   AmapFixture,
   EvalCase,
@@ -43,6 +51,16 @@ export function loadCases(): EvalCase[] {
 }
 
 export async function runSuite(mode: 'offline' | 'live' = 'offline'): Promise<EvalSuiteResult> {
+  if (mode === 'live') {
+    // fixture provider 的行为不能用 live 标签发布；真实 Provider 模式需要独立
+    // 的入口、预算、超时和失败报告后再接入。
+    throw new AgentError(
+      'live eval mode is not implemented',
+      'CONFIG_MISSING',
+      false
+    );
+  }
+
   const fixture = loadFixture();
   const searchPlaces = createFixtureSearchPlaces(fixture);
   const cases: EvalCaseResult[] = [];
