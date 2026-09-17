@@ -393,6 +393,7 @@ export interface AgentObservation {
   traceId?: string;
   plan: SearchPlan;
   provider: 'amap' | 'osm';
+  fetchedAt: number;
   rawCount: number;
   hardRejected: Array<{
     restaurantId: string;

@@ -1342,6 +1342,7 @@ function commitSearchPlanResult(
     traceId: observationTrace.id,
     plan,
     provider,
+    fetchedAt: Date.now(),
     rawCount: restaurants.length,
     hardRejected: hardGuard.rejected.slice(0, MAX_HARD_REJECTED_OBSERVATIONS).map((item) => ({
       restaurantId: item.restaurant.id,
