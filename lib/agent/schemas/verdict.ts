@@ -32,6 +32,7 @@ const StringArraySchema = z.preprocess((value) => {
 export const TargetEvidenceSchema = z.object({
   target: z.string().trim().min(1),
   kind: z.enum(['item', 'category']),
+  verdict: z.enum(['supported', 'contradicted', 'unknown']).optional().catch(undefined),
   references: z.array(z.object({
     restaurantId: z.string().min(1),
     field: z.enum(['name', 'cuisineType']),

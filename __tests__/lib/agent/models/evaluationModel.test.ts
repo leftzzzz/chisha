@@ -120,6 +120,7 @@ describe('EvaluationModel', () => {
           matchedCategories: ['西餐'],
           targetEvidence: [{
             target: '牛排', kind: 'item',
+            verdict: 'supported',
             references: [{ restaurantId: 'r2', field: 'name', value: '城中牛排馆' }],
           }],
           conflicts: [],
@@ -149,6 +150,7 @@ describe('EvaluationModel', () => {
     expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r2')?.targetEvidence)
       .toEqual([{
         target: '牛排', kind: 'item',
+        verdict: 'supported',
         references: [{ restaurantId: 'r2', field: 'name', value: '城中牛排馆' }],
       }]);
     expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r1')).toEqual(

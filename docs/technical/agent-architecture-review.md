@@ -587,3 +587,17 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
   type-check、test:docs、docs:check、diff 空白检查通过；lint 的参数化测试换行问题修正后重跑通过。
 - 本切片不是完整逐条件裁决，不证明名称或分类能验证实时菜单；未运行真实模型/地图、
   浏览器、数据库落库、Next/Cloudflare 构建或部署验收。下一步继续 R03 逐条件裁决。
+
+### 逐条件裁决失败关闭
+
+- `TargetEvidence` 新增 `verdict`，EvaluationModel 的结构化输出要求每条引用声明
+  `supported/contradicted/unknown`；FinalGuard 只有 `supported` 且同时通过声明匹配、
+  字段快照和 observation 来源检查时，才让该证据计入显式目标组或非分组必选目标。
+  `contradicted/unknown` 不计入，缺失或非法裁决保持旧输入可读但不支持主推荐。
+- 对抗回归覆盖非分组必选项的 unknown/contradicted/missing/invalid、JSON 恢复不变性、
+  item/category 两条目标组路径，以及 any-of 从 unknown 不可入、一项 supported 可入、
+  all-of 两项 supported 才可入的状态迁移；正向样例和离线桩全部迁移到显式裁决。
+- 本地验证：`test:ci` 73 suites / 669 tests 和覆盖率门禁通过，offline eval 15/15，
+  type-check、lint、`git diff --check` 通过；新增回归在旧实现下未知裁决可入主推荐，
+  修复后降为候补。真实模型/地图、浏览器、数据库落库、Next/Cloudflare 构建与部署
+  验收仍未执行；本切片不关闭 R03 或项目整体验收。

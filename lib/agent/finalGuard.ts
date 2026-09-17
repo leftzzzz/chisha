@@ -250,7 +250,7 @@ function primaryAdmissionViolation(
     (candidate.verification.targetEvidence ?? []).flatMap((evidence) => {
       const parsed = TargetEvidenceSchema.safeParse(evidence);
       if (!parsed.success) return [];
-      const { target, kind, references, observationRef } = parsed.data;
+      const { target, kind, references, observationRef, verdict } = parsed.data;
       const observation = observationRef
         ? context.observations?.find((item) => item.plan.planId === observationRef)
         : undefined;
@@ -261,8 +261,10 @@ function primaryAdmissionViolation(
         && typeof observation.fetchedAt === 'number'
       );
       const declaredMatch = kind === 'item'
-        ? candidate.verification.itemMatches.some((match) => match.requestedItem === target)
-        : candidate.verification.categoryMatches.includes(target)
+        ? verdict === 'supported'
+          && candidate.verification.itemMatches.some((match) => match.requestedItem === target)
+        : verdict === 'supported'
+          && candidate.verification.categoryMatches.includes(target)
           && !context.goal.requestedItems.some((item) => item.name === target);
       const referencesValid = references.every((reference) =>
         reference.restaurantId === candidate.restaurant.id

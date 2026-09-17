@@ -391,7 +391,8 @@ describe('FinalGuard evidence monotonicity', () => {
       requestedItem: '柠檬茶', matchedBy: 'name', confidence: 1,
     }];
     selected.verification.targetEvidence = [{
-      target: '柠檬茶', kind: 'item', observationRef: 'missing-plan-id',
+      target: '柠檬茶', kind: 'item',
+      verdict: 'supported', observationRef: 'missing-plan-id',
       references: [{ restaurantId: 'ungrouped', field: 'name', value: '测试店' }],
     }];
     const guarded = applyFinalGuard(context({
@@ -410,6 +411,7 @@ describe('FinalGuard evidence monotonicity', () => {
     }];
     selected.verification.targetEvidence = [{
       target: '目标甲', kind: 'item',
+      verdict: 'supported',
       references: [{ restaurantId: 'legacy', field: 'name', value: selected.restaurant.name }],
     }];
     const guarded = applyFinalGuard(context({
@@ -432,6 +434,7 @@ describe('FinalGuard evidence monotonicity', () => {
     }];
     if (variant !== 'missing') selected.verification.targetEvidence = [{
       target: '火锅', kind: variant === 'category' ? 'category' : 'item',
+      verdict: 'supported',
       observationRef: 'valid-amap',
       references: variant === 'empty' ? [] : [{
         restaurantId: variant === 'foreign' ? 'other' : selected.restaurant.id,
@@ -464,6 +467,7 @@ describe('FinalGuard evidence monotonicity', () => {
     }];
     selected.verification.targetEvidence = [{
       target: '目标甲', kind: 'item',
+      verdict: 'supported',
       observationRef: variant === 'missing-reference' ? undefined : 'exact-amap',
       references: [{ restaurantId: 'r1', field: 'name', value: '测试店' }],
     }];
@@ -483,6 +487,62 @@ describe('FinalGuard evidence monotonicity', () => {
     expect(JSON.stringify(restored)).toBe(before);
   });
 
+  it.each(['unknown', 'contradicted', 'missing', 'invalid'])(
+    'does not admit %s per-condition evidence', (verdict) => {
+      const selected = candidate('r1', '测试店', 100);
+      selected.verification.itemMatches = [{
+        requestedItem: '目标甲', matchedBy: 'llm_semantic', confidence: 1,
+      }];
+      selected.verification.targetEvidence = [{
+        target: '目标甲', kind: 'item',
+        verdict: 'supported', observationRef: 'exact-amap',
+        references: [{ restaurantId: 'r1', field: 'name', value: '测试店' }],
+      }];
+      if (verdict === 'missing') delete selected.verification.targetEvidence[0].verdict;
+      else Object.assign(selected.verification.targetEvidence[0], { verdict });
+
+      const restored = JSON.parse(JSON.stringify(context({
+        goal: goal({ requestedItems: [{ name: '目标甲', required: true, aliases: [] }] }),
+        attempts: [exactAttempt], candidates: [selected],
+      })));
+      const before = JSON.stringify(restored);
+      const guarded = applyFinalGuard(restored);
+
+      expect(guarded.primaryCandidates).toEqual([]);
+      expect(guarded.backupCandidates).toEqual([selected]);
+      expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+      expect(JSON.stringify(restored)).toBe(before);
+    }
+  );
+
+  it.each(['item', 'category'] as const)('counts only supported %s evidence in groups', (kind) => {
+    const selected = candidate('group', '测试店', 100);
+    selected.verification.itemMatches = kind === 'item'
+      ? ['目标甲', '目标乙'].map((requestedItem) => ({
+        requestedItem, matchedBy: 'llm_semantic', confidence: 1,
+      })) : [];
+    selected.verification.categoryMatches = kind === 'category' ? ['目标甲', '目标乙'] : [];
+    selected.verification.targetEvidence = ['目标甲', '目标乙'].map((target) => ({
+      target, kind, verdict: 'unknown', observationRef: 'exact-amap',
+      references: [{
+        restaurantId: 'group',
+        field: kind === 'item' ? 'name' : 'cuisineType',
+        value: kind === 'item' ? '测试店' : '餐饮',
+      }],
+    }));
+    const ctx = context({
+      goal: goal({ alternativeGroups: [{ mode: 'any_of', items: ['目标甲', '目标乙'] }] }),
+      attempts: [exactAttempt], candidates: [selected],
+    });
+    expect(applyFinalGuard(ctx).primaryCandidates).toEqual([]);
+    selected.verification.targetEvidence[0].verdict = 'supported';
+    expect(applyFinalGuard(ctx).primaryCandidates).toEqual([selected]);
+    ctx.goal.alternativeGroups[0].mode = 'all_of';
+    expect(applyFinalGuard(ctx).primaryCandidates).toEqual([]);
+    selected.verification.targetEvidence[1].verdict = 'supported';
+    expect(applyFinalGuard(ctx).primaryCandidates).toEqual([selected]);
+  });
+
   it.each([
     { matches: ['柠檬茶'], admitted: false },
     { matches: ['柠檬茶', '柠檬茶'], admitted: false },
@@ -494,6 +554,7 @@ describe('FinalGuard evidence monotonicity', () => {
     }));
     selected.verification.targetEvidence = matches.map((target) => ({
       target, kind: 'item',
+      verdict: 'supported',
       observationRef: 'exact-amap',
       references: [{ restaurantId: selected.restaurant.id, field: 'name', value: selected.restaurant.name }],
     }));
@@ -518,6 +579,7 @@ describe('FinalGuard evidence monotonicity', () => {
     }];
     selected.verification.targetEvidence = [{
       target: '柠檬茶', kind: 'item',
+      verdict: 'supported',
       observationRef: 'exact-amap',
       references: [{ restaurantId: 'grouped', field: 'name', value: '测试店' }],
     }];
@@ -546,6 +608,7 @@ describe('FinalGuard evidence monotonicity', () => {
     }));
     selected.verification.targetEvidence = matches.map((target) => ({
       target, kind: 'item',
+      verdict: 'supported',
       observationRef: 'exact-amap',
       references: [{ restaurantId: 'group', field: 'name', value: selected.restaurant.name }],
     }));
@@ -568,6 +631,7 @@ describe('FinalGuard evidence monotonicity', () => {
     selected.verification.categoryMatches = ['品类甲'];
     selected.verification.targetEvidence = [{
       target: '品类甲', kind: 'category',
+      verdict: 'supported',
       observationRef: 'exact-amap',
       references: [{ restaurantId: 'group', field: 'cuisineType', value: '餐饮' }],
     }];
@@ -649,6 +713,7 @@ describe('FinalGuard evidence monotonicity', () => {
     }));
     selected.verification.targetEvidence = ['目标甲', '目标乙'].map((target) => ({
       target, kind: 'item',
+      verdict: 'supported',
       observationRef: 'exact-amap',
       references: [{ restaurantId: 'group', field: 'name', value: selected.restaurant.name }],
     }));
@@ -674,6 +739,7 @@ describe('FinalGuard evidence monotonicity', () => {
     }];
     selected.verification.targetEvidence = [{
       target: '目标甲', kind: 'item',
+      verdict: 'supported',
       observationRef: 'exact-amap',
       references: [{ restaurantId: 'group', field: 'name', value: selected.restaurant.name }],
     }];
@@ -762,6 +828,7 @@ describe('FinalGuard evidence monotonicity', () => {
     }];
     verified.verification.targetEvidence = [{
       target: '柠檬茶', kind: 'item',
+      verdict: 'supported',
       observationRef: 'exact-amap',
       references: [{ restaurantId: verified.restaurant.id, field: 'name', value: verified.restaurant.name }],
     }];
@@ -794,6 +861,7 @@ describe('FinalGuard evidence monotonicity', () => {
     for (const selected of hasReferences ? [first, second] : []) {
       selected.verification.targetEvidence = [{
         target: '柠檬茶', kind: 'item',
+        verdict: 'supported',
         observationRef: 'exact-amap',
         references: [{ restaurantId: selected.restaurant.id, field: 'name', value: selected.restaurant.name }],
       }];

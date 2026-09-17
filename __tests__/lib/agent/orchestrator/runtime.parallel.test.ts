@@ -100,6 +100,7 @@ async function loadRuntime(parallel: boolean) {
         matchedItems: ['牛排'],
         targetEvidence: [{
           target: '牛排', kind: 'item',
+          verdict: 'supported',
           references: [{ restaurantId: item.id, field: 'name', value: item.name }],
         }],
         matchedCategories: [],

@@ -143,6 +143,7 @@ describe('候选排序', () => {
     }];
     const targetEvidence = [{
       target: '火锅', kind: 'category' as const,
+      verdict: 'supported' as const,
       observationRef: 'plan-1',
       references: [{ restaurantId: facts.id, field: 'cuisineType' as const, value: facts.cuisineType }],
     }];

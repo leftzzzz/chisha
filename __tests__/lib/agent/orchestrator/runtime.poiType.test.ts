@@ -104,6 +104,7 @@ describe('runSearchAgentV3 POI type selection', () => {
             matchedItems: accepted ? ['港式奶茶'] : [],
             targetEvidence: accepted ? [{
               target: '港式奶茶', kind: 'item',
+              verdict: 'supported',
               references: [{ restaurantId: item.id, field: 'name', value: item.name }],
             }] : [],
             matchedCategories: accepted ? ['奶茶'] : [],

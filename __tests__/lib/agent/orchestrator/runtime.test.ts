@@ -107,6 +107,7 @@ jest.mock('@/lib/agent/models/evaluationModel', () => ({
         matchedItems: matchesSearchKeyword ? input.plan.keywords : [],
         targetEvidence: matchesSearchKeyword ? input.plan.keywords.map((target) => ({
           target, kind: 'item',
+          verdict: 'supported',
           references: [{ restaurantId: item.id, field: 'name', value: item.name }],
         })) : [],
         matchedCategories: matchesSearchKeyword ? [item.cuisineType] : [],

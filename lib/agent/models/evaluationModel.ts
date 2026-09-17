@@ -68,7 +68,8 @@ const SYSTEM_PROMPT = `你是餐厅搜索系统的 EvaluationModel。你**逐家
 5. confidence 表示"这家店满足目标"的把握，不是"这家店有多好"。
 6. 每一家都要给裁决，不要遗漏，也不要合并同名门店。
 7. 对 matchedItems 和 matchedCategories 中用于支持必选目标（含非分组目标）或显式目标组的每一项，提供 targetEvidence：
-   target 使用目标完整名称，kind 为 item 或 category，references 引用本店输入事实的
+   target 使用目标完整名称，kind 为 item 或 category，verdict 只能是 supported、
+   contradicted 或 unknown；只有 supported 能支持主推荐，references 引用本店输入事实的
    restaurantId、field（name 或 cuisineType）和逐字完整 value。不能引用搜索词、别家店、
    自己写的 evidence 或历史裁决。没有引用时返回空数组，不能编造引用。
    引用存在不等于支持成立；品类不能证明具体菜品、配方修饰词或实时供应。`;
@@ -97,6 +98,7 @@ const EVALUATION_FUNCTION = {
                 properties: {
                   target: { type: 'string' },
                   kind: { type: 'string', enum: ['item', 'category'] },
+                  verdict: { type: 'string', enum: ['supported', 'contradicted', 'unknown'] },
                   references: {
                     type: 'array',
                     minItems: 1,
@@ -111,7 +113,7 @@ const EVALUATION_FUNCTION = {
                     },
                   },
                 },
-                required: ['target', 'kind', 'references'],
+                required: ['target', 'kind', 'verdict', 'references'],
               },
             },
             conflicts: { type: 'array', items: { type: 'string' } },

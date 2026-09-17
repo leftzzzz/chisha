@@ -351,6 +351,7 @@ export function evaluationStub(input: EvaluationStubInput) {
         return [{
           target,
           kind: isItem ? 'item' as const : 'category' as const,
+          verdict: 'supported',
           references: [{ restaurantId: item.id, field, value: item[field] }],
         }];
       }),

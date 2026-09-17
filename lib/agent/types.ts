@@ -275,6 +275,7 @@ export interface ItemMatch {
 export interface TargetEvidence {
   target: string;
   kind: 'item' | 'category';
+  verdict?: 'supported' | 'contradicted' | 'unknown';
   references: Array<{
     restaurantId: string;
     field: 'name' | 'cuisineType';

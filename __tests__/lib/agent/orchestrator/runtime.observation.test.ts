@@ -86,6 +86,7 @@ async function loadRuntime(onEvaluate = () => undefined) {
             .map((restaurant) => ({
               target: '寿司',
               kind: 'item' as const,
+              verdict: 'supported',
               references: [{
                 restaurantId: restaurant.id,
                 field: 'name' as const,
