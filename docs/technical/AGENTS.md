@@ -28,5 +28,10 @@ rg -n "组件名|方案|权衡|迁移" docs/technical --glob '*.md'
 - [Lead Agent / orchestrator-worker 备选方案](./agent-architecture-root-decision-2026-08.md) -
   已评估但暂不采用；仅供未来重新评估，不是当前实现依据或迁移清单。
 
+## Pending Review
+
+- [Agent 架构审查与改进技术方案](./agent-architecture-review.md) - 待评审的现状证据、
+  责任边界、数据契约、分阶段实施和验证方案；不替代当前 workflow 决策。
+
 历史 review、实施方案和完成报告统一保留在 `docs/archive/`，仅用于理解当前代码来源，
 不作为实现依据。
