@@ -19,8 +19,7 @@ import {
 import {
   MAX_POI_PAGES,
   getPagesPerKeyword,
-  normalizeSearchKeywords,
-  resolvePoiTypesForKeyword,
+  DEFAULT_POI_TYPE,
 } from './agent/poiTaxonomy';
 
 const AMAP_API_KEY = process.env.AMAP_API_KEY;
@@ -113,14 +112,14 @@ const amapResponseCache = new Map<string, { expiresAt: number; data: unknown }>(
  * @param keywords 搜索关键词数组
  * @param location 搜索中心点
  * @param distance 搜索半径（米）
- * @param poiType 高德 POI 类型代码（可选，由 LLM 决定）
+ * @param _poiType 旧调用方兼容参数；搜索固定使用餐饮产品范围
  * @returns 餐厅列表
  */
 export async function amapPoiSearch(
   keywords: string[],
   location: Location,
   distance: number = 2000,
-  poiType?: string,
+  _poiType?: string,
   pageCount: number = 1,
   options: AmapPoiSearchOptions = {}
 ): Promise<Restaurant[]> {
@@ -133,23 +132,18 @@ export async function amapPoiSearch(
     );
   }
 
-  const searchKeywords = normalizeSearchKeywords(keywords);
+  const searchKeywords = Array.from(new Set(keywords.map((keyword) => keyword.trim()).filter(Boolean)));
   const pages = Math.max(1, Math.min(Math.round(pageCount), MAX_POI_PAGES));
   const pagesPerKeyword = getPagesPerKeyword(searchKeywords.length, pages);
   const searchTasks = searchKeywords.map((keyword) => ({
     keyword,
-    poiType: resolvePoiTypesForKeyword(
-      keyword,
-      poiType,
-      searchKeywords.length > 1,
-      options.preferProvidedPoiType
-    ),
+    poiType: DEFAULT_POI_TYPE,
   }));
 
   logger.info('Calling Amap POI search', {
     keywords: searchKeywords,
     tasks: searchTasks,
-    poiTypeSource: poiType ? 'llm-or-keyword' : 'keyword-or-default',
+    poiTypeSource: 'fixed-restaurant-scope',
     location,
     distance,
     pageCount,
