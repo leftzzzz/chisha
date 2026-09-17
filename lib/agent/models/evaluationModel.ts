@@ -67,7 +67,7 @@ const SYSTEM_PROMPT = `你是餐厅搜索系统的 EvaluationModel。你**逐家
 4. softPreferences 只能体现在 evidence 或 warnings 里；不能让候选变成 failed，也不能据此编造事实字段没有的数据。
 5. confidence 表示"这家店满足目标"的把握，不是"这家店有多好"。
 6. 每一家都要给裁决，不要遗漏，也不要合并同名门店。
-7. 对 matchedItems 和 matchedCategories 中用于支持显式目标组的每一项，提供 targetEvidence：
+7. 对 matchedItems 和 matchedCategories 中用于支持必选目标（含非分组目标）或显式目标组的每一项，提供 targetEvidence：
    target 使用目标完整名称，kind 为 item 或 category，references 引用本店输入事实的
    restaurantId、field（name 或 cuisineType）和逐字完整 value。不能引用搜索词、别家店、
    自己写的 evidence 或历史裁决。没有引用时返回空数组，不能编造引用。

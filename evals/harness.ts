@@ -342,6 +342,18 @@ export function evaluationStub(input: EvaluationStubInput) {
       confidence: accepted ? 0.9 : 0.2,
       matchedItems: matched,
       matchedCategories: matched.length > 0 ? [item.cuisineType] : [],
+      targetEvidence: matched.flatMap((target) => {
+        const isItem = input.goal.requestedItems.some((entry) => entry.name === target);
+        const isCategory = input.goal.acceptableCategories.some((entry) => entry.name === target)
+          && item.cuisineType === target;
+        if (!isItem && !isCategory) return [];
+        const field = isItem && item.name.includes(target) ? 'name' as const : 'cuisineType' as const;
+        return [{
+          target,
+          kind: isItem ? 'item' as const : 'category' as const,
+          references: [{ restaurantId: item.id, field, value: item[field] }],
+        }];
+      }),
       conflicts: accepted ? [] : ['候选与目标不匹配。'],
       evidence: accepted ? [`「${item.name}」符合搜索意图。`] : [],
       warnings: [],

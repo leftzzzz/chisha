@@ -366,6 +366,36 @@ describe('FinalGuard evidence monotonicity', () => {
     expect(JSON.stringify(selected)).toBe(before);
   });
 
+  it.each(['missing', 'empty', 'foreign', 'changed', 'category', 'valid'])('checks %s ungrouped fact references', (variant) => {
+    const selected = candidate('ungrouped', '测试火锅', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '火锅', matchedBy: 'llm_semantic', confidence: 1,
+    }];
+    if (variant !== 'missing') {
+      selected.verification.targetEvidence = [{
+        target: '火锅', kind: variant === 'category' ? 'category' : 'item',
+        references: variant === 'empty' ? [] : [{
+          restaurantId: variant === 'foreign' ? 'other' : selected.restaurant.id,
+          field: 'name', value: variant === 'changed' ? '旧店名' : selected.restaurant.name,
+        }],
+      }];
+    }
+    const before = JSON.stringify(selected);
+
+    const guarded = applyFinalGuard(context({
+      goal: goal({ requestedItems: [{ name: '火锅', required: true, aliases: [] }] }),
+      attempts: [fallbackAttempt({ searchIntent: 'exact', keywords: ['火锅'] })],
+      candidates: [selected],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual(variant === 'valid' ? [selected] : []);
+    expect(guarded.backupCandidates).toEqual(variant === 'valid' ? [] : [selected]);
+    if (variant !== 'valid') {
+      expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+    }
+    expect(JSON.stringify(selected)).toBe(before);
+  });
+
   it.each([
     { matches: ['柠檬茶'], admitted: false },
     { matches: ['柠檬茶', '柠檬茶'], admitted: false },
@@ -374,6 +404,10 @@ describe('FinalGuard evidence monotonicity', () => {
     const selected = candidate('ungrouped', '测试店', 100);
     selected.verification.itemMatches = matches.map((requestedItem) => ({
       requestedItem, matchedBy: 'llm_semantic', confidence: 1,
+    }));
+    selected.verification.targetEvidence = matches.map((target) => ({
+      target, kind: 'item',
+      references: [{ restaurantId: selected.restaurant.id, field: 'name', value: selected.restaurant.name }],
     }));
     const guarded = applyFinalGuard(context({
       goal: goal({ requestedItems: [
@@ -631,6 +665,10 @@ describe('FinalGuard evidence monotonicity', () => {
       matchedBy: 'name',
       confidence: 0.95,
     }];
+    verified.verification.targetEvidence = [{
+      target: '柠檬茶', kind: 'item',
+      references: [{ restaurantId: verified.restaurant.id, field: 'name', value: verified.restaurant.name }],
+    }];
     const guarded = applyFinalGuard(context({
       goal: lemonTeaGoal,
       attempts: [exactAttempt],
@@ -647,7 +685,7 @@ describe('FinalGuard evidence monotonicity', () => {
     expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['c1', 'v1']);
   });
 
-  it('preserves the relative order of selected candidates that survive filtering', () => {
+  it.each([true, false])('preserves selected order with fact references=%s', (hasReferences) => {
     const rejected = unverifiedCandidate('c1', '喜茶', 100);
     const first = candidate('v2', '第二个被提议但先展示', 20);
     const second = candidate('v1', '第一个高分候选但后展示', 200);
@@ -657,6 +695,12 @@ describe('FinalGuard evidence monotonicity', () => {
     second.verification.itemMatches = [{
       requestedItem: '柠檬茶', matchedBy: 'name', confidence: 0.9,
     }];
+    for (const selected of hasReferences ? [first, second] : []) {
+      selected.verification.targetEvidence = [{
+        target: '柠檬茶', kind: 'item',
+        references: [{ restaurantId: selected.restaurant.id, field: 'name', value: selected.restaurant.name }],
+      }];
+    }
     const guarded = applyFinalGuard(context({
       goal: lemonTeaGoal,
       attempts: [exactAttempt],
@@ -669,8 +713,10 @@ describe('FinalGuard evidence monotonicity', () => {
       confidence: 0.7,
     });
 
-    expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['v2', 'v1']);
-    expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['c1']);
+    expect(guarded.primaryCandidates.map((item) => item.restaurant.id))
+      .toEqual(hasReferences ? ['v2', 'v1'] : []);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id))
+      .toEqual(hasReferences ? ['c1'] : ['v2', 'c1', 'v1']);
   });
 
   it('removes candidates carrying hard-constraint failures from both partitions', () => {

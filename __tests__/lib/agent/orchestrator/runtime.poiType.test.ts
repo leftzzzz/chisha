@@ -102,6 +102,10 @@ describe('runSearchAgentV3 POI type selection', () => {
             primaryEligible: accepted && evaluationInput.plan.allowedForPrimary,
             confidence: accepted ? 0.9 : 0.2,
             matchedItems: accepted ? ['港式奶茶'] : [],
+            targetEvidence: accepted ? [{
+              target: '港式奶茶', kind: 'item',
+              references: [{ restaurantId: item.id, field: 'name', value: item.name }],
+            }] : [],
             matchedCategories: accepted ? ['奶茶'] : [],
             conflicts: accepted ? [] : ['Agent 语义验证未通过。'],
             evidence: accepted ? ['Agent 验证为港式奶茶相关候选。'] : [],

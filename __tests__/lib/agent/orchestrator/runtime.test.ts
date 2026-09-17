@@ -105,6 +105,10 @@ jest.mock('@/lib/agent/models/evaluationModel', () => ({
         primaryEligible: accepted && input.plan.allowedForPrimary,
         confidence: accepted ? 0.9 : 0.2,
         matchedItems: matchesSearchKeyword ? input.plan.keywords : [],
+        targetEvidence: matchesSearchKeyword ? input.plan.keywords.map((target) => ({
+          target, kind: 'item',
+          references: [{ restaurantId: item.id, field: 'name', value: item.name }],
+        })) : [],
         matchedCategories: matchesSearchKeyword ? [item.cuisineType] : [],
         conflicts: accepted ? [] : ['Agent 语义验证未通过。'],
         evidence: accepted ? [`Agent 验证「${item.name}」符合搜索意图。`] : [],

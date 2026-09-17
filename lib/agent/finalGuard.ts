@@ -273,7 +273,7 @@ function primaryAdmissionViolation(
     context.goal.requestedItems.some((item) =>
       item.required
       && !context.goal.alternativeGroups.some((group) => group.items.includes(item.name))
-      && !candidate.verification.itemMatches.some((match) => match.requestedItem === item.name)
+      && !supportedTargets.has(item.name)
     )
     && !(
       isBroadSearchIntent(sourceAttempt.searchIntent)

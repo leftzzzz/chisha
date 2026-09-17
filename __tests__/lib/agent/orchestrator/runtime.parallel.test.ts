@@ -98,6 +98,10 @@ async function loadRuntime(parallel: boolean) {
         primaryEligible: true,
         confidence: 0.9,
         matchedItems: ['牛排'],
+        targetEvidence: [{
+          target: '牛排', kind: 'item',
+          references: [{ restaurantId: item.id, field: 'name', value: item.name }],
+        }],
         matchedCategories: [],
         conflicts: [],
         evidence: ['测试通过'],
