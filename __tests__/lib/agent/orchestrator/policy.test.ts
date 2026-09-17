@@ -17,6 +17,7 @@ import type {
   SearchAttempt,
   UserGoal,
 } from '@/lib/agent/types';
+import { validateSearchPlan } from '@/lib/agent/guards';
 
 const location = { lat: 31.2304, lng: 121.4737, address: '上海市黄浦区' };
 
@@ -244,6 +245,25 @@ describe('policy 计划批次', () => {
 
     expect(plans.map((plan) => plan.keywords[0])).toEqual(['牛排', '意面']);
     expect(plans.every((plan) => plan.searchIntent === 'exact')).toBe(true);
+  });
+
+  it('keeps explicit provider codes out of planning for a malformed target', () => {
+    const malformedTarget = '羊肉火锅';
+    const plan = buildSearchPlan(
+      context({ goal: goal({ primaryKeywords: [malformedTarget], goalId: 'goal_1' }) }),
+      malformedTarget,
+      'exact',
+      true,
+      '测试'
+    );
+    const violations = validateSearchPlan(plan, context({ goal: goal({ primaryKeywords: [malformedTarget], goalId: 'goal_1' }) }));
+
+    expect(malformedTarget).toBe('羊肉火锅');
+    expect(plan.keywords).toEqual(['羊肉火锅']);
+    expect(plan.searchIntent).toBe('exact');
+    expect(plan.searchAction?.query).toBe('羊肉火锅');
+    expect(plan.searchAction?.relation).toBe('exact');
+    expect(violations).toEqual([]);
   });
 
   it('never exceeds the remaining search budget', () => {

@@ -1032,7 +1032,7 @@ describe('runSearchAgentV3', () => {
     expect(second.runtimeState?.goal.primaryKeywords).toEqual(['火锅']);
   });
 
-  it('normalizes sentence keywords before executing search tools', async () => {
+  it('preserves sentence keywords before executing search tools', async () => {
     const plans: SearchPlan[] = [];
     await runSearchAgentV3(
       input(goal({
@@ -1047,7 +1047,7 @@ describe('runSearchAgentV3', () => {
       }
     );
 
-    expect(plans[0].keywords).toEqual(['牛排']);
+    expect(plans[0].keywords).toEqual(['想吃牛排']);
   });
 
   it('continues with related keywords when exact cuisine search returns too few results', async () => {

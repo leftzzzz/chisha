@@ -433,8 +433,7 @@ export function buildSearchPlan(
 ): SearchPlan {
   const rawKeyword = typeof target === 'string' ? target : target.keyword;
   const targetPoiTypes = typeof target === 'string' ? undefined : target.poiTypes;
-  const [normalizedKeyword] = normalizeSearchKeywords([rawKeyword]);
-  const keyword = normalizedKeyword || '餐厅';
+  const keyword = rawKeyword.trim();
 
   const action = createSearchAction({
     query: keyword,
