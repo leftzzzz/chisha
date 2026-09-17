@@ -348,6 +348,108 @@ describe('FinalGuard evidence monotonicity', () => {
     allowedForPrimary: true,
   });
 
+  it.each([
+    { mode: 'all_of' as const, matches: ['目标甲'], admitted: false },
+    { mode: 'all_of' as const, matches: ['目标甲', '目标甲'], admitted: false },
+    { mode: 'all_of' as const, matches: ['目标甲', '无关目标'], admitted: false },
+    { mode: 'all_of' as const, matches: ['目标乙', '目标甲'], admitted: true },
+    { mode: 'any_of' as const, matches: [], admitted: false },
+    { mode: 'any_of' as const, matches: ['无关目标'], admitted: false },
+    { mode: 'any_of' as const, matches: ['目标乙'], admitted: true },
+  ])('checks $mode coverage for $matches (admitted=$admitted)', ({ mode, matches, admitted }) => {
+    const selected = candidate('group', '测试店', 100);
+    selected.verification.itemMatches = matches.map((requestedItem) => ({
+      requestedItem, matchedBy: 'llm_semantic', confidence: 0.9,
+    }));
+    const guarded = applyFinalGuard(context({
+      goal: goal({ alternativeGroups: [{ mode, items: ['目标甲', '目标乙'] }] }),
+      attempts: [exactAttempt],
+      candidates: [selected],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual(admitted ? [selected] : []);
+    expect(guarded.backupCandidates).toEqual(admitted ? [] : [selected]);
+    expect(guarded.violations).toEqual(admitted ? [] : [expect.objectContaining({
+      code: 'REQUIRED_ITEM_UNSUPPORTED', disposition: 'backup',
+    })]);
+    expect(selected.verification.status).toBe('passed');
+  });
+
+  it('checks category groups without treating category support as item support', () => {
+    const selected = candidate('group', '测试店', 100);
+    selected.verification.categoryMatches = ['品类甲'];
+    const groupedContext = context({
+      goal: goal({ alternativeGroups: [{ mode: 'any_of', items: ['品类甲', '品类乙'] }] }),
+      attempts: [exactAttempt],
+      candidates: [selected],
+    });
+    expect(applyFinalGuard(groupedContext).primaryCandidates).toEqual([selected]);
+
+    groupedContext.goal.alternativeGroups = [{ mode: 'all_of', items: ['品类甲', '菜品甲'] }];
+    expect(applyFinalGuard(groupedContext).primaryCandidates).toEqual([]);
+
+  });
+
+  it('rejects category-only support for an explicitly requested dish despite unrelated item matches', () => {
+    const selected = candidate('dish', '测试店', 100);
+    selected.verification.categoryMatches = ['菜品甲'];
+    selected.verification.itemMatches = [{
+      requestedItem: '无关菜品', matchedBy: 'llm_semantic', confidence: 0.9,
+    }];
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        requestedItems: [{ name: '菜品甲', required: true, aliases: [] }],
+        alternativeGroups: [{ mode: 'all_of', items: ['菜品甲'] }],
+      }),
+      attempts: [exactAttempt],
+      candidates: [selected],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toEqual([selected]);
+    expect(guarded.violations).toEqual([expect.objectContaining({
+      code: 'REQUIRED_ITEM_UNSUPPORTED', disposition: 'backup',
+    })]);
+  });
+
+  it.each(['all_of', 'any_of'] as const)('rejects an empty %s group', (mode) => {
+    const guarded = applyFinalGuard(context({
+      goal: goal({ alternativeGroups: [{ mode, items: [] }] }),
+      attempts: [exactAttempt],
+    }));
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.violations.every((violation) =>
+      violation.code === 'REQUIRED_ITEM_UNSUPPORTED'
+    )).toBe(true);
+  });
+
+  it('does not let broaden authorization bypass an uncovered group', () => {
+    const guarded = applyFinalGuard(context({
+      goal: goal({ alternativeGroups: [{ mode: 'all_of', items: ['目标甲', '目标乙'] }] }),
+    }));
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toHaveLength(4);
+    expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+  });
+
+  it('requires every group and loses admission when matching evidence is deleted', () => {
+    const selected = candidate('group', '测试店', 100);
+    selected.verification.itemMatches = ['目标甲', '目标乙'].map((requestedItem) => ({
+      requestedItem, matchedBy: 'llm_semantic', confidence: 0.9,
+    }));
+    const groupedContext = context({
+      goal: goal({ alternativeGroups: [
+        { mode: 'all_of', items: ['目标甲'] },
+        { mode: 'any_of', items: ['目标乙', '目标丙'] },
+      ] }),
+      attempts: [exactAttempt],
+      candidates: [selected],
+    });
+    expect(applyFinalGuard(groupedContext).primaryCandidates).toEqual([selected]);
+    selected.verification.itemMatches.pop();
+    expect(applyFinalGuard(groupedContext).primaryCandidates).toEqual([]);
+  });
+
   it('keeps category-compatible unverified candidates in backup', () => {
     const guarded = applyFinalGuard(context({
       goal: lemonTeaGoal,

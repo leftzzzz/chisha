@@ -238,6 +238,24 @@ function primaryAdmissionViolation(
     };
   }
 
+  const supportedTargets = new Set([
+    ...candidate.verification.itemMatches.map((match) => match.requestedItem),
+    ...candidate.verification.categoryMatches.filter((category) =>
+      !context.goal.requestedItems.some((item) => item.name === category)
+    ),
+  ]);
+  const unsupportedGroup = context.goal.alternativeGroups.some((group) =>
+    group.items.length === 0 || (group.mode === 'all_of'
+      ? !group.items.every((item) => supportedTargets.has(item))
+      : !group.items.some((item) => supportedTargets.has(item)))
+  );
+  if (unsupportedGroup) {
+    return {
+      code: 'REQUIRED_ITEM_UNSUPPORTED',
+      message: `候选「${candidate.restaurant.name}」缺少必选目标组的完整证据，只能作为候补。`,
+    };
+  }
+
   if (
     hasRequiredItems(context)
     && candidate.verification.itemMatches.length === 0
