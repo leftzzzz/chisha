@@ -252,6 +252,17 @@ describe('policy 计划批次', () => {
     expect(plans.every((plan) => plan.searchIntent === 'exact')).toBe(true);
   });
 
+  it.each([
+    ['羊肉火锅', '广式羊肉火锅'],
+    ['无糖柠檬茶', '鲜榨柠檬茶'],
+  ])('keeps both modifier targets %s and %s', (first, second) => {
+    const plans = planSearchBatch(context({
+      goal: goal({ primaryKeywords: [first, second] }),
+    }));
+
+    expect(plans.map((plan) => plan.keywords[0])).toEqual([first, second]);
+  });
+
   it('keeps explicit provider codes out of planning for a malformed target', () => {
     const malformedTarget = '羊肉火锅';
     const plan = buildSearchPlan(

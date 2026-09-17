@@ -36,7 +36,6 @@ import {
   canonicalizePoiTerm,
   DEFAULT_POI_TYPE,
   lookupFoodPoiTypes,
-  normalizeSearchKeywords,
 } from '../poiTaxonomy';
 import { SearchPlanSchema } from '../schemas/plan';
 import { createSearchAction, isPrimaryScopeAuthorized, searchRelationFromIntent } from '../searchAction';
@@ -338,7 +337,7 @@ function buildPlanBatch(
       break;
     }
 
-    const [keyword] = normalizeSearchKeywords([target.keyword]);
+    const keyword = target.keyword.trim();
     if (!keyword || usedKeywords.has(keyword) || hitsExclusion(ctx.goal, keyword)) {
       continue;
     }

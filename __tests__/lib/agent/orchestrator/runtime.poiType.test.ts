@@ -66,7 +66,7 @@ describe('runSearchAgentV3 POI type selection', () => {
     jest.resetModules();
   });
 
-  it('uses selected Amap POI type and rejects unrelated exact-keyword retrievals', async () => {
+  it('evaluates candidate evidence without narrowing retrieval by Amap POI type', async () => {
     jest.doMock('@/lib/agent/models/goalUnderstandingModel', () => {
       const actual = jest.requireActual('@/lib/agent/models/goalUnderstandingModel');
       return {
@@ -92,9 +92,9 @@ describe('runSearchAgentV3 POI type selection', () => {
         restaurants: Restaurant[];
         targetCount: number;
       }) => {
-        const allowedPoiTypes = evaluationInput.plan.poiType?.split('|') ?? [];
+        const acceptableNames = new Set(['港式奶茶铺']);
         const verdicts = evaluationInput.restaurants.map((item) => {
-          const accepted = allowedPoiTypes.includes(item.poiTypeCode ?? '');
+          const accepted = acceptableNames.has(item.name);
 
           return {
             restaurantId: item.id,
@@ -140,7 +140,7 @@ describe('runSearchAgentV3 POI type selection', () => {
 
     expect(searchedPlans[0]).toEqual(expect.objectContaining({
       keywords: ['港奶'],
-      poiType: '050700',
+      poiType: undefined,
     }));
     expect(result.restaurants.map((item) => item.name)).toEqual(['港式奶茶铺']);
     expect(result.candidates.map((item) => item.name)).not.toContain('椰子鸡');

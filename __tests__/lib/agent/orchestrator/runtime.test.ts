@@ -1081,7 +1081,7 @@ describe('runSearchAgentV3', () => {
     expect(result.restaurants.length).toBeGreaterThan(3);
   });
 
-  it('fans out broadened keyword targets with their own POI types', async () => {
+  it('fans out broadened keyword targets without provider category plans', async () => {
     const plans: SearchPlan[] = [];
     const events: AgentEvent[] = [];
     const result = await runSearchAgentV3(
@@ -1118,13 +1118,11 @@ describe('runSearchAgentV3', () => {
     expect(result.paused).not.toBe(true);
     expect(plans.map((plan) => [plan.keywords, plan.poiType])).toEqual([
       [['火星菜'], undefined],
-      [['日料'], '050202'],
-      [['韩餐'], '050203'],
-      [['东南亚菜'], '050206|050217'],
+      [['日料'], undefined],
+      [['韩餐'], undefined],
+      [['东南亚菜'], undefined],
     ]);
-    expect(plans.some((plan) =>
-      plan.keywords.length > 1 && plan.poiType === '050103|050104|050108'
-    )).toBe(false);
+    expect(plans.every((plan) => plan.poiType === undefined)).toBe(true);
     expect(events.some((event) =>
       event.type === 'tool_start'
       && (event.args as SearchPlan).keywords.join('|') === '日料|韩餐|东南亚菜'

@@ -413,7 +413,7 @@ LoopX CLI 可读取本地状态，但 bootstrap 返回身份选择 gate 且没�
 | --- | --- | --- | --- |
 | 已确认缺陷：`schemas/goal.ts` 的 GoalPatchSchema.addConstraints 原先使用 optionalArray.catch | 高/高 | 一条非法追加约束使合法 500m 约束也消失，用户新增限制未生效；根因是解析将错误变成未提供 | 失败测试先复现，`a3d2cc9` 改为共用硬约束校验；保留缺省、null、单对象、空数组兼容 |
 | 已确认缺陷：`lib/amap.ts` 的 amapPoiSearch 原先 normalizeSearchKeywords 并推导分类码 | 高/高 | 五个合成查询的修饰词在 Provider 请求前丢失；根因是 Adapter 越权做语义改写 | 五个请求参数测试先失败后通过；改为只做空白规整和精确去重、固定 050000；旧分类参数保留调用兼容但不再生效 |
-| 已确认缺陷：Policy 的 buildPlanBatch 原先用归一化结果去重 | 中/高 | 不同修饰词的搜索可能被当成重复；根因是规划层语义真源分散 | 未修复，需改用原始关键词保序去重 |
+| 已确认缺陷：Policy 的 buildPlanBatch 原先用归一化结果去重 | 中/高 | 两组合成修饰词只保留第一个；根因是规划层语义真源分散 | 两组失败测试先复现后通过；改为原始关键词空白规整后保序精确去重，policy 38 项通过 |
 | 已确认缺陷：buildSearchPlan 原先附加 target、taxonomy 或 goal 的 POI 分类码 | 高/高 | 分类码反向参与 planning，缩小召回范围；根因是 Provider 事实被当作搜索意图 | 3 个反向规划测试先失败后通过；计划不再设置 poiType，旧兼容入口固定返回 undefined，policy 文件 36 项通过 |
 | 已确认契约缺口：`evaluator.ts` 的 buildCandidate 仍把自由文本 matchedItems 转为匹配；Guard 无证据引用核验 | 高/高 | 模型自报匹配仍缺少可核验来源，覆盖完整也不能证明供应；根因是证据数据契约缺失 | 未修复，需逐条件证据、引用验证及旧会话失效处理 |
 | 已确认契约缺口：`evals/runner.ts` 的 runSuite 接收 live 标签但固定 createFixtureSearchPlaces | 中/高 | 调用者可能把固定地图评测误读为实调；根因是模式标签与执行路径未绑定 | 未修复；本次全部明确报告 offline |
@@ -441,6 +441,10 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
   测试先失败（未抛错），修复后通过；缺省与单对象兼容同时验证。
 - 高德请求边界：5 个修饰词/整句测试先失败后通过，完整 Adapter 测试 12 项通过；
   断言请求 query、固定 types 和 500 米 radius，不依赖真实供应商响应。
+- 规划层边界：3 个分类码反向规划测试先失败后通过；2 组修饰词误去重测试先失败后通过；
+  policy 文件最终 38 项通过，offline eval 15 项通过。
+- 完整收敛检查：首次完整 `npm test` 发现 2 个旧分类码契约测试；替换为查询保真和
+  不缩窄召回断言后，71 suites / 624 tests 通过。
 - 两个切片的 `npm run eval` 均为 15 个 offline cases 通过，与既有基线无变化。
 - type-check、lint、docs:check、test:docs 通过；最后一次 schema 修复后另跑 docs:check。
 - 未执行浏览器人工验收、真实模型/地图、Next build、Cloudflare build/dry-run 或部署。
