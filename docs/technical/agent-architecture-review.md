@@ -549,3 +549,15 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
 - 剩余风险：时间表示 Runtime 获取数据，不是商家更新或菜单有效时间。Provider 仍从
   返回餐厅推断，空结果默认 amap、混合来源缺少逐事实绑定；独立来源、时间准入与逐条件
   裁决未闭合，R03 不能结项。未执行真实服务、浏览器、数据库或部署验收。
+
+### 后续切片：Observation 来源引用
+
+- 对抗性检查发现 fetchedAt 只挂在 observation 上，候选证据没有绑定到这次数据获取，
+  Guard 也无法确认引用真实存在。新增 `targetEvidence.observationRef` 后，Runtime 使用
+  本次 `plan.planId` 填充，FinalGuard 核对 observation 存在、Provider 与餐厅来源一致，
+  并且 fetchedAt 已记录。
+- 对抗用例先复现“引用指向缺失 observation，但字段快照仍匹配”仍进入主推荐；修复后该
+  候选降为候补。旧会话无引用仍可读取，但不能支持非分组必选目标。
+- 全量验证 73 suites / 656 tests 通过；offline eval 15/15，type-check、lint、
+  docs:check 通过。真实模型/地图、浏览器、数据库和部署验收仍未执行；逐条件裁决
+  未实现，R03 不能结项。

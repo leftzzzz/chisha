@@ -1050,6 +1050,16 @@ async function runSearchPlan(
   const hardRejectedReasons = summarizeHardRejectedReasons(hardGuard.rejected);
 
   const evaluation = await evaluatePlanCandidates(plan, context, hardGuard.passed, restaurants.length, emit);
+  const agentEvaluation: EvaluationModelOutput = {
+    ...evaluation.output,
+    verdicts: evaluation.output.verdicts.map((verdict) => ({
+      ...verdict,
+      targetEvidence: verdict.targetEvidence?.map((evidence) => ({
+        ...evidence,
+        observationRef: plan.planId,
+      })),
+    })),
+  };
   appendTrace(context, 'evaluation', {
     actionId,
     input: {
@@ -1077,7 +1087,7 @@ async function runSearchPlan(
     hardGuard,
     hardRejectedReasons,
     evaluationRestaurants: evaluation.restaurants,
-    agentEvaluation: evaluation.output,
+    agentEvaluation,
   };
 }
 

@@ -173,6 +173,10 @@ const primaryScopeAuthorized =
 - 当前 `AgentObservation.fetchedAt` 记录 Runtime 收到搜索结果时的 Unix 毫秒时间，
   不得使用后续模型评估或批次提交时间替代。它不是商家资料的更新时间，也不证明
   菜单时效；旧会话没有该字段时，不得补成当前时间来伪造新鲜度。
+- 非分组必选目标的 `targetEvidence.observationRef` 必须指向本次 Runtime 生成并持久
+  的 observation `planId`，且 Provider 与候选来源一致。引用缺失表示旧会话兼容输入，
+  可读取但不能支持主推荐；引用不存在或来源不一致时，该目标证据失效，候选只能降级，
+  不能因字段快照仍相同而豁免。
 
 ## 仍然生效的运行契约
 

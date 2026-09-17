@@ -11,7 +11,7 @@ function goal(): UserGoal {
   return {
     intent: 'find_restaurants',
     rawQuery: '没有具体想吃的，你来选',
-    requestedItems: [],
+    requestedItems: [{ name: '寿司', required: true, aliases: [] }],
     acceptableCategories: [],
     alternativeGroups: [],
     primaryKeywords: [],
@@ -29,8 +29,8 @@ function goal(): UserGoal {
 function restaurant(): Restaurant {
   return {
     id: 'r1',
-    name: '测试餐厅',
-    cuisineType: '餐饮',
+    name: '寿司店',
+    cuisineType: '寿司',
     address: '测试地址',
     location,
     source: 'amap',
@@ -38,9 +38,9 @@ function restaurant(): Restaurant {
   };
 }
 
-function agentInput(): AgentInput {
+function agentInput(query = '没有具体想吃的，你来选'): AgentInput {
   return {
-    query: '没有具体想吃的，你来选',
+    query,
     location,
     runtimeState: {
       goal: goal(),
@@ -75,10 +75,23 @@ async function loadRuntime(onEvaluate = () => undefined) {
           status: 'passed' as const,
           primaryEligible: true,
           confidence: 0.9,
-          matchedItems: [],
+          matchedItems: input.restaurants
+            .filter((restaurant) => restaurant.name.includes('寿司'))
+            .map(() => '寿司'),
           matchedCategories: [],
           conflicts: [],
-          evidence: [],
+          evidence: ['寿司店供应寿司'],
+          targetEvidence: input.restaurants
+            .filter((restaurant) => restaurant.name.includes('寿司'))
+            .map((restaurant) => ({
+              target: '寿司',
+              kind: 'item' as const,
+              references: [{
+                restaurantId: restaurant.id,
+                field: 'name' as const,
+                value: restaurant.name,
+              }],
+            })),
           warnings: [],
         })),
         selectedIds: [],
@@ -119,7 +132,9 @@ describe('runtime observation assembly', () => {
   it('keeps the provider return time through evaluation and JSON persistence', async () => {
     const returnedAt = 1_800_000_000_000;
     let now = returnedAt - 100;
+    let evaluateCount = 0;
     const runSearchAgentV3 = await loadRuntime(() => {
+      evaluateCount += 1;
       now += 500;
     });
     jest.spyOn(Date, 'now').mockImplementation(() => now);
@@ -128,11 +143,28 @@ describe('runtime observation assembly', () => {
       return [restaurant()];
     });
 
-    expect(now).toBeGreaterThan(returnedAt);
+    expect(evaluateCount).toBeGreaterThan(0);
     const restored = JSON.parse(JSON.stringify(result.runtimeState));
     expect(restored.observations.length).toBeGreaterThan(0);
     for (const observation of restored.observations) {
       expect(observation.fetchedAt).toBe(returnedAt);
     }
+  });
+
+  it('binds ungrouped target evidence to the current observation', async () => {
+    const runSearchAgentV3 = await loadRuntime();
+    const result = await runSearchAgentV3(agentInput('寿司'), () => undefined, async () => [restaurant()]);
+
+    const observations = result.runtimeState?.observations ?? [];
+    const candidate = result.runtimeState?.candidates?.[0];
+    const evidence = candidate?.verification.targetEvidence?.[0];
+    expect(result.restaurants.map((restaurant) => restaurant.name)).toEqual(['寿司店']);
+    expect(observations.length).toBeGreaterThan(0);
+    expect(evidence?.observationRef).toBe(observations[0]?.plan.planId);
+    expect(observations.some((observation) =>
+      observation.plan.planId === evidence?.observationRef
+      && observation.provider === candidate?.restaurant.source
+      && typeof observation.fetchedAt === 'number'
+    )).toBe(true);
   });
 });

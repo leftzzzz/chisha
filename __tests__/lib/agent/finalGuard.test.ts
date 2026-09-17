@@ -366,6 +366,24 @@ describe('FinalGuard evidence monotonicity', () => {
     expect(JSON.stringify(selected)).toBe(before);
   });
 
+  it('rejects a stale observation reference even when the fact snapshot matches', () => {
+    const selected = candidate('ungrouped', '测试店', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '柠檬茶', matchedBy: 'name', confidence: 1,
+    }];
+    selected.verification.targetEvidence = [{
+      target: '柠檬茶', kind: 'item', observationRef: 'missing-plan-id',
+      references: [{ restaurantId: 'ungrouped', field: 'name', value: '测试店' }],
+    }];
+    const guarded = applyFinalGuard(context({
+      goal: lemonTeaGoal,
+      attempts: [exactAttempt], candidates: [selected],
+    }));
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toEqual([selected]);
+    expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+  });
+
   it.each(['missing', 'empty', 'foreign', 'changed', 'category', 'valid'])('checks %s ungrouped fact references', (variant) => {
     const selected = candidate('ungrouped', '测试火锅', 100);
     selected.verification.itemMatches = [{

@@ -1,4 +1,5 @@
 import type {
+  AgentObservation,
   AgentContext,
   FinalGuardResult,
   FinalGuardVerdict,
@@ -129,7 +130,12 @@ export function applyFinalGuard(
  * 主推荐准入所需的最小上下文。
  * AgentContext / PolicyContext 均结构性满足，便于策略层复用。
  */
-export type CandidateAdmissionContext = Pick<AgentContext, 'goal' | 'attempts' | 'location'>;
+export type CandidateAdmissionContext = Pick<
+  AgentContext,
+  'goal' | 'attempts' | 'location'
+> & {
+  observations?: AgentObservation[];
+};
 
 type PrimaryAdmissionViolation = Pick<FinalGuardViolation, 'code' | 'message'>;
 
@@ -244,7 +250,15 @@ function primaryAdmissionViolation(
     (candidate.verification.targetEvidence ?? []).flatMap((evidence) => {
       const parsed = TargetEvidenceSchema.safeParse(evidence);
       if (!parsed.success) return [];
-      const { target, kind, references } = parsed.data;
+      const { target, kind, references, observationRef } = parsed.data;
+      const observation = observationRef
+        ? (context.observations as AgentObservation[] | undefined)?.find((item) => item.plan.planId === observationRef)
+        : undefined;
+      const observationValid = !observationRef || (
+        observation?.plan.planId === observationRef
+        && observation.provider === candidate.restaurant.source
+        && typeof observation.fetchedAt === 'number'
+      );
       const declaredMatch = kind === 'item'
         ? candidate.verification.itemMatches.some((match) => match.requestedItem === target)
         : candidate.verification.categoryMatches.includes(target)
@@ -254,7 +268,7 @@ function primaryAdmissionViolation(
         && reference.value.trim().length > 0
         && candidate.restaurant[reference.field] === reference.value
       );
-      return declaredMatch && referencesValid ? [target] : [];
+      return declaredMatch && referencesValid && observationValid ? [target] : [];
     })
   );
   const unsupportedGroup = context.goal.alternativeGroups.some((group) =>

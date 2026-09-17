@@ -37,6 +37,7 @@ export const TargetEvidenceSchema = z.object({
     field: z.enum(['name', 'cuisineType']),
     value: z.string().min(1),
   })).min(1),
+  observationRef: z.string().min(1).optional().catch(undefined),
 });
 
 export const CandidateVerdictSchema = z.preprocess((value) => {

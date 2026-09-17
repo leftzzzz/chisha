@@ -280,6 +280,7 @@ export interface TargetEvidence {
     field: 'name' | 'cuisineType';
     value: string;
   }>;
+  observationRef?: string;
 }
 
 export interface CandidateVerification {
