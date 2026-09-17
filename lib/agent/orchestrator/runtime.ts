@@ -933,6 +933,7 @@ interface SearchPlanResult {
   plan: SearchPlan;
   restaurants: Restaurant[];
   provider: AgentObservation['provider'];
+  fetchedAt: number;
   hardGuard: ReturnType<typeof applyHardConstraintGuard>;
   hardRejectedReasons: string[];
   evaluationRestaurants: Restaurant[];
@@ -1010,7 +1011,8 @@ async function runSearchPlan(
 
   const toolStartedAt = Date.now();
   const restaurants = await searchPlaces(plan);
-  const toolDurationMs = Date.now() - toolStartedAt;
+  const fetchedAt = Date.now();
+  const toolDurationMs = fetchedAt - toolStartedAt;
   const provider = inferObservationProvider(restaurants);
   const toolResultTrace = appendTrace(context, 'tool_result', {
     actionId,
@@ -1071,6 +1073,7 @@ async function runSearchPlan(
     plan,
     restaurants,
     provider,
+    fetchedAt,
     hardGuard,
     hardRejectedReasons,
     evaluationRestaurants: evaluation.restaurants,
@@ -1342,7 +1345,7 @@ function commitSearchPlanResult(
     traceId: observationTrace.id,
     plan,
     provider,
-    fetchedAt: Date.now(),
+    fetchedAt: result.fetchedAt,
     rawCount: restaurants.length,
     hardRejected: hardGuard.rejected.slice(0, MAX_HARD_REJECTED_OBSERVATIONS).map((item) => ({
       restaurantId: item.restaurant.id,

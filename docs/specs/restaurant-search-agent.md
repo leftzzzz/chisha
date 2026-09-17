@@ -170,6 +170,9 @@ const primaryScopeAuthorized =
   主推荐。证据不足的候选只能进入明确标注的不确定候补。
 - Observation 和 evidence 必须记录 action id、Provider、原始 query、Provider 参数、
   来源、获取时间和可追溯原始事实。
+- 当前 `AgentObservation.fetchedAt` 记录 Runtime 收到搜索结果时的 Unix 毫秒时间，
+  不得使用后续模型评估或批次提交时间替代。它不是商家资料的更新时间，也不证明
+  菜单时效；旧会话没有该字段时，不得补成当前时间来伪造新鲜度。
 
 ## 仍然生效的运行契约
 

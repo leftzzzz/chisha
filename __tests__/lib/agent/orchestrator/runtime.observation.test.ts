@@ -52,7 +52,7 @@ function agentInput(): AgentInput {
   };
 }
 
-async function loadRuntime() {
+async function loadRuntime(onEvaluate = () => undefined) {
   jest.resetModules();
   process.env.AGENT_DETERMINISTIC = '1';
   delete process.env.AGENT_PARALLEL_SEARCH;
@@ -67,24 +67,27 @@ async function loadRuntime() {
   });
 
   jest.doMock('@/lib/agent/models/evaluationModel', () => ({
-    runEvaluationModel: jest.fn(async (input: { restaurants: Restaurant[] }) => ({
-      verdicts: input.restaurants.map((item) => ({
-        restaurantId: item.id,
-        status: 'passed' as const,
-        primaryEligible: true,
-        confidence: 0.9,
-        matchedItems: [],
-        matchedCategories: [],
-        conflicts: [],
-        evidence: [],
-        warnings: [],
-      })),
-      selectedIds: [],
-      candidateIds: [],
-      explanation: 'ok',
-      unmetConstraints: [],
-      source: 'model' as const,
-    })),
+    runEvaluationModel: jest.fn(async (input: { restaurants: Restaurant[] }) => {
+      onEvaluate();
+      return {
+        verdicts: input.restaurants.map((item) => ({
+          restaurantId: item.id,
+          status: 'passed' as const,
+          primaryEligible: true,
+          confidence: 0.9,
+          matchedItems: [],
+          matchedCategories: [],
+          conflicts: [],
+          evidence: [],
+          warnings: [],
+        })),
+        selectedIds: [],
+        candidateIds: [],
+        explanation: 'ok',
+        unmetConstraints: [],
+        source: 'model' as const,
+      };
+    }),
   }));
 
   const { runSearchAgentV3 } = await import('@/lib/agent/orchestrator/runtime');
@@ -92,6 +95,17 @@ async function loadRuntime() {
 }
 
 describe('runtime observation assembly', () => {
+  const originalDeterministic = process.env.AGENT_DETERMINISTIC;
+  const originalParallelSearch = process.env.AGENT_PARALLEL_SEARCH;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    if (originalDeterministic === undefined) delete process.env.AGENT_DETERMINISTIC;
+    else process.env.AGENT_DETERMINISTIC = originalDeterministic;
+    if (originalParallelSearch === undefined) delete process.env.AGENT_PARALLEL_SEARCH;
+    else process.env.AGENT_PARALLEL_SEARCH = originalParallelSearch;
+  });
+
   it('records fetchedAt on assembled observations', async () => {
     const runSearchAgentV3 = await loadRuntime();
     const result = await runSearchAgentV3(agentInput(), () => undefined, async () => [restaurant()]);
@@ -100,5 +114,25 @@ describe('runtime observation assembly', () => {
     expect(typeof observation?.fetchedAt).toBe('number');
     expect(observation?.fetchedAt).toBeGreaterThan(0);
     expect(observation?.fetchedAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('keeps the provider return time through evaluation and JSON persistence', async () => {
+    const returnedAt = 1_800_000_000_000;
+    let now = returnedAt - 100;
+    const runSearchAgentV3 = await loadRuntime(() => {
+      now += 500;
+    });
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    const result = await runSearchAgentV3(agentInput(), () => undefined, async () => {
+      now = returnedAt;
+      return [restaurant()];
+    });
+
+    expect(now).toBeGreaterThan(returnedAt);
+    const restored = JSON.parse(JSON.stringify(result.runtimeState));
+    expect(restored.observations.length).toBeGreaterThan(0);
+    for (const observation of restored.observations) {
+      expect(observation.fetchedAt).toBe(returnedAt);
+    }
   });
 });
