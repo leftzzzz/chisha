@@ -133,6 +133,14 @@ export const ConstraintSchema = z.object({
   max: OptionalNumberSchema,
 });
 
+const HardConstraintListSchema = z.preprocess((value) => {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+}, z.array(ConstraintSchema));
+
 export const PreferenceSchema = z.preprocess((value) => {
   if (typeof value === 'string') {
     return { name: value };
@@ -324,7 +332,7 @@ export const UserGoalSchema = z.object({
   broadenedKeywords: DefaultStringArraySchema,
   relatedTargets: defaultArray(SearchKeywordTargetSchema),
   broadenedTargets: defaultArray(SearchKeywordTargetSchema),
-  hardConstraints: defaultArray(ConstraintSchema),
+  hardConstraints: HardConstraintListSchema,
   softPreferences: defaultArray(PreferenceSchema),
   exclusions: DefaultStringArraySchema,
   ambiguity: DefaultStringArraySchema,

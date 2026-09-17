@@ -67,6 +67,22 @@ describe('Agent schema defaults', () => {
     expect(parsed.allowBroaden).toBe(false);
   });
 
+  it('fails closed when any hard constraint is malformed', () => {
+    const invalidConstraint = { kind: 'menu_contains_unsupported_field' };
+    const strictDistance = {
+      kind: 'distance',
+      label: '500米内',
+      maxMeters: 500,
+      strict: true,
+    };
+
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '500米内的羊肉火锅，不要辣',
+      hardConstraints: [strictDistance, invalidConstraint],
+    })).toThrow(/Invalid enum value.*menu_contains_unsupported_field/);
+  });
+
   it('defaults optional explanation fields in action and plan outputs', () => {
     expect(AgentActionSchema.parse({ type: 'finish' })).toEqual({
       type: 'finish',
