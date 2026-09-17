@@ -432,7 +432,6 @@ export function buildSearchPlan(
   reason: string
 ): SearchPlan {
   const rawKeyword = typeof target === 'string' ? target : target.keyword;
-  const targetPoiTypes = typeof target === 'string' ? undefined : target.poiTypes;
   const keyword = rawKeyword.trim();
 
   const action = createSearchAction({
@@ -456,7 +455,7 @@ export function buildSearchPlan(
   return SearchPlanSchema.parse({
     keywords: [keyword],
     radiusMeters: nextSearchRadius(ctx),
-    poiType: resolvePlanPoiType(ctx.goal, keyword, targetPoiTypes),
+    poiType: undefined,
     searchIntent,
     allowedForPrimary: effectiveAllowedForPrimary,
     reason,
@@ -476,19 +475,13 @@ export function nextSearchRadius(ctx: PolicyContext): number {
   return clampRadius(Math.round(latestRadius * RADIUS_GROWTH));
 }
 
-/** 构造计划时的 poiType 选择：target 自带 > 关键词推断 > goal.poiType。 */
+/** 旧兼容入口：搜索计划不再携带 Provider 分类码。 */
 export function resolvePlanPoiType(
-  goal: UserGoal,
-  keyword: string,
-  targetPoiTypes?: string[]
+  _goal: UserGoal,
+  _keyword: string,
+  _targetPoiTypes?: string[]
 ): string | undefined {
-  const sanitizedTargetPoiTypes = sanitizePoiTypeCodes(targetPoiTypes?.join('|'));
-  if (sanitizedTargetPoiTypes.length > 0) {
-    return sanitizedTargetPoiTypes.join('|');
-  }
-
-  const inferred = inferPoiTypesForGoalKeyword(goal, keyword) ?? goal.poiType;
-  return inferred === DEFAULT_POI_TYPE ? undefined : inferred;
+  return undefined;
 }
 
 export function inferPoiTypesForGoalKeyword(

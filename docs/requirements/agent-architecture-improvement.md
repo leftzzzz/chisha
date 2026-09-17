@@ -1,6 +1,6 @@
 # Agent 架构改进需求
 
-> 状态：待评审的改进需求，不代表功能已实现或新增产品决策已获批准。
+> 状态：正确性修复已开始实施，尚未整体验收；需业务数据支持的新产品决策仍待评审。
 > 配套方案见 [Agent 架构审查与改进技术方案](../technical/agent-architecture-review.md)。
 > 当前强制边界仍以 [Restaurant Search Agent Spec](../specs/restaurant-search-agent.md)
 > 和 [Application Behavior Spec](../specs/application-behavior.md) 为准。
@@ -19,7 +19,7 @@ ChiSha 的 Restaurant Search Agent 需要在保证目标保真、证据边界、
 本文是改进项目的验收清单，不是另一份运行规范。既有产品承诺见
 [Restaurant Search Agent Requirements](./restaurant-search-agent.md) 和
 [最终推荐发布边界](./final-recommendation-publication.md)。新增排序、反馈和部分成功策略在
-评审接受时，应同步相关 Spec；本次只交付文档，不改变线上行为。
+评审接受时，应同步相关 Spec；实施进度见下文，不代表已部署或线上效果已验证。
 
 ## 用户需求
 
@@ -95,6 +95,20 @@ ChiSha 的 Restaurant Search Agent 需要在保证目标保真、证据边界、
 | R09 | P2 恢复与观测 | 失败、取消和持久化失败可区分；未知成本不记为零 | 阶段 3、4 |
 
 ## 评审决策与指标
+
+### 实施进度（2026-09-17）
+
+| 编号 | 当前状态 | 已交付与剩余边界 |
+| --- | --- | --- |
+| R01 | 大部分实现 | `fa12ae3`、`da21a42` 保留计划与高德请求 query；`da21a42` 阻止规划层附加分类码。批量去重和真实模型/地图验收未完成 |
+| R02 | 数组完整性切片通过 | `8a30372` 拒绝首轮混合非法约束；`a3d2cc9` 补齐多轮追加入口；字段级容错的安全性仍需单独审查 |
+| R03 | 部分实现 | `74171af` 核对显式 all-of/any-of 组覆盖、空组和分类/菜品边界；来源绑定、逐条件裁决和旧会话兼容尚未实施 |
+| R04 | 未实施 | 仍不能将 fixture eval 作为真实模型或真实地图结果 |
+| R05–R09 | 未实施 | 不将本轮正确性修复计为召回、排序、多轮意图、反馈、局部失败或恢复能力交付 |
+
+本地验收与对抗性审查记录见
+[技术方案实施记录](../technical/agent-architecture-review.md#实施与本地验收记录)。
+完整项目仍有必需工作，不能以单测全绿关闭全部验收项。
 
 优先批准目标保真、硬约束和证据契约的修复。排序权重、停止阈值、反馈采集和外部证据源
 应在建立基线后决定，不因本文中的建议直接上线。

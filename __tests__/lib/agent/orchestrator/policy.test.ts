@@ -102,17 +102,9 @@ describe('policy 搜索半径', () => {
 });
 
 describe('policy poiType 选择', () => {
-  it('prefers the target-provided food poi types', () => {
-    expect(resolvePlanPoiType(goal(), '牛排', ['050118'])).toBe('050118');
-  });
-
-  it('falls back to keyword taxonomy when the target has no usable codes', () => {
-    // 050000 是广义餐饮类，不应作为窄类型使用。
-    expect(resolvePlanPoiType(goal(), '火锅', ['050000'])).toBe('050117');
-  });
-
-  it('ignores a broad food code in favour of the goal poi type', () => {
-    expect(resolvePlanPoiType(goal({ poiType: '050117' }), '未知词', ['050000'])).toBe('050117');
+  it('keeps provider category codes out of search plans', () => {
+    expect(resolvePlanPoiType(goal(), '牛排', ['050118'])).toBeUndefined();
+    expect(resolvePlanPoiType(goal({ poiType: '050117' }), '未知词')).toBeUndefined();
   });
 });
 
@@ -238,6 +230,19 @@ function candidate(id: string, brand: string, sourceAttempt = 1): RestaurantCand
 }
 
 describe('policy 计划批次', () => {
+  it.each(['餐厅', '羊肉火锅', '未知餐饮目标'])(
+    'does not attach provider category codes to the query %s', (keyword) => {
+      const plan = buildSearchPlan(context({ goal: goal({
+        goalId: 'goal_1',
+        poiType: '050117',
+        acceptableCategories: [{ name: '火锅', confidence: 0.9 }],
+      }) }), { keyword, poiTypes: ['050102'] }, 'exact', true, '测试');
+      expect(plan.keywords).toEqual([keyword]);
+      expect(plan.searchAction?.query).toBe(keyword);
+      expect(plan.poiType).toBeUndefined();
+    }
+  );
+
   it('searches every explicit target in one batch', () => {
     const plans = planSearchBatch(context({
       goal: goal({ primaryKeywords: ['牛排', '意面'] }),
