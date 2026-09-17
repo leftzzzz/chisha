@@ -415,7 +415,7 @@ LoopX CLI 可读取本地状态，但 bootstrap 返回身份选择 gate 且没�
 | 已确认缺陷：`lib/amap.ts` 的 amapPoiSearch 原先 normalizeSearchKeywords 并推导分类码 | 高/高 | 五个合成查询的修饰词在 Provider 请求前丢失；根因是 Adapter 越权做语义改写 | 五个请求参数测试先失败后通过；改为只做空白规整和精确去重、固定 050000；旧分类参数保留调用兼容但不再生效 |
 | 已确认缺陷：Policy 的 buildPlanBatch 原先用归一化结果去重 | 中/高 | 两组合成修饰词只保留第一个；根因是规划层语义真源分散 | 两组失败测试先复现后通过；改为原始关键词空白规整后保序精确去重，policy 38 项通过 |
 | 已确认缺陷：buildSearchPlan 原先附加 target、taxonomy 或 goal 的 POI 分类码 | 高/高 | 分类码反向参与 planning，缩小召回范围；根因是 Provider 事实被当作搜索意图 | 3 个反向规划测试先失败后通过；计划不再设置 poiType，旧兼容入口固定返回 undefined，policy 文件 36 项通过 |
-| 已确认契约缺口：`evaluator.ts` 的 buildCandidate 仍把自由文本 matchedItems 转为匹配；Guard 无证据引用核验 | 高/高 | 模型自报匹配仍缺少可核验来源，覆盖完整也不能证明供应；根因是证据数据契约缺失 | 未修复，需逐条件证据、引用验证及旧会话失效处理 |
+| 已确认契约缺口：旧 buildCandidate 把自由文本 matchedItems 转为匹配；Guard 无证据引用核验 | 高/高 | 模型自报匹配仍缺少可核验来源，覆盖完整也不能证明供应；根因是证据数据契约缺失 | 显式组已增加字段快照引用核验；独立 observation、时间、非分组目标和完整逐条件证据仍缺失，见后续切片记录 |
 | 已确认契约缺口：`evals/runner.ts` 的 runSuite 接收 live 标签但固定 createFixtureSearchPlaces | 中/高 | 调用者可能把固定地图评测误读为实调；根因是模式标签与执行路径未绑定 | 未修复；本次全部明确报告 offline |
 
 显式组的缺项、重复匹配充数、无关匹配、空组、证据删除、搜索授权豁免和分类冒充菜品
@@ -456,3 +456,31 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
 
 值得，但应在下一切片实现后对照具体契约继续，不重复全仓扫描或无改动全量测试。
 完整需求未完成，本记录仅验收上述局部行为，不是上线批准或项目结项。
+
+### 后续切片：显式目标组的字段引用
+
+范围：模型输出 schema、EvaluationModel、evaluator、Runtime 候选回传和 FinalGuard；
+不改搜索、排序、外部数据源或 UI。路线继续为**调整当前方案**。
+
+- 新增 `targetEvidence`，模型引用当前餐厅的 id、name/cuisineType 字段和完整值。
+  evaluator 只保留引用，不用子串推导匹配。Guard 复用引用 schema，核对完整目标、
+  item/category 声明及当前字段值；不改变原 verdict、不补位、不重排。
+- 旧模型输出与旧会话没有引用仍可读取，但不能支持显式目标组。格式错误的模型引用
+  移除引用资格，保留候选原裁决；不能因引用畸形连不确定候补也丢掉。
+- 对抗性回归先复现了无引用的 name/llm_semantic 标签仍通过准入。修复后覆盖缺失、
+  空引用、错店、字段变化、非法字段/值、目标不符、匹配声明缺失和品类冒充菜品。
+  增加 schema → evaluator → JSON 会话恢复 → Guard 的贯通回归；JSON 往返不代表
+  已验证数据库落库或浏览器端到端流程。
+- 实现审查确认：字段引用一致仅是来源检查的一部分。模型仍可给出语义上不相关的真实
+  引用；当前 prompt 对名称证据的旧规则与严格菜品供应规范仍有差距。缺少独立 observation
+  id、获取时间、完整目标/事实/裁决策略缓存版本，以及非分组目标的引用检查。
+  这些是高置信度契约缺口，不宣称本次消除了模型误判或完成 R03。
+- 字段快照的权威来源仍是候选携带的 restaurant；本轮不把它包装成独立可信资料库。
+  在完成上述来源记录和语义验收前，不能据本次结果批准上线。
+
+本地验收：两条无引用准入测试先失败后通过；最终 `npm run test:ci -- --silent`
+为 71 suites / 639 tests 通过，覆盖率门禁通过。`npm run eval` 为 15 个 offline cases
+通过、基线无变化；type-check、lint、docs:check、test:docs 和 diff 空白检查通过。
+离线 eval 尚未覆盖新的引用输入，新增契约由上述专门回归覆盖，不把基线无变化当作
+真实模型已适配的证明。未执行 Next/Cloudflare build、浏览器验收、数据库落库验收、
+真实模型/地图或部署；未重复互联网检索。LoopX 身份选择 gate 未解除。

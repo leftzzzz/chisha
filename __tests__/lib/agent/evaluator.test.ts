@@ -7,6 +7,8 @@
  */
 
 import { evaluateSearchResult } from '@/lib/agent/evaluator';
+import { applyFinalGuard } from '@/lib/agent/finalGuard';
+import { EvaluationModelOutputSchema } from '@/lib/agent/schemas/verdict';
 import type {
   AgentContext,
   EvaluationModelOutput,
@@ -102,6 +104,72 @@ function evaluation(overrides: Partial<EvaluationModelOutput> = {}): EvaluationM
 
 describe('候选排序', () => {
   const restaurants = [restaurant('high', 500), restaurant('low', 500)];
+
+  it.each(['name', 'llm_semantic'] as const)(
+    'rejects legacy %s matches without references through the publication pipeline', (matchedBy) => {
+      const ctx = context();
+      ctx.goal.alternativeGroups = [{ mode: 'all_of', items: ['火锅'] }];
+      ctx.attempts = [{
+        keywords: plan.keywords, radius: plan.radiusMeters, searchIntent: 'exact',
+        allowedForPrimary: true, reason: plan.reason, found: 1, accepted: 1,
+      }];
+      const output = EvaluationModelOutputSchema.parse(evaluation({
+        verdicts: [{ ...verdict('high', 1), matchedItems: ['火锅'] }],
+      }));
+      ctx.candidates = evaluateSearchResult([restaurants[0]], ctx, plan, 1, output).acceptedCandidates;
+      ctx.candidates[0].verification.itemMatches[0].matchedBy = matchedBy;
+      const restored = JSON.parse(JSON.stringify(ctx)) as AgentContext;
+      expect(restored.candidates[0].verification.targetEvidence).toBeUndefined();
+      const guarded = applyFinalGuard(restored, {
+        selectedIds: ['high'], candidateIds: [], explanation: 'proposal', confidence: 1,
+      });
+      expect(guarded.verdict).toBe('rejected');
+      expect(guarded.primaryCandidates).toEqual([]);
+      expect(guarded.backupCandidates).toEqual(restored.candidates);
+      expect(guarded.violations).toEqual([expect.objectContaining({
+        code: 'REQUIRED_ITEM_UNSUPPORTED', disposition: 'backup',
+      })]);
+      expect(restored.candidates[0].verification.status).toBe('passed');
+    }
+  );
+
+  it('preserves model fact references through parsing, evaluation and session roundtrip', () => {
+    const facts = restaurant('high', 500);
+    const ctx = context();
+    ctx.goal.alternativeGroups = [{ mode: 'all_of', items: ['火锅'] }];
+    ctx.attempts = [{
+      keywords: plan.keywords, radius: plan.radiusMeters, searchIntent: 'exact',
+      allowedForPrimary: true, reason: plan.reason, found: 1, accepted: 1,
+    }];
+    const targetEvidence = [{
+      target: '火锅', kind: 'category' as const,
+      references: [{ restaurantId: facts.id, field: 'cuisineType' as const, value: facts.cuisineType }],
+    }];
+    const output = EvaluationModelOutputSchema.parse(evaluation({
+      verdicts: [{ ...verdict('high', 0.9), targetEvidence }],
+    }));
+    ctx.candidates = evaluateSearchResult([facts], ctx, plan, 1, output).acceptedCandidates;
+    expect(ctx.candidates[0].verification.targetEvidence).toEqual(targetEvidence);
+    const restored = JSON.parse(JSON.stringify(ctx)) as AgentContext;
+    expect(applyFinalGuard(restored).primaryCandidates).toHaveLength(1);
+    restored.candidates[0].restaurant.cuisineType = '餐饮';
+    expect(applyFinalGuard(restored).primaryCandidates).toHaveLength(0);
+    expect(restored.candidates[0].verification.status).toBe('passed');
+  });
+
+  it('does not derive references from matching words or tolerate malformed references', () => {
+    const output = evaluation({ verdicts: [{ ...verdict('high', 0.9), matchedItems: ['火锅'] }] });
+    const candidate = evaluateSearchResult(restaurants, context(), plan, 1, output).acceptedCandidates[0];
+    expect(candidate.verification.targetEvidence).toBeUndefined();
+    expect(candidate.verification.itemMatches[0].matchedBy).toBe('llm_semantic');
+    const malformed = EvaluationModelOutputSchema.parse({
+      ...output, verdicts: [{ ...output.verdicts[0], targetEvidence: [{
+        target: '火锅', kind: 'item', references: [],
+      }] }],
+    });
+    expect(malformed.verdicts[0].targetEvidence).toBeUndefined();
+    expect(malformed.verdicts).toHaveLength(1);
+  });
 
   it('按裁决内容排序，与模型是否"选中"无关', () => {
     const withoutSelection = evaluateSearchResult(

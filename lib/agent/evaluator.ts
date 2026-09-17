@@ -105,6 +105,7 @@ function buildCandidate(
         confidence: verdict.confidence,
       })),
       categoryMatches: verdict.matchedCategories,
+      targetEvidence: verdict.targetEvidence,
       warnings: verdict.warnings,
       confidence: verdict.confidence,
     },

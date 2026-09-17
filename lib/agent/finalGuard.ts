@@ -13,6 +13,7 @@ import {
   isSearchIntentAuthorizedForPrimary,
 } from './authorization';
 import { getRestaurantIdentityKeys } from '@/lib/restaurantIdentity';
+import { TargetEvidenceSchema } from './schemas/verdict';
 
 export function applyFinalGuard(
   context: AgentContext,
@@ -238,12 +239,24 @@ function primaryAdmissionViolation(
     };
   }
 
-  const supportedTargets = new Set([
-    ...candidate.verification.itemMatches.map((match) => match.requestedItem),
-    ...candidate.verification.categoryMatches.filter((category) =>
-      !context.goal.requestedItems.some((item) => item.name === category)
-    ),
-  ]);
+  // 旧会话的匹配标签不算引用；核验来源只能收紧准入，不能生成语义结论。
+  const supportedTargets = new Set(
+    (candidate.verification.targetEvidence ?? []).flatMap((evidence) => {
+      const parsed = TargetEvidenceSchema.safeParse(evidence);
+      if (!parsed.success) return [];
+      const { target, kind, references } = parsed.data;
+      const declaredMatch = kind === 'item'
+        ? candidate.verification.itemMatches.some((match) => match.requestedItem === target)
+        : candidate.verification.categoryMatches.includes(target)
+          && !context.goal.requestedItems.some((item) => item.name === target);
+      const referencesValid = references.every((reference) =>
+        reference.restaurantId === candidate.restaurant.id
+        && reference.value.trim().length > 0
+        && candidate.restaurant[reference.field] === reference.value
+      );
+      return declaredMatch && referencesValid ? [target] : [];
+    })
+  );
   const unsupportedGroup = context.goal.alternativeGroups.some((group) =>
     group.items.length === 0 || (group.mode === 'all_of'
       ? !group.items.every((item) => supportedTargets.has(item))

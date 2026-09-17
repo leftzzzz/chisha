@@ -195,6 +195,7 @@ export interface CandidateVerdict {
   confidence: number;
   matchedItems: string[];
   matchedCategories: string[];
+  targetEvidence?: TargetEvidence[];
   conflicts: string[];
   evidence: string[];
   warnings: string[];
@@ -271,6 +272,16 @@ export interface ItemMatch {
   confidence: number;
 }
 
+export interface TargetEvidence {
+  target: string;
+  kind: 'item' | 'category';
+  references: Array<{
+    restaurantId: string;
+    field: 'name' | 'cuisineType';
+    value: string;
+  }>;
+}
+
 export interface CandidateVerification {
   restaurantId: string;
   status: 'passed' | 'failed' | 'unverified';
@@ -278,6 +289,7 @@ export interface CandidateVerification {
   hardFailures: VerificationFailure[];
   itemMatches: ItemMatch[];
   categoryMatches: string[];
+  targetEvidence?: TargetEvidence[];
   warnings: string[];
   confidence: number;
 }

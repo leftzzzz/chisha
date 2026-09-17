@@ -1743,6 +1743,7 @@ function candidateToVerdict(candidate: RestaurantCandidate): CandidateVerdict {
     confidence: candidate.verification.confidence,
     matchedItems: candidate.verification.itemMatches.map((match) => match.requestedItem),
     matchedCategories: candidate.verification.categoryMatches,
+    targetEvidence: candidate.verification.targetEvidence,
     conflicts: candidate.verification.hardFailures.map((failure) => failure.message),
     evidence: candidate.matched,
     warnings: candidate.verification.warnings,

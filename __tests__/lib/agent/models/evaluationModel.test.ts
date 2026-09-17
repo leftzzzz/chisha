@@ -118,6 +118,10 @@ describe('EvaluationModel', () => {
           confidence: 0.92,
           matchedItems: ['牛排'],
           matchedCategories: ['西餐'],
+          targetEvidence: [{
+            target: '牛排', kind: 'item',
+            references: [{ restaurantId: 'r2', field: 'name', value: '城中牛排馆' }],
+          }],
           conflicts: [],
           evidence: ['Agent 认为名称明确命中牛排。'],
           warnings: [],
@@ -142,6 +146,11 @@ describe('EvaluationModel', () => {
 
     expect(output.selectedIds).toEqual(['r2']);
     expect(output.source).toBe('model');
+    expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r2')?.targetEvidence)
+      .toEqual([{
+        target: '牛排', kind: 'item',
+        references: [{ restaurantId: 'r2', field: 'name', value: '城中牛排馆' }],
+      }]);
     expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r1')).toEqual(
       expect.objectContaining({
         status: 'failed',
