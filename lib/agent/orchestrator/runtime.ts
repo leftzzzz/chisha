@@ -55,10 +55,12 @@ import { applyKeywordExpansion, runKeywordExpansionModel } from '../models/keywo
 import { runEvaluationModel, type EvaluationModelInput } from '../models/evaluationModel';
 import {
   deriveContextInvalidationPlan,
+  deriveLocationSignature,
   markStaleCandidatesForContext,
   withUpdatedGoalVersion,
 } from '../goalVersion';
 import { createVerdictCache, type VerdictCache } from '../evaluationCache';
+import { searchAttemptKey, searchPlanKey } from '../searchAttempts';
 import { AgentError, AgentRunError, isAgentError } from '../types';
 import type {
   AgentAction,
@@ -78,6 +80,7 @@ import type {
   FinalGuardResult,
   FinishRecommendation,
   GoalPatch,
+  ObservationFact,
   PendingQuestion,
   RestaurantCandidate,
   SearchKeywordTarget,
@@ -228,7 +231,27 @@ async function runAgentTurn(
     return finish(context, action, emit);
   }
 
-  await expandKeywordsAlongsideFirstSearch(context, searchPlaces, emit);
+  const resumedCancelledObservation = await resumeCancelledObservations(context, emit);
+  throwIfCancelled(input.signal);
+
+  if (resumedCancelledObservation) {
+    const decision = await nextExecutableDecision(context, emit);
+    if (decision.kind === 'abort') {
+      throw context.evaluationError
+        ?? new AgentError('Candidate evaluation failed', decision.reason, true);
+    }
+    if (decision.kind === 'ask') {
+      return askOrConverge(context, decision.question, emit);
+    }
+    if (decision.kind === 'finish') {
+      const action = finishActionFromDecision(decision);
+      appendAction(context, action, emit);
+      return finish(context, action, emit);
+    }
+    await runSearchStep(context, decision.plans, searchPlaces, emit);
+  } else {
+    await expandKeywordsAlongsideFirstSearch(context, searchPlaces, emit);
+  }
   throwIfCancelled(input.signal);
 
   while (context.actions.length < context.maxActions) {
@@ -1063,9 +1086,7 @@ async function runSearchPlan(
   const toolStartedAt = Date.now();
   const restaurants = await searchPlaces(plan);
   const fetchedAt = Date.now();
-  const facts = restaurants.map(({ id, source, name, cuisineType }) => ({
-    id, source, name, cuisineType,
-  }));
+  const facts = restaurants.map(toObservationFact);
   const toolDurationMs = fetchedAt - toolStartedAt;
   const provider = inferObservationProvider(restaurants);
   const toolResultTrace = appendTrace(context, 'tool_result', {
@@ -1438,6 +1459,7 @@ function commitSearchPlanResult(
     goalId: context.goal.goalId,
     goalVersion: context.goal.goalVersion,
     goalSignature: context.goal.goalSignature,
+    locationSignature: deriveLocationSignature(context.location),
     provider,
     fetchedAt: result.fetchedAt,
     facts: result.facts,
@@ -1498,6 +1520,191 @@ function commitSearchPlanResult(
   });
 
   return observation;
+}
+
+async function resumeCancelledObservations(
+  context: AgentV3Context,
+  emit: EmitAgentEvent
+): Promise<boolean> {
+  let resumed = false;
+  for (const observation of context.observations) {
+    if (!isResumableCancelledObservation(observation, context)) {
+      continue;
+    }
+
+    const pendingIds = new Set(observation.unevaluatedIds);
+    const restaurants = (observation.facts ?? [])
+      .filter((fact) => pendingIds.has(fact.id))
+      .map(observationFactToRestaurant);
+    if (restaurants.length === 0) {
+      continue;
+    }
+    resumed = true;
+
+    const evaluation = await evaluatePlanCandidates(
+      observation.plan,
+      context,
+      restaurants,
+      observation,
+      emit
+    );
+    const guarded = applyVerdictGuard(
+      bindEvaluationToObservation(evaluation.output, observation.plan),
+      restaurants,
+      context.goal,
+      observation.plan,
+      context.targetCount
+    );
+    const sourceAttempt = findSourceAttempt(context, observation.plan);
+    const evaluated = evaluateSearchResult(
+      restaurants,
+      context,
+      observation.plan,
+      sourceAttempt,
+      guarded.output
+    );
+    mergeCandidates(context, evaluated.acceptedCandidates);
+
+    const evaluatedIds = uniqueStrings([
+      ...(observation.evaluatedIds ?? []),
+      ...evaluation.evaluatedIds,
+    ]);
+    const candidateIds = uniqueStrings([
+      ...observation.candidateIds,
+      ...evaluated.acceptedCandidates.map((candidate) => candidate.restaurant.id),
+    ]);
+    observation.verdicts = uniqueByRestaurantId([
+      ...observation.verdicts,
+      ...guarded.output.verdicts,
+    ]);
+    observation.evaluatedIds = evaluatedIds;
+    observation.unevaluatedIds = evaluation.unevaluatedIds;
+    observation.evaluationStopReason = evaluation.stopReason;
+    observation.candidateIds = candidateIds;
+    observation.unmetConstraints = Array.from(new Set([
+      ...observation.unmetConstraints,
+      ...guarded.output.unmetConstraints,
+      ...guarded.rejectedVerdicts.flatMap((verdict) => [
+        ...verdict.conflicts,
+        ...verdict.warnings,
+      ]),
+      ...evaluated.acceptedCandidates.flatMap((candidate) => [
+        ...candidate.verification.hardFailures.map((failure) => failure.message),
+        ...candidate.verification.warnings,
+      ]),
+    ]));
+    observation.acceptedPrimaryIds = context.candidates
+      .filter((candidate) => candidateIds.includes(candidate.restaurant.id))
+      .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
+      .map((candidate) => candidate.restaurant.id);
+
+    appendTrace(context, 'evaluation', {
+      actionId: observation.actionId,
+      input: {
+        plan: observation.plan,
+        restaurantIds: restaurants.map((restaurant) => restaurant.id),
+        modelEvaluated: evaluation.modelEvaluated,
+        cacheHits: evaluation.cacheHits,
+        unevaluatedIds: evaluation.unevaluatedIds,
+      },
+      output: {
+        verdictCount: guarded.output.verdicts.length,
+        selectedIds: guarded.output.selectedIds,
+        candidateIds: guarded.output.candidateIds,
+        unmetConstraints: guarded.output.unmetConstraints,
+        source: guarded.output.source,
+        stopReason: evaluation.stopReason,
+      },
+      error: evaluation.error,
+    });
+    appendTrace(context, 'runtime_decision', {
+      output: {
+        kind: 'resume_cancelled_observation',
+        provider: observation.provider,
+        resumedCount: restaurants.length,
+        evaluatedCount: evaluatedIds.length,
+        unevaluatedCount: evaluation.unevaluatedIds.length,
+        stopReason: evaluation.stopReason,
+      },
+    });
+
+    emit({
+      type: 'partial_results',
+      restaurants: primaryCandidates(context)
+        .slice(0, context.targetCount)
+        .map((candidate) => candidate.restaurant),
+    });
+    emit({
+      type: 'observation',
+      actionId: observation.actionId,
+      traceId: observation.traceId,
+      found: observation.rawCount,
+      accepted: observation.acceptedPrimaryIds.length,
+      rejected: observation.hardRejected.length,
+      evaluated: observation.evaluatedIds?.length,
+      unevaluated: observation.unevaluatedIds?.length,
+      evaluationStopReason: observation.evaluationStopReason,
+    });
+    if (evaluation.cancelled) {
+      throw evaluation.cancelled;
+    }
+  }
+
+  return resumed;
+}
+
+function isResumableCancelledObservation(
+  observation: AgentObservation,
+  context: AgentV3Context
+): boolean {
+  const factIds = new Set((observation.facts ?? []).map((fact) => fact.id));
+  return observation.evaluationStopReason === 'cancelled'
+    && (observation.unevaluatedIds?.length ?? 0) > 0
+    && observation.unevaluatedIds?.every((id) => factIds.has(id)) === true
+    && observation.locationSignature === deriveLocationSignature(context.location)
+    && observation.goalId === context.goal.goalId
+    && observation.goalVersion === context.goal.goalVersion
+    && observation.goalSignature === context.goal.goalSignature
+    && findSourceAttempt(context, observation.plan) > 0;
+}
+
+function findSourceAttempt(
+  context: Pick<AgentV3Context, 'attempts'>,
+  plan: AgentObservation['plan']
+): number {
+  const key = searchPlanKey(plan);
+  const index = context.attempts.findIndex((attempt) =>
+    searchAttemptKey(attempt) === key
+  );
+  return index + 1;
+}
+
+function toObservationFact(restaurant: Restaurant): ObservationFact {
+  return {
+    id: restaurant.id,
+    source: restaurant.source,
+    name: restaurant.name,
+    cuisineType: restaurant.cuisineType,
+    rating: restaurant.rating,
+    distance: restaurant.distance,
+    address: restaurant.address,
+    businessStatus: restaurant.businessStatus,
+    averagePrice: restaurant.averagePrice,
+    poiTypeCode: restaurant.poiTypeCode,
+    location: { ...restaurant.location },
+  };
+}
+
+function observationFactToRestaurant(fact: ObservationFact): Restaurant {
+  return {
+    ...fact,
+    location: { ...fact.location },
+  };
+}
+
+function uniqueByRestaurantId<T extends { restaurantId: string }>(items: T[]): T[] {
+  const byId = new Map(items.map((item) => [item.restaurantId, item]));
+  return Array.from(byId.values());
 }
 
 function inferObservationProvider(restaurants: Restaurant[]): AgentObservation['provider'] {

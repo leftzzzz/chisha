@@ -179,9 +179,9 @@ describe('runtime observation assembly', () => {
     }));
     const restored = JSON.parse(JSON.stringify(result.runtimeState));
     expect(restored.observations[0].acceptedPrimaryIds).toEqual(['r1']);
-    expect(restored.observations[0].facts).toEqual([{
+    expect(restored.observations[0].facts).toEqual([expect.objectContaining({
       id: 'r1', source: 'amap', name: '寿司店', cuisineType: '寿司',
-    }]);
+    })]);
     expect(restored.observations[0]).toEqual(expect.objectContaining({
       goalId: restored.goal.goalId,
       goalVersion: restored.goal.goalVersion,
@@ -203,9 +203,9 @@ describe('runtime observation assembly', () => {
     const place = restaurant();
     const runSearchAgentV3 = await loadRuntime(() => { place.name = '改名后的寿司店'; });
     const result = await runSearchAgentV3(agentInput('寿司'), () => undefined, async () => [place]);
-    expect(result.runtimeState?.observations?.[0].facts).toEqual([{
+    expect(result.runtimeState?.observations?.[0].facts).toEqual([expect.objectContaining({
       id: 'r1', source: 'amap', name: '寿司店', cuisineType: '寿司',
-    }]);
+    })]);
     place.name = '再次改名';
     expect(result.runtimeState?.observations?.[0].facts?.[0].name).toBe('寿司店');
   });
@@ -369,5 +369,152 @@ describe('runtime observation assembly', () => {
     });
     expect(state.trace?.at(-1)?.output).toMatchObject({ outcome: 'cancelled' });
     expect(emit.mock.calls.some(([event]) => event.type === 'final')).toBe(false);
+  });
+
+  it('resumes a cancelled observation without another provider search', async () => {
+    let evaluationCalls = 0;
+    let firstSearchDone = false;
+    const runSearchAgentV3 = await loadRuntime(() => {
+      evaluationCalls += 1;
+      if (evaluationCalls === 2) {
+        const error = new Error('cancelled');
+        error.name = 'AbortError';
+        throw error;
+      }
+    }, 3);
+
+    const cancelled = await runSearchAgentV3(
+      agentInput('寿司'),
+      () => undefined,
+      async () => {
+        if (firstSearchDone) throw new Error('provider search must not run again');
+        firstSearchDone = true;
+        return Array.from({ length: 12 }, (_, index) => ({
+          ...restaurant(),
+          id: `r${index}`,
+          name: `寿司店 ${index}`,
+        }));
+      }
+    ).catch((error: Error & { runtimeState?: AgentRuntimeState }) => error);
+
+    expect(cancelled).toMatchObject({ code: 'CANCELLED', name: 'AbortError' });
+    expect(cancelled.runtimeState?.observations?.[0]).toMatchObject({
+      evaluationStopReason: 'cancelled',
+    });
+
+    const resumed = await runSearchAgentV3(
+      {
+        ...agentInput('寿司'),
+        runtimeState: cancelled.runtimeState!,
+      },
+      () => undefined,
+      async () => {
+        throw new Error('provider search must not run again');
+      }
+    );
+
+    expect(firstSearchDone).toBe(true);
+    expect(resumed.restaurants).toHaveLength(8);
+    expect(resumed.runtimeState?.attempts).toHaveLength(1);
+    expect(resumed.runtimeState?.observations).toHaveLength(1);
+    expect(resumed.runtimeState?.actions
+      ?.filter((action) => action.action.type === 'search')).toHaveLength(1);
+    expect(resumed.runtimeState?.observations?.[0]).toMatchObject({
+      evaluatedIds: ['r0', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8'],
+      evaluationStopReason: 'target_reached',
+    });
+    expect(resumed.runtimeState?.observations?.[0]?.unevaluatedIds)
+      .toEqual(['r9', 'r10', 'r11']);
+    expect(resumed.runtimeState?.trace?.some((item) =>
+      item.type === 'runtime_decision'
+      && item.output?.kind === 'resume_cancelled_observation'
+    )).toBe(true);
+  });
+
+  it('preserves partial progress when a resumed observation is cancelled again', async () => {
+    let evaluationCalls = 0;
+    let searchCalls = 0;
+    const runSearchAgentV3 = await loadRuntime(() => {
+      evaluationCalls += 1;
+      if (evaluationCalls === 2 || evaluationCalls === 4) {
+        const error = new Error('cancelled');
+        error.name = 'AbortError';
+        throw error;
+      }
+    }, 3);
+    const searchPlaces = async () => {
+      searchCalls += 1;
+      return Array.from({ length: 12 }, (_, index) => ({
+        ...restaurant(),
+        id: `r${index}`,
+        name: `寿司店 ${index}`,
+      }));
+    };
+
+    const first = await runSearchAgentV3(
+      agentInput('寿司'),
+      () => undefined,
+      searchPlaces
+    ).catch((error: Error & { runtimeState?: AgentRuntimeState }) => error);
+    expect(first).toMatchObject({ code: 'CANCELLED', name: 'AbortError' });
+    expect(first.runtimeState?.observations?.[0]?.evaluatedIds)
+      .toEqual(['r0', 'r1', 'r2']);
+
+    const second = await runSearchAgentV3({
+      ...agentInput('寿司'),
+      runtimeState: first.runtimeState!,
+    }, () => undefined, searchPlaces).catch((error: Error & {
+      runtimeState?: AgentRuntimeState;
+    }) => error);
+    expect(second).toMatchObject({ code: 'CANCELLED', name: 'AbortError' });
+    expect(second.runtimeState?.observations?.[0]).toMatchObject({
+      evaluatedIds: ['r0', 'r1', 'r2', 'r3', 'r4', 'r5'],
+      evaluationStopReason: 'cancelled',
+    });
+
+    const third = await runSearchAgentV3({
+      ...agentInput('寿司'),
+      runtimeState: second.runtimeState!,
+    }, () => undefined, searchPlaces);
+    expect(searchCalls).toBe(1);
+    expect(third.restaurants).toHaveLength(8);
+    expect(third.runtimeState?.observations?.[0]?.evaluatedIds)
+      .toEqual(['r0', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8']);
+    expect(third.runtimeState?.observations?.[0]?.evaluationStopReason)
+      .toBe('target_reached');
+  });
+
+  it('does not partially resume when persisted facts are incomplete', async () => {
+    let evaluationCalls = 0;
+    const runSearchAgentV3 = await loadRuntime(() => {
+      evaluationCalls += 1;
+      if (evaluationCalls === 2) {
+        const error = new Error('cancelled');
+        error.name = 'AbortError';
+        throw error;
+      }
+    }, 3);
+    const cancelled = await runSearchAgentV3(
+      agentInput('寿司'),
+      () => undefined,
+      async () => Array.from({ length: 12 }, (_, index) => ({
+        ...restaurant(), id: `r${index}`, name: `寿司店 ${index}`,
+      }))
+    ).catch((error: Error & { runtimeState?: AgentRuntimeState }) => error);
+
+    const state = cancelled.runtimeState!;
+    state.observations[0].facts = state.observations[0].facts!.slice(0, 4);
+    const resumed = await runSearchAgentV3({
+      ...agentInput('寿司'),
+      runtimeState: state,
+    }, () => undefined, async () => {
+      throw new Error('fresh provider search required');
+    }).catch((error: Error & { runtimeState?: AgentRuntimeState }) => error);
+
+    expect(resumed.message).toBe('fresh provider search required');
+    expect(resumed.runtimeState?.trace?.some((item) =>
+      item.type === 'runtime_decision'
+      && item.output?.kind === 'resume_cancelled_observation'
+    )).toBe(false);
   });
 });
