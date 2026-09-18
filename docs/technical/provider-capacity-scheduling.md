@@ -113,6 +113,10 @@ and-swap。
 或 Provider lease 续期失败都会中止对应工作，避免失去容量所有权后继续调用上游。无法取消
 的已发请求仍受全局 lease 与上游超时约束。
 
+Cloudflare Workers 的 OpenNext 包装层负责把返回流的 `cancel()` 传回 route 请求信号。
+生产配置必须启用 `enable_request_signal`；该 flag 才会让传入 `Request.signal` 在客户端
+取消时触发 abort 监听。没有这个运行时事件，仅存在包装代码不能证明线上取消链路生效。
+
 ### 错误与降级
 
 高德错误分为：
