@@ -992,3 +992,43 @@ Next chunk 与本地 `.next/static/chunks/22emux2du5j43.js` SHA-256 完全一致
 结论：R06 的真实结构化追加/替换分布关闭；R08 的真实部分失败、失败关闭与未知 usage 语义
 关闭；R09 仍保持开放，具体缺口是评估/搜索结果阶段取消后的可观测快照、重连去重和延迟
 统计。不得把早期心跳取消或客户端没有迟到终态扩大成完整 R09 通过。
+
+### `31256a6` 取消恢复专项验收（2026-09-19）
+
+`31256a6 fix: 提前暴露可恢复会话` 将新会话的 SSE `session_created` 事件提前到昂贵执行之前，
+客户端在流断开或超时时仍持有 opaque session id；`APIError` 携带该 id，Hook 保留可续跑状态，
+下一次“继续”复用同一会话。该变更同步更新 Public API Spec，并新增 API、心跳、路由和 Hook
+回归。
+
+发布前门禁：
+
+- `npm run test:ci -- --silent --coverageReporters=json-summary`：76 suites / 737 tests；
+- `npm run eval`：offline 15/15；
+- `npm run type-check`、`npm run lint`、`npm run docs:check`、`git diff --check`；
+- `npm run build`、`npm run build:cloudflare`、`npm run deploy -- --dry-run`。
+
+该提交已推送并部署为 Cloudflare Version
+`050e1e11-6d9e-4f55-b4f3-f900c8613c6c`；部署使用 skip-migrations 路径，没有执行远端 D1
+migration，也没有直接管理生产 D1 或 Durable Object。
+
+线上专项使用普通匿名 owner 用户路径、真实模型、真实高德和上海人民广场坐标。第一条请求在
+收到 `session_created`、目标理解、搜索 action 与 `search_result` 后立刻取消；客户端没有
+收到迟到 `final/done`。约 25.0 秒的取消轮包含 40 家召回，随后同 owner GET 读到：
+
+- 1 次 search action、1 条 observation；
+- 6 家硬拒绝、0 家已评估、34 家未评估；
+- `evaluationStopReason=cancelled`；
+- `model_call.outcome=cancelled`；
+- 3 次模型调用中 2 次缺少 usage，`missingUsageCalls=2`；已知小计为 prompt 5577 tokens、
+  completion 225 tokens，精确总量保持 `null`，没有伪造成零。
+
+同一 owner 随后提交“继续”。约 169.5 秒后返回 8 家主推荐和 1 家候补；最终仍只有 1 次
+Provider search action 和 1 条 observation，没有新增重复搜索或重复 observation。该 observation
+最终评估 12 家、未评估 22 家、`evaluationStopReason=target_reached`、9 家进入候选池。恢复轮
+EvaluationModel 2 次调用共 6167 tokens，`modelMs=168581`，`missingUsageCalls=0`；取消轮与
+恢复轮的 usage、延迟和未知成本边界均可从同 owner trace 对账。
+
+结论：R09 的搜索结果后取消传播、可观测快照、同 owner 恢复、不重复 Provider 搜索和
+usage/延迟证据关闭。会话保存失败仍由确定性回归覆盖，没有在生产注入 D1 故障；不能用本次
+结果宣称生产持久层永不出错。至此，已批准 R05、R08、R09、R06、R07 顺序全部完成本地实现、
+对抗性审查和线上专项验收。

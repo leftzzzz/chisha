@@ -112,7 +112,7 @@ ChiSha 的 Restaurant Search Agent 需要在保证目标保真、证据边界、
 | R04 | 本地模式隔离完成 | 三种模式已分别绑定桩/真实模型和 fixture/真实高德；配置在外部调用前失败关闭，live 不受确定性测试开关影响，baseline 仅限 offline。当前无真实凭证，未完成真实模型或地图服务验收 |
 | R05 | 目标版本线上主流程通过 | 保留同品牌不同门店；有界渐进评估以 FinalGuard 实际准入为停止依据，未评估不记失败；合格后按效用与品牌多样性排序。目标版本真实浏览器观察到 8 家主推荐 / 9 家候补，也观察到 1 家主推荐 / 19 家候补；候补没有自动进入转盘。74 suites / 721 tests、15/15 offline eval、构建和 Cloudflare dry-run 通过 |
 | R08 | 目标版本真实部分失败路径通过 | 明确目标下扩词失败可保留合格结果并告警；开放探索和无合格结果仍失败关闭；保留成功评估批次，失败后不整批重试。目标版本已观察到 `evaluation_failed` 后保留 4 家已验证主推荐并发布警告，也观察到真实 EvaluationModel 超时以 `MODEL_UNAVAILABLE` 显式失败，快照保留目标、搜索观察和 `missingUsageCalls=1`，没有把未知 usage 记为零 |
-| R09 | 取消快照有限通过，评估中取消与恢复开放 | 失败、取消、会话保存失败使用独立错误码与恢复快照；取消保留已完成评估批次但不伪造失败 attempt；终态仅在会话保存后发布。目标版本早期心跳阶段 abort 后快照可持久化且无迟到终态；但评估/搜索结果阶段取消后未见新增 `model_call.outcome=cancelled`，重连不重复外部调用仍未实证 |
+| R09 | 目标版本取消恢复与观测通过 | 失败、取消、会话保存失败使用独立错误码与恢复快照；取消保留已完成评估批次但不伪造失败 attempt；终态仅在会话保存后发布。目标版本在搜索结果后取消，快照持久化 `evaluationStopReason=cancelled` 且出现 `model_call.outcome=cancelled`；同 owner 输入“继续”后未重复 Provider 搜索，完成 8 家主推荐 / 1 家候补，并记录完整恢复轮 usage 与延迟 |
 | R06 | 目标版本追加/替换契约通过 | “再加上日料”产生结构化 `addCategories` 并保留火锅与日料；“换成日料”产生 `replaceCategories` 与 `replacePrimaryKeywords`，原子切换为仅日料。目标版本同 owner 会话完成上述两条真实模型路径，不能再用最终文本代替结构化证据 |
 | R07 | 目标版本随机选择与历史写入通过 | 随机赢家只保留历史展示，不再生成强菜系、餐厅、距离或价格偏好；同候选集合换赢家时摘要一致。目标版本真实转盘选中餐厅并在历史页显示 1 条记录；显式反馈和后续搜索偏好传递仍未实证 |
 
@@ -120,7 +120,7 @@ ChiSha 的 Restaurant Search Agent 需要在保证目标保真、证据边界、
 [技术方案实施记录](../technical/agent-architecture-review.md#实施与本地验收记录)。
 完整项目仍有必需工作，不能以单测全绿关闭全部验收项。
 
-### 最终验收状态（2026-09-18，持续开放）
+### 最终验收状态（2026-09-19）
 
 已批准的 R05、R08、R09、R06、R07 均已按顺序完成独立本地提交，并在最终对抗性审查后
 通过 74 suites / 720 tests、offline eval 15/15、type-check、lint、文档检查、Next build、
@@ -138,18 +138,22 @@ migration。
 真实旋转和历史写入、390x844 无横向溢出。普通用户路径按产品契约创建匿名测试 session，
 没有执行 D1/DO 管理命令。
 
-该证据仍不能关闭全部项目验收：目标版本已经证明主推荐/候补分区、转盘边界、R06 结构化
-追加/替换、R08 真实部分失败与未知 usage 语义，但 R09 的评估中取消快照、重连和
-usage/延迟仍未闭合。
+`31256a6 fix: 提前暴露可恢复会话` 补齐了取消恢复的最后用户可见边界：新 SSE 流在昂贵执行前
+发布 `session_created`，客户端断线或超时后仍持有 opaque session id；`SEARCH_TIMEOUT` 错误
+携带该 id，下一次“继续”会续跑同一目标。76 suites / 737 tests、offline eval 15/15、
+type-check、lint、文档检查、Next/OpenNext build 和 Wrangler dry-run 均通过。
 
-目标版本另做了有界取消探针：真实浏览器收到 `thinking/status` 后主动 abort，客户端得到
-`AbortError`，没有收到迟到的 `final/done`；探针没有拿到 session id，无法证明取消快照已
-持久化或恢复不会重复外部调用。因此取消传播仅有限通过，R09 的恢复、usage/延迟和持久化
-故障仍是开放风险。
+该提交已部署为 Cloudflare Version `050e1e11-6d9e-4f55-b4f3-f900c8613c6c`。线上普通用户
+路径在收到第一条 `search_result` 后取消，同 owner GET 读到 40 家召回、6 家硬拒绝、
+0 家已评估、34 家未评估且 `evaluationStopReason=cancelled` 的快照；trace 记录
+`model_call.outcome=cancelled`、`missingUsageCalls=2`，没有把未知 usage 记为零。随后同一
+owner 输入“继续”，约 169.5 秒完成 8 家主推荐 / 1 家候补；最终仍只有 1 次 Provider search
+action 和 1 条 observation，评估 12 家后达到目标，恢复轮 EvaluationModel 2 次调用、
+6167 tokens、`missingUsageCalls=0`。本次没有执行远端 D1 migration 或直接 D1/DO 管理。
 
-当前项目仍开放，但已完成目标版本的发布、主流程和用户可见边界验收。下一步只剩 R09
-评估/搜索结果阶段取消快照、重连不重复外部调用及 usage/延迟的专项实证；不能以早期心跳
-阶段取消、正常路径健康或单测全绿代替这些证据。
+因此，已批准顺序 R05、R08、R09、R06、R07 的本地实现、对抗性审查和线上专项验收全部闭合。
+不能把该结论扩大成 R01-R04 的真实服务质量、独立证据源或长期生产指标也已验收；这些仍按
+各自状态单独推进。
 
 R03 后续复查：已修复 observation 在候选准入之后才保存导致的统计不一致，及来源引用
 缺失被兼容分支放行的问题。正向测试显式提供来源，旧会话缺来源仅保留候补。
