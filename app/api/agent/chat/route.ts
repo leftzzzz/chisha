@@ -329,6 +329,12 @@ export async function POST(request: Request) {
 
       try {
         const shouldResumeSession = Boolean(requestData.sessionId);
+        if (!shouldResumeSession) {
+          sendEvent(controller, {
+            type: 'session_created',
+            sessionId: activeSession.id,
+          });
+        }
 
         // 会话消息记录用选项的展示文案，保证 messages 对人可读；
         // 但传给 Agent 的是 optionId，语义判断绝不依赖这段文案。

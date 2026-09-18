@@ -270,6 +270,10 @@ describe('/api/agent/chat', () => {
 
     expect(eventTypes.filter((type) => type === 'final')).toHaveLength(1);
     expect(eventTypes).not.toContain('done');
+    expect(events[0]).toEqual({
+      type: 'session_created',
+      sessionId: events.find((event) => event.type === 'session_updated')?.sessionId,
+    });
     expect(eventTypes.indexOf('final')).toBeLessThan(eventTypes.indexOf('session_updated'));
   });
 

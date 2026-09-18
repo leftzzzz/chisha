@@ -684,6 +684,7 @@ type AgentEventPayload =
       options?: PendingQuestionOption[];
       allowFreeText: boolean;
     }
+  | { type: 'session_created'; sessionId: string }
   | { type: 'session_paused'; sessionId: string }
   | { type: 'session_resumed'; sessionId: string }
   | { type: 'session_updated'; sessionId: string }

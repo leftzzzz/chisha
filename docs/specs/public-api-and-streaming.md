@@ -47,8 +47,9 @@ type AgentChatRequest = {
   JSON 的 `type` 字段区分。
 - 进度事件包括 `thinking`、`status`、`searching`、`search_result`、`filtering`、
   `action`、`observation`、`guardrail`、`tool_start`、`tool_result` 和 `partial_results`。
-- 会话事件包括 `question`、`session_paused`、`session_resumed` 和 `session_updated`。
-  `question.options[].id` 是协议，`label` 仅用于展示。
+- 会话事件包括 `question`、`session_created`、`session_paused`、`session_resumed` 和
+  `session_updated`。新会话必须在昂贵执行前发布 `session_created`，让客户端断线或取消后
+  仍可持有 opaque session id 续跑；`question.options[].id` 是协议，`label` 仅用于展示。
 - `final` 是当前正常终止结果，包含主推荐 `restaurants`、候补 `candidates`、解释和未满足
   约束；`done` 保留为客户端可解析的兼容事件，但新 Runtime 不应以它建立第二套终止语义。
 - 路由必须暂存 Runtime 的终态事件，只有会话快照和助手消息全部保存成功后才能发布一次
