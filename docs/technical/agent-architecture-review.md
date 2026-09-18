@@ -960,3 +960,35 @@ R09 的恢复、usage 和真实取消 trace 仍保持开放。真实模型的“
 完整项目继续保持开放。目标版本已经进入可识别的生产部署并完成主流程黑盒验收；剩余工作是
 在同一版本补齐真实追加/替换、部分失败、取消快照、恢复和 usage/延迟证据。在这些专项证据
 闭合前，不得把本次改动表述为所有 R05-R09 线上验收均已通过或获得无条件上线批准。
+
+### `fcffff1` 专项复核（2026-09-18）
+
+远端 `main` 与本地 HEAD 均为 `fcffff1 fix: 原子替换多轮搜索目标`。Wrangler 部署列表显示
+当前 100% 流量使用 Version `cfa9aee5-b841-4d8e-8cfe-4dcc3a1f46cb`；线上首页引用的一条
+Next chunk 与本地 `.next/static/chunks/22emux2du5j43.js` SHA-256 完全一致，用于确认验收
+对象不是旧缓存页面。
+
+同 owner 匿名会话的真实模型专项结果：
+
+- “找火锅”返回 HTTP 200 / `text/event-stream`，约 99.7 秒完成，包含 9 个 heartbeat、
+  8 家主推荐和 0 家候补；本轮 `model_call` 汇总 `missingUsageCalls=0`；
+- “再加上日料”约 47.6 秒进入追问，结构化 GoalPatch 为 `addCategories`，会话目标保留
+  火锅并新增日料，`primaryKeywords=["火锅","日料"]`，没有把追加误写成替换；
+- “换成日料”结构化 GoalPatch 为 `replaceCategories` + `replacePrimaryKeywords`，会话目标
+  原子切换为仅日料。该轮真实 EvaluationModel 60 秒超时，SSE 显式返回
+  `MODEL_UNAVAILABLE` / `recoverable=true`；同 owner GET 仍可读取快照，其中搜索观察保留、
+  失败批次没有重试提升，`missingUsageCalls=1`，已知 token 用量与未知失败调用分开记录。
+
+取消专项做了两种边界：
+
+- 心跳阶段 abort：客户端约 12.8 秒得到 `AbortError`，没有迟到 `final/done`；约 27 秒后
+  同 owner GET 读到更新后的目标、动作与 `runtime_decision.kind=abort` 快照。该轮取消发生
+  在评估开始前，`model_call.outcome=paused` 只代表当时已完成的目标理解轮，不等价于评估中
+  取消；
+- 搜索结果后 abort：浏览器 fetch 与直接 HTTP 客户端均在收到 `search_result` 后取消，
+  客户端没有迟到终态；但会话可见快照没有新增 `model_call.outcome=cancelled`，也不能证明
+  后续恢复不会重复外部调用。
+
+结论：R06 的真实结构化追加/替换分布关闭；R08 的真实部分失败、失败关闭与未知 usage 语义
+关闭；R09 仍保持开放，具体缺口是评估/搜索结果阶段取消后的可观测快照、重连去重和延迟
+统计。不得把早期心跳取消或客户端没有迟到终态扩大成完整 R09 通过。
