@@ -31,6 +31,7 @@ import {
   decideTurnEntry,
   finishDecision,
   hasPrimaryCandidates,
+  hasPositiveFoodTarget,
   inferPoiTypesForGoalKeyword,
   isOpenExplorationContext,
   partitionPlansByValidity,
@@ -351,8 +352,28 @@ async function expandKeywordsAlongsideFirstSearch(
     ? runSearchStep(context, firstBatch, searchPlaces, emit)
     : Promise.resolve();
 
-  const [expanded] = await Promise.all([expansion, searching]);
-  context.goal = applyKeywordExpansion(context.goal, expanded);
+  // Drain both operations before returning or snapshotting: one rejection must
+  // not leave the other writing candidates after the turn has already ended.
+  const [expanded, searched] = await Promise.allSettled([expansion, searching]);
+  if (searched.status === 'rejected') throw searched.reason;
+  if (expanded.status === 'fulfilled') {
+    context.goal = applyKeywordExpansion(context.goal, expanded.value);
+    return;
+  }
+  if (isAbortError(expanded.reason) || context.signal?.aborted) throw expanded.reason;
+  if (!hasPositiveFoodTarget(context.goal) || !hasPrimaryCandidates(context)) {
+    throw expanded.reason;
+  }
+  context.keywordExpansionFailed = true;
+  context.unmetConstraints.push('相关搜索词扩展失败，本轮只返回按原需求验证的结果。');
+  appendTrace(context, 'error', {
+    input: { stage: 'keyword_expansion' },
+    error: {
+      code: toAgentErrorCode(expanded.reason),
+      message: 'Keyword expansion failed; verified explicit-target results retained.',
+      retryable: false,
+    },
+  });
 }
 
 function concurrentFirstSearchEnabled(): boolean {
@@ -1161,7 +1182,7 @@ async function evaluatePlanCandidates(
       });
 
       try {
-        const progress = await runProgressiveEvaluationModel({
+        targetReached = await runProgressiveEvaluationModel({
           input: {
             signal: context.signal,
             metricsSink: context,
@@ -1176,15 +1197,15 @@ async function evaluatePlanCandidates(
             targetCount: context.targetCount,
             preferenceSummary: context.preferenceSummary,
           },
-          targetReached: (batchOutputs) => hasEnoughEvaluatedPrimaries(
+          targetReached: () => hasEnoughEvaluatedPrimaries(
             context, plan, observation, budgetedCandidates,
-            mergeEvaluationOutputs([...outputs, ...batchOutputs])
+            mergeEvaluationOutputs(outputs)
           ),
+          onBatch: (output) => {
+            cache.settle(output.verdicts, plan);
+            outputs.push(output);
+          },
         });
-        const output = progress.output;
-        cache.settle(output.verdicts, plan);
-        outputs.push(output);
-        targetReached = progress.targetReached;
       } catch (evaluationError) {
         if (isAbortError(evaluationError)) {
           throw evaluationError;
@@ -1219,7 +1240,7 @@ async function evaluatePlanCandidates(
     pending = budgetedCandidates.filter(
       (restaurant) => !resolved.has(restaurant.id) && !cache.lookup(restaurant.id, plan)
     );
-    if (targetReached) {
+    if (targetReached || error) {
       break;
     }
   }
@@ -1506,41 +1527,21 @@ function evaluationFailureFromError(error: unknown): NonNullable<EvaluationModel
 
 async function runProgressiveEvaluationModel(options: {
   input: EvaluationModelInput;
-  targetReached: (outputs: EvaluationModelOutput[]) => boolean;
-}): Promise<{ output: EvaluationModelOutput; targetReached: boolean }> {
+  targetReached: () => boolean;
+  onBatch: (output: EvaluationModelOutput) => void;
+}): Promise<boolean> {
   const { input } = options;
-  if (options.targetReached([])) {
-    return {
-      output: {
-        verdicts: [],
-        selectedIds: [],
-        candidateIds: [],
-        explanation: '已有缓存裁决达到目标数量，剩余候选保持未评估。',
-        unmetConstraints: [],
-        source: 'cache',
-      },
-      targetReached: true,
-    };
-  }
+  if (options.targetReached()) return true;
 
   const batchSize = Math.max(1, DEFAULT_AGENT_EVALUATION_BATCH_SIZE);
   const batches = chunkRestaurants(input.restaurants, batchSize);
-  const outputs: EvaluationModelOutput[] = [];
   for (const restaurants of batches) {
     const output = await runEvaluationModel({ ...input, restaurants });
-    outputs.push(output);
-    if (options.targetReached(outputs)) {
-      return {
-        output: mergeEvaluationOutputs(outputs),
-        targetReached: true,
-      };
-    }
+    options.onBatch(output);
+    if (options.targetReached()) return true;
   }
 
-  return {
-    output: mergeEvaluationOutputs(outputs),
-    targetReached: false,
-  };
+  return false;
 }
 
 function chunkRestaurants(restaurants: Restaurant[], size: number): Restaurant[][] {
@@ -1809,6 +1810,9 @@ function buildFinalWarnings(
   return [
     ...(context.evaluationFailed
       ? ['部分候选餐厅没能完成验证，已只保留通过验证的结果。']
+      : []),
+    ...(context.keywordExpansionFailed
+      ? ['相关搜索暂时不可用，结果仅来自原需求的已验证搜索。']
       : []),
     ...(guarded.verdict === 'accepted'
       ? []

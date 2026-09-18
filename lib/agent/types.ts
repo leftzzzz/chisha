@@ -523,6 +523,7 @@ export interface PolicyContext {
    * 搜到的东西没人能验证，继续扩搜只会重复调用高德。
    */
   evaluationFailed?: boolean;
+  keywordExpansionFailed?: boolean;
 }
 
 export interface AgentContext extends AgentInput {
@@ -542,6 +543,7 @@ export interface AgentContext extends AgentInput {
    * 因此这个标记同时意味着"继续扩搜没有意义"——策略层据此立即收敛。
    */
   evaluationFailed?: boolean;
+  keywordExpansionFailed?: boolean;
   /** 触发 evaluationFailed 的原始错误，用于在没有主推荐时原样抛出。 */
   evaluationError?: AgentError;
 }

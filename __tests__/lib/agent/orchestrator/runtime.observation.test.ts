@@ -265,4 +265,25 @@ describe('runtime observation assembly', () => {
     expect(observation?.acceptedPrimaryIds).toEqual(['r9', 'r10', 'r11']);
     expect(result.restaurants.map((item) => item.id)).toEqual(['r9', 'r10', 'r11']);
   });
+
+  it('retains successful batches and does not retry or promote a failed batch', async () => {
+    let calls = 0;
+    const runSearchAgentV3 = await loadRuntime(() => {
+      calls += 1;
+      if (calls === 2) throw new Error('evaluation unavailable');
+    }, 3);
+    const result = await runSearchAgentV3(agentInput('寿司'), () => undefined, async () =>
+      Array.from({ length: 12 }, (_, index) => ({
+        ...restaurant(), id: `r${index}`, name: `寿司店 ${index}`,
+      }))
+    );
+    expect(calls).toBe(2);
+    expect(result.restaurants.map((item) => item.id)).toEqual(['r0', 'r1', 'r2']);
+    expect(result.candidates).toEqual([]);
+    expect(result.warnings).toContain('部分候选餐厅没能完成验证，已只保留通过验证的结果。');
+    expect(result.runtimeState?.observations?.[0]).toMatchObject({
+      evaluatedIds: ['r0', 'r1', 'r2'], evaluationStopReason: 'evaluation_failed',
+    });
+    expect(result.runtimeState?.observations?.[0].unevaluatedIds).toHaveLength(9);
+  });
 });

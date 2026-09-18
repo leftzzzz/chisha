@@ -164,6 +164,9 @@ export function decideNextAction(
       ? finishDecision(ctx, 'PARTIAL_EVALUATION_FAILURE', 0.6)
       : { kind: 'abort', reason: 'EVALUATION_FAILED' };
   }
+  if (ctx.keywordExpansionFailed && hasPrimaryCandidates(ctx)) {
+    return finishDecision(ctx, 'PARTIAL_EXPANSION_FAILURE', 0.6);
+  }
 
   const distinctBrands = distinctPrimaryBrandCount(ctx);
   const remainingSearchCalls = Math.max(0, ctx.maxSearchCalls - ctx.attempts.length);
