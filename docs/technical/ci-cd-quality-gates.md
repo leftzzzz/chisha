@@ -41,6 +41,11 @@ GitHub Actions 拆成两个 job。第二个 job 使用全新 checkout 和 `npm c
 前一个 job 的未跟踪产物，也避免 `.next/standalone/package.json` 被 Jest haste map 误识别为
 第二个同名 package。两个 job 都设置超时和只读仓库权限。
 
+两个 job 都通过根目录 `.node-version` 选择 Node.js。2026-09-18 升级到
+`@opennextjs/cloudflare@1.20.6` 和 `wrangler@4.134.0` 后，Wrangler 明确要求 Node.js 22；
+同一文件也供 Cloudflare Workers Builds 读取，避免本地、GitHub CI 与 connected build
+使用不同主版本。
+
 `cloudflare-validation` 先执行 `npm run build:cloudflare`，再执行
 `npm run deploy -- --dry-run`。后者复用已生成的 `.open-next/worker.js` 并验证 Worker 入口、
 assets、Durable Object migration、D1 和 Rate Limit bindings；部署 wrapper 看到 `--dry-run`

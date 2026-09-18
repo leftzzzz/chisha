@@ -6,7 +6,7 @@ ChiSha 当前的公开生产拓扑是 OpenNext + Cloudflare Workers + D1 + Durab
 
 ## 前置条件
 
-- Node.js 20 与 npm
+- Node.js 22 与 npm；仓库根目录 `.node-version` 是本地、CI 和 Cloudflare Builds 的版本真源
 - Cloudflare 账号及 Wrangler 登录
 - OpenAI-compatible API Key、base URL 和模型名称
 - 高德 Web 服务 API Key
