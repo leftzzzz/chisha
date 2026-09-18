@@ -20,7 +20,7 @@ const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v
 const OPENAI_MODEL = process.env.OPENAI_MODEL_EVALUATION
   || process.env.OPENAI_MODEL
   || 'deepseek-v4-flash-0731';
-const EVALUATION_TIMEOUT = 60000;
+const EVALUATION_TIMEOUT = 120000;
 const EVALUATION_MAX_TOKENS = STRUCTURED_MODEL_MAX_TOKENS;
 const EVALUATION_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
 export interface EvaluationModelInput {
