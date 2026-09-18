@@ -163,6 +163,10 @@ const primaryScopeAuthorized =
 
 - UserGoal 必须保留用户原始表达和全部显式约束。派生搜索只能成为新 action，不能
   覆盖 UserGoal；多轮修改生成新版本并记录来源。
+- UserGoal 和 GoalPatch 的目标、分类、关键词、排除项、偏好、授权及约束数组只允许对
+  缺失、`null` 或单值转数组做结构修复。数组中任一语义条目或约束字段无效时，必须拒绝
+  整次结构化输出并进入 schema repair 或显式失败，不能把整个字段静默变为空数组或
+  `undefined` 后继续执行部分目标。追问展示选项等明确声明为可丢弃的非执行字段除外。
 - 首轮 `hardConstraints` 与多轮 `addConstraints` 共用硬约束条目校验；条目非法时必须拒绝
   该结构化输入，不能把整组约束解释为空或未提供。未提供追加字段仍表示不修改。
 - `broader/alternative` 不能因搜索失败自动获得主推荐资格，必须存在用户预先授权或

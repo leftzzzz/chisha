@@ -105,6 +105,86 @@ describe('Agent schema defaults', () => {
     expect(() => GoalPatchSchema.parse({ addConstraints: 'invalid' })).toThrow();
   });
 
+  it('rejects mixed valid and invalid goal targets instead of erasing the valid entries', () => {
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '想吃牛排，不要川菜',
+      requestedItems: [
+        { name: '牛排' },
+        { required: true },
+      ],
+      exclusions: ['川菜'],
+    })).toThrow();
+
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '想吃牛排，不要川菜',
+      requestedItems: [{ name: '牛排' }],
+      exclusions: ['川菜', 42],
+    })).toThrow();
+  });
+
+  it('rejects malformed target patch fields instead of applying a partial update', () => {
+    expect(() => GoalPatchSchema.parse({
+      addRequestedItems: [
+        { name: '牛排' },
+        { required: true },
+      ],
+      reason: '追加菜品',
+    })).toThrow();
+
+    expect(() => GoalPatchSchema.parse({
+      replacePrimaryKeywords: ['牛排', 42],
+      addConstraints: {
+        kind: 'distance',
+        maxMeters: 500,
+        strict: true,
+      },
+      reason: '替换目标并增加距离限制',
+    })).toThrow();
+  });
+
+  it('rejects malformed executable clarification effects instead of keeping inert options', () => {
+    expect(() => GoalUnderstandingOutputSchema.parse({
+      question: {
+        question: '你想吃牛排还是日料？',
+        options: ['牛排', '日料'],
+        optionEffects: {
+          牛排: {
+            addRequestedItems: [
+              { name: '牛排' },
+              { required: true },
+            ],
+          },
+        },
+      },
+    })).toThrow();
+  });
+
+  it('rejects malformed hard-constraint fields instead of silently dropping them', () => {
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '500米内，不要川菜',
+      hardConstraints: [{
+        kind: 'distance',
+        label: '500米内',
+        maxMeters: 'not-a-number',
+        strict: true,
+      }],
+    })).toThrow();
+
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '不要川菜',
+      hardConstraints: [{
+        kind: 'exclude_category',
+        label: '排除川菜',
+        values: ['川菜', 42],
+        strict: true,
+      }],
+    })).toThrow();
+  });
+
   it('defaults optional explanation fields in action and plan outputs', () => {
     expect(AgentActionSchema.parse({ type: 'finish' })).toEqual({
       type: 'finish',

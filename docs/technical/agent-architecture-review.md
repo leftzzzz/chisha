@@ -634,3 +634,25 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
   observation 版本时不能凭当前候选字段继续支持主推荐。
 - 本地验证：73 suites / 682 tests、offline eval 15/15、type-check、lint、docs:check 和
   `git diff --check` 通过；既有五个 eval 用例的主推荐数量基线差异保持不变。
+
+### 核心目标字段失败关闭
+
+- R02 字段级复查确认：`defaultArray` 和 `optionalArray` 会把包含合法项与非法项的目标数组
+  整体改成空数组或 `undefined`。例如一个损坏的 requested item 会同时抹掉合法菜品，
+  一个非法排除项会清空全部 exclusions；GoalPatch 还可能继续应用同一输出中的距离约束，
+  形成部分目标更新。
+- Goal schema 现在只修复缺失、`null` 和合法单值转数组；requested items、categories、
+  keywords、exclusions、preferences、authorizations 及补丁数组中任一成员无效时，整次
+  结构化输出失败。硬约束中的数字、布尔和字符串数组字段也不再把非法值静默改成
+  `undefined`。可执行的追问 option effects 同样失败关闭，避免保留看似可点但没有目标
+  更新效果的选项。模型入口会按既有 `callStructuredModel` 契约执行一次 schema repair，
+  修复后仍非法则显式返回 `MODEL_INVALID_OUTPUT`，不会应用不完整目标。
+- 对抗回归先证明四类输入不会抛错：混合合法/非法目标、混合合法/非法目标补丁、非法
+  距离或排除字段，以及被静默删除的非法 option effects；修复后全部失败关闭。合法标量
+  数组输入、缺失字段、`null` 和既有默认值回归保持通过。追问纯展示项继续使用专门的
+  逐项过滤契约，不与可执行目标数组混用。
+- 本地验证：73 suites / 686 tests、offline eval 15/15、type-check、lint、docs:check 和
+  `git diff --check` 通过。既有五个 eval 用例的主推荐数量仍低于 2026-08-17 基线，
+  未修改 fixture 或历史基线掩盖差异。
+- 本切片闭合 R02 的本地 schema 契约，不证明真实模型输出分布、提示词质量或真实服务
+  可用性；这些仍需在 live eval 中单独报告。
