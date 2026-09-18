@@ -407,10 +407,22 @@ export interface AgentObservation {
     reasons: string[];
   }>;
   verdicts: CandidateVerdict[];
+  /** 真正拿到模型或本轮缓存裁决的门店；旧会话可缺失。 */
+  evaluatedIds?: string[];
+  /** 通过硬过滤但本轮没有裁决的门店，不等同于失败；旧会话可缺失。 */
+  unevaluatedIds?: string[];
+  /** 本计划停止继续评估的直接原因；旧会话可缺失。 */
+  evaluationStopReason?: EvaluationStopReason;
   acceptedPrimaryIds: string[];
   candidateIds: string[];
   unmetConstraints: string[];
 }
+
+export type EvaluationStopReason =
+  | 'target_reached'
+  | 'all_evaluated'
+  | 'budget_exhausted'
+  | 'evaluation_failed';
 
 export type AgentTraceType =
   | 'user_message'
@@ -633,7 +645,16 @@ type AgentEventPayload =
   | { type: 'tool_result'; tool: string; summary: unknown; planId?: string }
   | { type: 'partial_results'; restaurants: Restaurant[] }
   | { type: 'action'; actionId: string; actionType: AgentAction['type']; summary: string }
-  | { type: 'observation'; actionId: string; found: number; accepted: number; rejected: number }
+  | {
+      type: 'observation';
+      actionId: string;
+      found: number;
+      accepted: number;
+      rejected: number;
+      evaluated?: number;
+      unevaluated?: number;
+      evaluationStopReason?: EvaluationStopReason;
+    }
   | { type: 'guardrail'; actionId: string; message: string; severity: 'info' | 'warn' }
   | {
       type: 'question';

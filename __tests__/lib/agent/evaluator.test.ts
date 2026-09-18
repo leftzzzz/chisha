@@ -184,11 +184,11 @@ describe('候选排序', () => {
     expect(malformed.verdicts).toHaveLength(1);
   });
 
-  it('按裁决内容排序，与模型是否"选中"无关', () => {
+  it('保留 Provider 顺序，且不受模型是否"选中"影响', () => {
     const withoutSelection = evaluateSearchResult(
       restaurants, context(), plan, 1, evaluation()
     );
-    // 就算模型把把握更低的那家钦点为 selectedIds，顺序也不该变。
+    // EvaluationModel 只裁决资格，排序由后续 Policy 在合格集合内完成。
     const withSelection = evaluateSearchResult(
       restaurants, context(), plan, 1, evaluation({ selectedIds: ['low'] })
     );
@@ -209,7 +209,7 @@ describe('候选排序', () => {
       .toEqual(second.acceptedCandidates.map((c) => [c.restaurant.id, c.score]));
   });
 
-  it('近的排在前面（同等把握时）', () => {
+  it('把距离写入确定性效用，但不在评估层重排', () => {
     const near = restaurant('near', 200);
     const far = restaurant('far', 3000);
     const observation = evaluateSearchResult(
@@ -221,6 +221,8 @@ describe('候选排序', () => {
     );
 
     expect(observation.acceptedCandidates.map((c) => c.restaurant.id))
-      .toEqual(['near', 'far']);
+      .toEqual(['far', 'near']);
+    expect(observation.acceptedCandidates[1].score)
+      .toBeGreaterThan(observation.acceptedCandidates[0].score);
   });
 });

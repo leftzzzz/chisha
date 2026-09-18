@@ -63,6 +63,8 @@ type AgentChatRequest = {
 
 - `GET /api/agent/session/:id` 默认返回有界会话摘要、goal、action/observation 计数和摘要；
   只有显式 `?include=trace` 才返回完整 trace。
+- Observation 摘要包含已评估数、未评估数和评估停止原因；旧会话缺少渐进评估字段时，
+  已评估数可以使用既有 verdict 数量，无法确定的数量返回 `null`，不把缺失伪装成零或失败。
 - `DELETE` 取得同会话互斥 lease 后删除并返回 `{ "ok": true }`。
 - 不存在、过期和 owner 不匹配统一返回 404，不能泄露会话是否存在。
 - 429 表示短暂拥塞或入口限流，503 表示配置/协调/上游不可用；可重试响应提供

@@ -6,6 +6,7 @@ import {
   nextSearchRadius,
   nextUntriedTarget,
   planSearchBatch,
+  primaryCandidates,
   primaryTargetLabel,
   resolvePlanPoiType,
   untriedTargets,
@@ -476,6 +477,65 @@ describe('policy 决策', () => {
       expect(decision.plans.map((plan) => plan.keywords[0])).toEqual(['餐厅']);
       expect(decision.plans[0].allowedForPrimary).toBe(true);
     }
+  });
+});
+
+describe('policy 合格候选排序', () => {
+  it('按确定性推荐效用排序，不使用模型置信度作为质量分', () => {
+    const far = candidate('far', '远店');
+    far.score = 8;
+    far.verification.confidence = 1;
+    const near = candidate('near', '近店');
+    near.score = 30;
+    near.verification.confidence = 0.5;
+
+    const ranked = primaryCandidates(context({
+      attempts: [attempt()],
+      candidates: [far, near],
+    }));
+
+    expect(ranked.map((item) => item.restaurant.id)).toEqual(['near', 'far']);
+  });
+
+  it('只在同一 Provider 的候选内归一化评分', () => {
+    const lowerRated = candidate('low-rating', '低评分店');
+    lowerRated.score = 20;
+    lowerRated.restaurant.rating = 3.8;
+    const higherRated = candidate('high-rating', '高评分店');
+    higherRated.score = 20;
+    higherRated.restaurant.rating = 4.8;
+
+    const sameProvider = primaryCandidates(context({
+      attempts: [attempt()],
+      candidates: [lowerRated, higherRated],
+    }));
+    expect(sameProvider.map((item) => item.restaurant.id))
+      .toEqual(['high-rating', 'low-rating']);
+
+    higherRated.restaurant.source = 'osm';
+    const differentProviders = primaryCandidates(context({
+      attempts: [attempt()],
+      candidates: [lowerRated, higherRated],
+    }));
+    expect(differentProviders.map((item) => item.restaurant.id))
+      .toEqual(['low-rating', 'high-rating']);
+  });
+
+  it('保留同品牌不同门店，并把品牌多样性放在重复品牌之前', () => {
+    const firstBranch = candidate('brand-1', '同品牌（人民广场店）');
+    firstBranch.score = 30;
+    const secondBranch = candidate('brand-2', '同品牌（陆家嘴店）');
+    secondBranch.score = 28;
+    const otherBrand = candidate('other', '另一品牌');
+    otherBrand.score = 10;
+
+    const ranked = primaryCandidates(context({
+      attempts: [attempt()],
+      candidates: [firstBranch, secondBranch, otherBrand],
+    }));
+
+    expect(ranked.map((item) => item.restaurant.id))
+      .toEqual(['brand-1', 'other', 'brand-2']);
   });
 });
 

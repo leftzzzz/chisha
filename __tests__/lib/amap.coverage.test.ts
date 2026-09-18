@@ -91,7 +91,7 @@ describe('Amap adapter coverage', () => {
     await expect(module.enrichRestaurantsWithAmapDetails(restaurants)).resolves.toBe(restaurants);
   });
 
-  it('deduplicates richer POIs and brands while normalizing all optional fields', async () => {
+  it('deduplicates richer POIs but preserves branches while normalizing all optional fields', async () => {
     const pois = [
       poi({ id: 'same', name: '完整店', distance: '900' }),
       poi({ id: 'same', name: '完整店', distance: '300', tel: '10086', photos: [{ url: 'x' }], biz_ext: { rating: '4.8', cost: '88', opentime_week: '周一至周日', business_status: '营业中' } }),
@@ -105,11 +105,11 @@ describe('Amap adapter coverage', () => {
       fetchImpl: async (url) => { urls.push(url); return response(amapResponse({ count: String(pois.length), pois })); },
     });
     const result = await module.amapPoiSearch(['川菜'], location, 2000, undefined, 1, { preferProvidedPoiType: false });
-    expect(result.map((item) => item.id)).toEqual(['amap_brand-1', 'amap_same', 'amap_unknown']);
+    expect(result.map((item) => item.id)).toEqual(['amap_brand-1', 'amap_brand-2', 'amap_same', 'amap_unknown']);
     expect(result[0]).toMatchObject({ cuisineType: '餐饮', openingHours: '10:00-20:00', businessStatus: 'closed' });
-    expect(result[1]).toMatchObject({ rating: 4.8, averagePrice: 88, openingHours: '周一至周日', businessStatus: 'open', distance: 300 });
-    expect(result[2]).toMatchObject({ cuisineType: '餐饮', businessStatus: 'unknown', location: { lng: 120, lat: 30 } });
-    expect(result[2].rating).toBeUndefined();
+    expect(result[2]).toMatchObject({ rating: 4.8, averagePrice: 88, openingHours: '周一至周日', businessStatus: 'open', distance: 300 });
+    expect(result[3]).toMatchObject({ cuisineType: '餐饮', businessStatus: 'unknown', location: { lng: 120, lat: 30 } });
+    expect(result[3].rating).toBeUndefined();
     expect(urls[0]).toContain('sig=security-signature');
     expect(reportProviderSuccess).toHaveBeenCalledWith('provider:amap', 'lease-1');
   });

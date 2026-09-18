@@ -90,6 +90,9 @@ export async function GET(request: Request, context: RouteContext) {
       acceptedPrimaryCount: observation.acceptedPrimaryIds.length,
       candidateCount: observation.candidateIds.length,
       hardRejectedCount: observation.hardRejected.length,
+      evaluatedCount: observation.evaluatedIds?.length ?? observation.verdicts?.length ?? null,
+      unevaluatedCount: observation.unevaluatedIds?.length ?? null,
+      evaluationStopReason: observation.evaluationStopReason,
       unmetConstraints: observation.unmetConstraints.slice(0, 5),
     })),
   }, 200, ownerContext.setCookie ? { 'Set-Cookie': ownerContext.setCookie } : {});

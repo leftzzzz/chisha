@@ -94,6 +94,43 @@ describe('amapPoiSearch', () => {
     expect(restaurants.map((restaurant) => restaurant.name)).toEqual(['咖啡店', '川菜馆']);
   });
 
+  it('keeps different locations from the same brand', async () => {
+    process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
+
+    jest.doMock('@/lib/withTimeout', () => ({
+      fetchWithTimeout: jest.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          status: '1',
+          count: '2',
+          info: 'OK',
+          infocode: '10000',
+          pois: [
+            amapPoi({
+              id: 'branch-1',
+              name: '同品牌（人民广场店）',
+              location: '121.4737,31.2304',
+              distance: '300',
+            }),
+            amapPoi({
+              id: 'branch-2',
+              name: '同品牌（陆家嘴店）',
+              location: '121.5000,31.2400',
+              distance: '800',
+            }),
+          ],
+        }),
+      })),
+    }));
+
+    const { amapPoiSearch } = await import('@/lib/amap');
+    const restaurants = await amapPoiSearch(['火锅'], location, 1800, undefined, 1);
+
+    expect(restaurants.map((restaurant) => restaurant.id))
+      .toEqual(['amap_branch-1', 'amap_branch-2']);
+  });
+
   it('ignores caller-provided POI types for a single unknown keyword', async () => {
     process.env.AMAP_API_KEY = 'test-key';
     process.env.AMAP_MAX_QPS = '1000';

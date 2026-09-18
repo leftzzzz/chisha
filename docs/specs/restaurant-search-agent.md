@@ -122,6 +122,8 @@ interface SearchPlacesInput {
   搜索餐饮场所，是稳定 Provider 范围配置，不表达菜品、菜系或目标匹配。
 - Amap、OSM 等 Provider adapter 只做协议转换、分页、超时和无损字段规整，不做用户
   意图、broaden、搜索方向或候选资格判断。
+- Provider adapter 和共享合并层只按 Provider id 或同名同位置身份键去除同一物理门店；
+  同品牌不同位置的门店必须保留到候选选择阶段，不能在召回层按品牌折叠。
 - 高德分类码表只能把返回的 `typecode` 解释为 Provider 事实，例如
   `050202 -> 日本料理`；不得反向参与搜索 planning，也不能证明餐厅提供寿司。
 - 第一次搜索不足时，由受限 replan model 提议、`policy.ts` 接受新的自然语言 action。
@@ -198,6 +200,20 @@ const primaryScopeAuthorized =
   的 observation `planId`，且 Provider 与候选来源一致。引用缺失表示旧会话兼容输入，
   可读取但不能支持主推荐；引用不存在或来源不一致时，该目标证据失效，候选只能降级，
   不能因字段快照仍相同而豁免。
+
+## 候选评估与合格后排序
+
+- Runtime 在硬约束过滤后按有界预算选择待评估候选，并按批次渐进调用 Evaluation model。
+  达到目标数量、评估预算耗尽、全部评估完成或评估失败时停止；未获得模型或缓存裁决的
+  候选必须记录为 `unevaluated`，不得合成 `failed`、`unverified` 或候补资格。
+- Observation 必须分别记录 `evaluatedIds`、`unevaluatedIds` 和
+  `evaluationStopReason`。旧会话缺少这些字段时可以读取，但不能据此补造评估结论。
+- Evaluation model 的置信度只表示目标裁决把握，不参与推荐质量分。通过主推荐准入的
+  合格集合由 Policy 使用确定性效用排序：距离、已存在的价格偏好、同一 Provider 内归一化
+  的评分以及品牌多样性。评分缺失保持缺失，不把不同 Provider 的原始评分直接当成同一量纲。
+- 品牌多样性只改变合格集合的展示顺序，不删除同品牌不同门店。Policy 产生最终
+  `selectedIds/candidateIds` 后，FinalGuard、ResultAssembler 和 UI 必须保序，不得再次
+  排序、品牌折叠或用候补补位。
 
 ## 仍然生效的运行契约
 

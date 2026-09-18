@@ -198,7 +198,6 @@ export async function amapPoiSearch(
 
 function dedupeAmapPois(pois: AmapPoi[]): AmapPoi[] {
   const poiMap = new Map<string, AmapPoi>();
-  const brandSeen = new Map<string, string>(); // brand name → first POI id
 
   for (const poi of pois) {
     const key = poi.id || `${poi.name}_${poi.location}`;
@@ -209,27 +208,9 @@ function dedupeAmapPois(pois: AmapPoi[]): AmapPoi[] {
     }
   }
 
-  // Brand-level dedup: keep only one POI per brand
-  const deduped: AmapPoi[] = [];
-  for (const poi of poiMap.values()) {
-    const brand = extractBrandFromName(poi.name);
-    if (brand) {
-      if (brandSeen.has(brand)) {
-        continue;
-      }
-      brandSeen.set(brand, poi.id);
-    }
-    deduped.push(poi);
-  }
-
-  return deduped.sort((left, right) =>
+  return Array.from(poiMap.values()).sort((left, right) =>
     parsePoiDistance(left) - parsePoiDistance(right)
   );
-}
-
-function extractBrandFromName(name: string): string | null {
-  if (!name) return null;
-  return name.replace(/[（(].*$/, '').trim().toLowerCase().replace(/\s+/g, '') || null;
 }
 
 function amapPoiCompletenessScore(poi: AmapPoi): number {

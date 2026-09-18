@@ -70,6 +70,8 @@ const session = {
   observations: [{
     actionId: 'a1', plan: { keywords: ['川菜'], searchIntent: '正餐' }, rawCount: 3,
     acceptedPrimaryIds: ['r1'], candidateIds: ['r2'], hardRejected: [],
+    evaluatedIds: ['r1', 'r2'], unevaluatedIds: ['r3'],
+    evaluationStopReason: 'budget_exhausted',
     unmetConstraints: ['a', 'b', 'c', 'd', 'e', 'f'],
   }],
   trace: [{ type: 'thinking', createdAt: 1 }],
@@ -125,6 +127,11 @@ describe('/api/agent/session route branches', () => {
     expect(traced.status).toBe(200);
     expect(traced.headers.get('Set-Cookie')).toBe('owner=cookie');
     expect(body).toMatchObject({ id: 's1', goal: { rawQuery: '川菜' }, traceCount: 1, trace: session.trace, actionCount: 1, observationCount: 1 });
+    expect(body.observations[0]).toMatchObject({
+      evaluatedCount: 2,
+      unevaluatedCount: 1,
+      evaluationStopReason: 'budget_exhausted',
+    });
     expect(body.observations[0].unmetConstraints).toHaveLength(5);
     expect(mockSaveSession).toHaveBeenCalled();
 
@@ -149,6 +156,19 @@ describe('/api/agent/session route branches', () => {
     mockGetOwner.mockResolvedValueOnce({ ownerId: 'owner-1' });
     const noCookie = await DELETE(request('DELETE'), context);
     expect(noCookie.headers.get('Set-Cookie')).toBeNull();
+  });
+
+  it('preserves unknown evaluation counts in legacy observations', async () => {
+    mockGetSession.mockResolvedValueOnce({
+      ...session,
+      observations: session.observations.map((observation) => ({
+        ...observation, evaluatedIds: undefined, unevaluatedIds: undefined,
+        evaluationStopReason: undefined,
+      })),
+    });
+    const body = await (await GET(request(), context)).json();
+    expect(body.observations[0].unevaluatedCount).toBeNull();
+    expect(body.observations[0].evaluationStopReason).toBeUndefined();
   });
 
   it.each([

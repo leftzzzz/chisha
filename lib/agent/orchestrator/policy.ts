@@ -9,7 +9,10 @@
  * Supervisor / KeywordExpansion），也不做候选准入（属于 FinalGuard）。
  */
 
-import { countDistinctBrands } from '@/lib/restaurantIdentity';
+import {
+  countDistinctBrands,
+  getRestaurantBrand,
+} from '@/lib/restaurantIdentity';
 import { getAmapFoodPoiType } from '../amapPoiTypeCatalog';
 import {
   isOpenExplorationAuthorized,
@@ -362,20 +365,28 @@ function buildPlanBatch(
   return plans;
 }
 
-function finishDecision(
+export function finishDecision(
   ctx: PolicyContext,
   reason: FinishReason,
   confidence: number
 ): Extract<PolicyDecision, { kind: 'finish' }> {
   const primary = primaryCandidates(ctx);
-  const primarySet = new Set(primary);
+  const selected = primary.slice(0, ctx.targetCount);
+  const selectedSet = new Set(selected);
+  const rankedOverflow = primary.slice(ctx.targetCount);
+  const rankedPrimarySet = new Set(primary);
+  const backups = [
+    ...rankedOverflow,
+    ...ctx.candidates.filter((candidate) =>
+      !selectedSet.has(candidate) && !rankedPrimarySet.has(candidate)
+    ),
+  ];
 
   return {
     kind: 'finish',
     reason,
-    selectedIds: primary.slice(0, ctx.targetCount).map((candidate) => candidate.restaurant.id),
-    candidateIds: ctx.candidates
-      .filter((candidate) => !primarySet.has(candidate))
+    selectedIds: selected.map((candidate) => candidate.restaurant.id),
+    candidateIds: backups
       .slice(0, 20)
       .map((candidate) => candidate.restaurant.id),
     confidence,
@@ -626,7 +637,22 @@ function toTarget(goal: UserGoal, keyword: string): SearchKeywordTarget {
 
 // 迁移期与 FinalGuard 共用严格准入口径，避免策略结束后再由下游补位。
 export function primaryCandidates(ctx: PolicyContext): RestaurantCandidate[] {
-  return ctx.candidates.filter((candidate) => isPrimaryRecommendationEligible(candidate, ctx));
+  const qualified = ctx.candidates.filter((candidate) =>
+    isPrimaryRecommendationEligible(candidate, ctx)
+  );
+  const originalOrder = new Map(qualified.map((candidate, index) => [candidate, index]));
+  const ratingBonuses = buildSameProviderRatingBonuses(qualified);
+  const ranked = [...qualified].sort((left, right) => {
+    const utilityDelta = recommendationUtility(right, ratingBonuses)
+      - recommendationUtility(left, ratingBonuses);
+    if (utilityDelta !== 0) {
+      return utilityDelta;
+    }
+
+    return (originalOrder.get(left) ?? 0) - (originalOrder.get(right) ?? 0);
+  });
+
+  return diversifyBrands(ranked);
 }
 
 export function hasPrimaryCandidates(ctx: PolicyContext): boolean {
@@ -635,6 +661,65 @@ export function hasPrimaryCandidates(ctx: PolicyContext): boolean {
 
 export function distinctPrimaryBrandCount(ctx: PolicyContext): number {
   return countDistinctBrands(primaryCandidates(ctx).map((candidate) => candidate.restaurant));
+}
+
+function buildSameProviderRatingBonuses(
+  candidates: RestaurantCandidate[]
+): Map<RestaurantCandidate, number> {
+  const byProvider = new Map<string, RestaurantCandidate[]>();
+  for (const candidate of candidates) {
+    if (!Number.isFinite(candidate.restaurant.rating)) {
+      continue;
+    }
+    const providerCandidates = byProvider.get(candidate.restaurant.source) ?? [];
+    providerCandidates.push(candidate);
+    byProvider.set(candidate.restaurant.source, providerCandidates);
+  }
+
+  const bonuses = new Map<RestaurantCandidate, number>();
+  for (const providerCandidates of byProvider.values()) {
+    const ratings = providerCandidates.map((candidate) => candidate.restaurant.rating!);
+    const min = Math.min(...ratings);
+    const max = Math.max(...ratings);
+    if (max === min) {
+      continue;
+    }
+
+    for (const candidate of providerCandidates) {
+      const normalized = (candidate.restaurant.rating! - min) / (max - min);
+      bonuses.set(candidate, Math.round(normalized * 12));
+    }
+  }
+  return bonuses;
+}
+
+function recommendationUtility(
+  candidate: RestaurantCandidate,
+  ratingBonuses: Map<RestaurantCandidate, number>
+): number {
+  return candidate.score + (ratingBonuses.get(candidate) ?? 0);
+}
+
+function diversifyBrands(
+  rankedCandidates: RestaurantCandidate[]
+): RestaurantCandidate[] {
+  const firstPerBrand: RestaurantCandidate[] = [];
+  const repeatedBrands: RestaurantCandidate[] = [];
+  const seenBrands = new Set<string>();
+
+  for (const candidate of rankedCandidates) {
+    const brand = getRestaurantBrand(candidate.restaurant)
+      ?? `place:${candidate.restaurant.id}`;
+    if (seenBrands.has(brand)) {
+      repeatedBrands.push(candidate);
+      continue;
+    }
+
+    seenBrands.add(brand);
+    firstPerBrand.push(candidate);
+  }
+
+  return [...firstPerBrand, ...repeatedBrands];
 }
 
 export function isOpenExplorationContext(ctx: PolicyContext): boolean {

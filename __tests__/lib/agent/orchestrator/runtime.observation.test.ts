@@ -52,10 +52,19 @@ function agentInput(query = '没有具体想吃的，你来选'): AgentInput {
   };
 }
 
-async function loadRuntime(onEvaluate = () => undefined) {
+async function loadRuntime(
+  onEvaluate: (restaurants: Restaurant[]) => void = () => undefined,
+  evaluationBatchSize?: number,
+  missingEvidence: (restaurant: Restaurant) => boolean = () => false
+) {
   jest.resetModules();
   process.env.AGENT_DETERMINISTIC = '1';
   delete process.env.AGENT_PARALLEL_SEARCH;
+  if (evaluationBatchSize === undefined) {
+    delete process.env.AGENT_EVALUATION_BATCH_SIZE;
+  } else {
+    process.env.AGENT_EVALUATION_BATCH_SIZE = String(evaluationBatchSize);
+  }
 
   jest.doMock('@/lib/agent/models/goalUnderstandingModel', () => {
     const actual = jest.requireActual('@/lib/agent/models/goalUnderstandingModel');
@@ -68,31 +77,27 @@ async function loadRuntime(onEvaluate = () => undefined) {
 
   jest.doMock('@/lib/agent/models/evaluationModel', () => ({
     runEvaluationModel: jest.fn(async (input: { restaurants: Restaurant[] }) => {
-      onEvaluate();
+      onEvaluate(input.restaurants);
       return {
         verdicts: input.restaurants.map((item) => ({
           restaurantId: item.id,
           status: 'passed' as const,
           primaryEligible: true,
           confidence: 0.9,
-          matchedItems: input.restaurants
-            .filter((restaurant) => restaurant.name.includes('寿司'))
-            .map(() => '寿司'),
+          matchedItems: ['寿司'],
           matchedCategories: [],
           conflicts: [],
           evidence: ['寿司店供应寿司'],
-          targetEvidence: input.restaurants
-            .filter((restaurant) => restaurant.name.includes('寿司'))
-            .map((restaurant) => ({
+          targetEvidence: missingEvidence(item) ? [] : [{
               target: '寿司',
               kind: 'item' as const,
               verdict: 'supported',
               references: [{
-                restaurantId: restaurant.id,
+                restaurantId: item.id,
                 field: 'name' as const,
-                value: restaurant.name,
+                value: item.name,
               }],
-            })),
+            }],
           warnings: [],
         })),
         selectedIds: [],
@@ -111,6 +116,7 @@ async function loadRuntime(onEvaluate = () => undefined) {
 describe('runtime observation assembly', () => {
   const originalDeterministic = process.env.AGENT_DETERMINISTIC;
   const originalParallelSearch = process.env.AGENT_PARALLEL_SEARCH;
+  const originalEvaluationBatchSize = process.env.AGENT_EVALUATION_BATCH_SIZE;
 
   afterEach(() => {
     jest.restoreAllMocks();
@@ -118,6 +124,8 @@ describe('runtime observation assembly', () => {
     else process.env.AGENT_DETERMINISTIC = originalDeterministic;
     if (originalParallelSearch === undefined) delete process.env.AGENT_PARALLEL_SEARCH;
     else process.env.AGENT_PARALLEL_SEARCH = originalParallelSearch;
+    if (originalEvaluationBatchSize === undefined) delete process.env.AGENT_EVALUATION_BATCH_SIZE;
+    else process.env.AGENT_EVALUATION_BATCH_SIZE = originalEvaluationBatchSize;
   });
 
   it('records fetchedAt on assembled observations', async () => {
@@ -199,5 +207,62 @@ describe('runtime observation assembly', () => {
     }]);
     place.name = '再次改名';
     expect(result.runtimeState?.observations?.[0].facts?.[0].name).toBe('寿司店');
+  });
+
+  it('stops progressive evaluation after reaching the target and records the rest as unevaluated', async () => {
+    const evaluatedBatches: string[][] = [];
+    const runSearchAgentV3 = await loadRuntime(
+      (restaurants) => evaluatedBatches.push(restaurants.map((item) => item.id)),
+      3
+    );
+    const emit = jest.fn();
+    const result = await runSearchAgentV3(agentInput('寿司'), emit, async () =>
+      Array.from({ length: 30 }, (_, index) => ({
+        ...restaurant(),
+        id: `r${index}`,
+        name: `寿司店 ${index}`,
+        distance: 100 + index,
+      }))
+    );
+
+    const observation = result.runtimeState?.observations?.[0];
+    expect(evaluatedBatches.map((batch) => batch.length)).toEqual([3, 3, 3]);
+    expect(observation?.evaluatedIds).toHaveLength(9);
+    expect(observation?.unevaluatedIds).toHaveLength(21);
+    expect(observation?.evaluationStopReason).toBe('target_reached');
+    expect(observation?.hardRejected).toEqual([]);
+    expect(observation?.verdicts).toHaveLength(9);
+    expect(observation?.acceptedPrimaryIds).toHaveLength(9);
+    expect(result.restaurants).toHaveLength(8);
+    expect(observation?.verdicts.some((verdict) =>
+      observation.unevaluatedIds?.includes(verdict.restaurantId)
+    )).toBe(false);
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'observation',
+      evaluated: 9,
+      unevaluated: 21,
+      evaluationStopReason: 'target_reached',
+    }));
+  });
+
+  it('continues past self-reported passes without evidence to evaluate valid later candidates', async () => {
+    const batches: string[][] = [];
+    const runSearchAgentV3 = await loadRuntime(
+      (restaurants) => batches.push(restaurants.map((item) => item.id)),
+      3,
+      (restaurant) => Number(restaurant.id.slice(1)) < 9
+    );
+    const result = await runSearchAgentV3(agentInput('寿司'), () => undefined, async () =>
+      Array.from({ length: 30 }, (_, index) => ({
+        ...restaurant(), id: `r${index}`, name: `寿司店 ${index}`,
+      }))
+    );
+    const observation = result.runtimeState?.observations?.[0];
+    expect(batches.map((batch) => batch.length)).toEqual([3, 3, 3, 3]);
+    expect(observation?.evaluatedIds).toHaveLength(12);
+    expect(observation?.unevaluatedIds).toHaveLength(18);
+    expect(observation?.evaluationStopReason).toBe('budget_exhausted');
+    expect(observation?.acceptedPrimaryIds).toEqual(['r9', 'r10', 'r11']);
+    expect(result.restaurants.map((item) => item.id)).toEqual(['r9', 'r10', 'r11']);
   });
 });

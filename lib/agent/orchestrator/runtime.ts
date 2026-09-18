@@ -29,6 +29,7 @@ import {
   decideNextAction,
   decideScouting,
   decideTurnEntry,
+  finishDecision,
   hasPrimaryCandidates,
   inferPoiTypesForGoalKeyword,
   isOpenExplorationContext,
@@ -72,6 +73,7 @@ import type {
   ConversationMode,
   EmitAgentEvent,
   EvaluationModelOutput,
+  EvaluationStopReason,
   FinalGuardResult,
   FinishRecommendation,
   GoalPatch,
@@ -101,7 +103,6 @@ interface AgentV3Context extends AgentContext {
 const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 4);
 const DEFAULT_AGENT_EVALUATION_BUFFER = parsePositiveInt(process.env.AGENT_EVALUATION_BUFFER, 4);
 const DEFAULT_AGENT_EVALUATION_BATCH_SIZE = parsePositiveInt(process.env.AGENT_EVALUATION_BATCH_SIZE, 6);
-const DEFAULT_AGENT_EVALUATION_CONCURRENCY = parsePositiveInt(process.env.AGENT_EVALUATION_CONCURRENCY, 2);
 const CONFIGURED_AGENT_EVALUATION_LIMIT = parseOptionalPositiveInt(process.env.AGENT_EVALUATION_LIMIT);
 const MAX_HARD_REJECTED_REASON_DETAILS = 6;
 const MAX_HARD_REJECTED_OBSERVATIONS = 20;
@@ -382,6 +383,9 @@ async function runSearchStep(
       found: observation.rawCount,
       accepted: observation.acceptedPrimaryIds.length,
       rejected: observation.hardRejected.length,
+      evaluated: observation.evaluatedIds?.length,
+      unevaluated: observation.unevaluatedIds?.length,
+      evaluationStopReason: observation.evaluationStopReason,
     });
   }
 }
@@ -448,13 +452,7 @@ async function nextExecutableDecision(
   }
 
   return hasPrimaryCandidates(context)
-    ? {
-        kind: 'finish',
-        reason: 'NO_MORE_STRATEGY',
-        selectedIds: primaryCandidates(context).map((candidate) => candidate.restaurant.id),
-        candidateIds: [],
-        confidence: 0.6,
-      }
+    ? finishDecision(context, 'NO_MORE_STRATEGY', 0.6)
     : { kind: 'ask', question: buildNoPrimaryQuestion(context) };
 }
 
@@ -562,8 +560,7 @@ function buildFinishAction(
     type: 'finish',
     reason,
     selectedIds: withSelectedIds
-      ? context.candidates
-          .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
+      ? primaryCandidates(context)
           .slice(0, context.targetCount)
           .map((candidate) => candidate.restaurant.id)
       : undefined,
@@ -938,6 +935,9 @@ interface SearchPlanResult {
   hardRejectedReasons: string[];
   evaluationRestaurants: Restaurant[];
   agentEvaluation: EvaluationModelOutput;
+  evaluatedIds: string[];
+  unevaluatedIds: string[];
+  evaluationStopReason: EvaluationStopReason;
 }
 
 /** 一个搜索计划的候选验证结果，区分"这次真判了几家"与"复用了几家"。 */
@@ -948,6 +948,9 @@ interface PlanEvaluation {
   error?: EvaluationModelOutput['error'];
   modelEvaluated: number;
   cacheHits: number;
+  evaluatedIds: string[];
+  unevaluatedIds: string[];
+  stopReason: EvaluationStopReason;
 }
 
 /**
@@ -1052,17 +1055,18 @@ async function runSearchPlan(
   const hardGuard = applyHardConstraintGuard(restaurants, context.goal);
   const hardRejectedReasons = summarizeHardRejectedReasons(hardGuard.rejected);
 
-  const evaluation = await evaluatePlanCandidates(plan, context, hardGuard.passed, restaurants.length, emit);
-  const agentEvaluation: EvaluationModelOutput = {
-    ...evaluation.output,
-    verdicts: evaluation.output.verdicts.map((verdict) => ({
-      ...verdict,
-      targetEvidence: verdict.targetEvidence?.map((evidence) => ({
-        ...evidence,
-        observationRef: plan.planId,
-      })),
-    })),
+  const observation: AgentObservation = {
+    actionId, plan, provider, fetchedAt, facts,
+    goalId: context.goal.goalId,
+    goalVersion: context.goal.goalVersion,
+    goalSignature: context.goal.goalSignature,
+    rawCount: restaurants.length,
+    hardRejected: [], verdicts: [], acceptedPrimaryIds: [], candidateIds: [], unmetConstraints: [],
   };
+  const evaluation = await evaluatePlanCandidates(
+    plan, context, hardGuard.passed, observation, emit
+  );
+  const agentEvaluation = bindEvaluationToObservation(evaluation.output, plan);
   appendTrace(context, 'evaluation', {
     actionId,
     input: {
@@ -1070,6 +1074,7 @@ async function runSearchPlan(
       restaurantIds: evaluation.restaurants.map((restaurant) => restaurant.id),
       modelEvaluated: evaluation.modelEvaluated,
       cacheHits: evaluation.cacheHits,
+      unevaluatedIds: evaluation.unevaluatedIds,
     },
     output: {
       verdictCount: evaluation.output.verdicts.length,
@@ -1077,6 +1082,7 @@ async function runSearchPlan(
       candidateIds: evaluation.output.candidateIds,
       unmetConstraints: evaluation.output.unmetConstraints,
       source: evaluation.output.source,
+      stopReason: evaluation.stopReason,
     },
     error: evaluation.error,
   });
@@ -1092,6 +1098,9 @@ async function runSearchPlan(
     hardRejectedReasons,
     evaluationRestaurants: evaluation.restaurants,
     agentEvaluation,
+    evaluatedIds: evaluation.evaluatedIds,
+    unevaluatedIds: evaluation.unevaluatedIds,
+    evaluationStopReason: evaluation.stopReason,
   };
 }
 
@@ -1106,11 +1115,11 @@ async function evaluatePlanCandidates(
   plan: SearchPlan,
   context: AgentV3Context,
   hardPassed: Restaurant[],
-  rawCount: number,
+  observation: AgentObservation,
   emit: EmitAgentEvent
 ): Promise<PlanEvaluation> {
-  const shortlist = selectRestaurantsForEvaluation(hardPassed, context.targetCount);
-  if (shortlist.length === 0) {
+  const budgetedCandidates = selectRestaurantsForEvaluation(hardPassed, context.targetCount);
+  if (budgetedCandidates.length === 0) {
     return {
       restaurants: [],
       output: {
@@ -1123,13 +1132,17 @@ async function evaluatePlanCandidates(
       },
       modelEvaluated: 0,
       cacheHits: 0,
+      evaluatedIds: [],
+      unevaluatedIds: [],
+      stopReason: 'all_evaluated',
     };
   }
 
   const cache = context.verdictCache;
   let error: EvaluationModelOutput['error'];
   const outputs: EvaluationModelOutput[] = [];
-  let pending = shortlist;
+  let pending = budgetedCandidates;
+  let targetReached = false;
 
   // 两轮：第一轮把同批其他计划正在判的餐厅让出去等结果；等完之后若某些餐厅
   // 在当前镜头下仍然没有可复用裁决（例如它在别的关键词下判了失败），第二轮
@@ -1142,28 +1155,36 @@ async function evaluatePlanCandidates(
     if (toEvaluate.length > 0) {
       emit({
         type: 'status',
-        message: toEvaluate.length < rawCount
+        message: toEvaluate.length < observation.rawCount
           ? `正在验证前 ${toEvaluate.length} 家候选餐厅...`
           : '正在验证候选餐厅...',
       });
 
       try {
-        const output = await runBatchedEvaluationModel({
-          signal: context.signal,
-          metricsSink: context,
-          goal: context.goal,
-          plan,
-          restaurants: toEvaluate,
-          existingCandidates: context.candidates.map((candidate) => ({
-            restaurant: candidate.restaurant,
-            verdict: candidateToVerdict(candidate),
-            sourceAttempt: candidate.sourceAttempt,
-          })),
-          targetCount: context.targetCount,
-          preferenceSummary: context.preferenceSummary,
+        const progress = await runProgressiveEvaluationModel({
+          input: {
+            signal: context.signal,
+            metricsSink: context,
+            goal: context.goal,
+            plan,
+            restaurants: toEvaluate,
+            existingCandidates: context.candidates.map((candidate) => ({
+              restaurant: candidate.restaurant,
+              verdict: candidateToVerdict(candidate),
+              sourceAttempt: candidate.sourceAttempt,
+            })),
+            targetCount: context.targetCount,
+            preferenceSummary: context.preferenceSummary,
+          },
+          targetReached: (batchOutputs) => hasEnoughEvaluatedPrimaries(
+            context, plan, observation, budgetedCandidates,
+            mergeEvaluationOutputs([...outputs, ...batchOutputs])
+          ),
         });
+        const output = progress.output;
         cache.settle(output.verdicts, plan);
         outputs.push(output);
+        targetReached = progress.targetReached;
       } catch (evaluationError) {
         if (isAbortError(evaluationError)) {
           throw evaluationError;
@@ -1186,23 +1207,31 @@ async function evaluatePlanCandidates(
     } else {
       claim.done();
     }
+    targetReached = hasEnoughEvaluatedPrimaries(
+      context, plan, observation, budgetedCandidates, mergeEvaluationOutputs(outputs)
+    );
 
     if (claim.waits.length > 0) {
       await Promise.all(claim.waits);
     }
 
     const resolved = new Set(outputs.flatMap((output) => output.verdicts.map((v) => v.restaurantId)));
-    pending = shortlist.filter(
+    pending = budgetedCandidates.filter(
       (restaurant) => !resolved.has(restaurant.id) && !cache.lookup(restaurant.id, plan)
     );
+    if (targetReached) {
+      break;
+    }
   }
 
   return combinePlanVerdicts(
-    shortlist,
+    hardPassed,
+    budgetedCandidates,
     plan,
     cache,
     outputs.length > 0 ? mergeEvaluationOutputs(outputs, error) : undefined,
-    error
+    error,
+    targetReached
   );
 }
 
@@ -1213,11 +1242,13 @@ async function evaluatePlanCandidates(
  * 与当前计划的 allowedForPrimary 相与，因此授权语义不会被缓存绕过。
  */
 function combinePlanVerdicts(
-  shortlist: Restaurant[],
+  hardPassed: Restaurant[],
+  budgetedCandidates: Restaurant[],
   plan: SearchPlan,
   cache: VerdictCache,
   modelOutput: EvaluationModelOutput | undefined,
-  error: EvaluationModelOutput['error']
+  error: EvaluationModelOutput['error'],
+  targetReached: boolean
 ): PlanEvaluation {
   const verdictById = new Map<string, CandidateVerdict>(
     (modelOutput?.verdicts ?? []).map((verdict) => [verdict.restaurantId, verdict])
@@ -1225,7 +1256,7 @@ function combinePlanVerdicts(
   const modelEvaluated = verdictById.size;
   let cacheHits = 0;
 
-  for (const restaurant of shortlist) {
+  for (const restaurant of budgetedCandidates) {
     if (verdictById.has(restaurant.id)) {
       continue;
     }
@@ -1237,7 +1268,19 @@ function combinePlanVerdicts(
     }
   }
 
-  const restaurants = shortlist.filter((restaurant) => verdictById.has(restaurant.id));
+  const restaurants = budgetedCandidates.filter((restaurant) => verdictById.has(restaurant.id));
+  const evaluatedIds = restaurants.map((restaurant) => restaurant.id);
+  const evaluatedIdSet = new Set(evaluatedIds);
+  const unevaluatedIds = hardPassed
+    .filter((restaurant) => !evaluatedIdSet.has(restaurant.id))
+    .map((restaurant) => restaurant.id);
+  const stopReason: EvaluationStopReason = error
+    ? 'evaluation_failed'
+    : unevaluatedIds.length === 0
+      ? 'all_evaluated'
+      : targetReached
+        ? 'target_reached'
+        : 'budget_exhausted';
 
   return {
     restaurants,
@@ -1254,6 +1297,9 @@ function combinePlanVerdicts(
     error,
     modelEvaluated,
     cacheHits,
+    evaluatedIds,
+    unevaluatedIds,
+    stopReason,
   };
 }
 
@@ -1345,6 +1391,9 @@ function commitSearchPlanResult(
       reasons: item.reasons,
     })),
     verdicts,
+    evaluatedIds: result.evaluatedIds,
+    unevaluatedIds: result.unevaluatedIds,
+    evaluationStopReason: result.evaluationStopReason,
     acceptedPrimaryIds: [],
     candidateIds,
     unmetConstraints,
@@ -1359,7 +1408,7 @@ function commitSearchPlanResult(
 
   emit({
     type: 'partial_results',
-    restaurants: context.candidates
+    restaurants: primaryCandidates(context)
       .slice(0, context.targetCount)
       .map((candidate) => candidate.restaurant),
   });
@@ -1372,6 +1421,9 @@ function commitSearchPlanResult(
       hardRejectedCount: hardGuard.rejected.length,
       acceptedPrimaryIds,
       candidateIds,
+      evaluatedCount: result.evaluatedIds.length,
+      unevaluatedCount: result.unevaluatedIds.length,
+      evaluationStopReason: result.evaluationStopReason,
       unmetConstraints,
     },
   });
@@ -1383,6 +1435,9 @@ function commitSearchPlanResult(
       attempts: context.attempts.length,
       candidates: context.candidates.length,
       accepted: evaluated.acceptedCandidates.length,
+      evaluated: result.evaluatedIds.length,
+      unevaluated: result.unevaluatedIds.length,
+      evaluationStopReason: result.evaluationStopReason,
     },
   });
 
@@ -1449,34 +1504,43 @@ function evaluationFailureFromError(error: unknown): NonNullable<EvaluationModel
   };
 }
 
-async function runBatchedEvaluationModel(input: EvaluationModelInput): Promise<EvaluationModelOutput> {
+async function runProgressiveEvaluationModel(options: {
+  input: EvaluationModelInput;
+  targetReached: (outputs: EvaluationModelOutput[]) => boolean;
+}): Promise<{ output: EvaluationModelOutput; targetReached: boolean }> {
+  const { input } = options;
+  if (options.targetReached([])) {
+    return {
+      output: {
+        verdicts: [],
+        selectedIds: [],
+        candidateIds: [],
+        explanation: '已有缓存裁决达到目标数量，剩余候选保持未评估。',
+        unmetConstraints: [],
+        source: 'cache',
+      },
+      targetReached: true,
+    };
+  }
+
   const batchSize = Math.max(1, DEFAULT_AGENT_EVALUATION_BATCH_SIZE);
-  if (input.restaurants.length <= batchSize) {
-    return runEvaluationModel(input);
-  }
-
   const batches = chunkRestaurants(input.restaurants, batchSize);
-  const concurrency = Math.min(
-    Math.max(1, DEFAULT_AGENT_EVALUATION_CONCURRENCY),
-    batches.length
-  );
-
-  try {
-    const outputs = await mapWithConcurrency(batches, concurrency, (restaurants) =>
-      runEvaluationModel({ ...input, restaurants })
-    );
-    return mergeEvaluationOutputs(outputs);
-  } catch (error) {
-    if (concurrency <= 1 || !isLikelyEvaluationRateLimit(error)) {
-      throw error;
+  const outputs: EvaluationModelOutput[] = [];
+  for (const restaurants of batches) {
+    const output = await runEvaluationModel({ ...input, restaurants });
+    outputs.push(output);
+    if (options.targetReached(outputs)) {
+      return {
+        output: mergeEvaluationOutputs(outputs),
+        targetReached: true,
+      };
     }
-
-    const outputs: EvaluationModelOutput[] = [];
-    for (const restaurants of batches) {
-      outputs.push(await runEvaluationModel({ ...input, restaurants }));
-    }
-    return mergeEvaluationOutputs(outputs);
   }
+
+  return {
+    output: mergeEvaluationOutputs(outputs),
+    targetReached: false,
+  };
 }
 
 function chunkRestaurants(restaurants: Restaurant[], size: number): Restaurant[][] {
@@ -1525,8 +1589,53 @@ function mergeEvaluationOutputs(
   };
 }
 
-function isLikelyEvaluationRateLimit(error: unknown): boolean {
-  return isAgentError(error) && error.code === 'RATE_LIMITED';
+function bindEvaluationToObservation(
+  output: EvaluationModelOutput, plan: SearchPlan
+): EvaluationModelOutput {
+  return {
+    ...output,
+    verdicts: output.verdicts.map((verdict) => ({
+      ...verdict,
+      targetEvidence: verdict.targetEvidence?.map((evidence) => ({
+        ...evidence, observationRef: plan.planId,
+      })),
+    })),
+  };
+}
+
+function hasEnoughEvaluatedPrimaries(
+  context: AgentV3Context,
+  plan: SearchPlan,
+  observation: AgentObservation,
+  restaurants: Restaurant[],
+  output: EvaluationModelOutput
+): boolean {
+  const byId = new Map(output.verdicts.map((verdict) => [verdict.restaurantId, verdict]));
+  for (const restaurant of restaurants) {
+    const cached = context.verdictCache.lookup(restaurant.id, plan);
+    if (!byId.has(restaurant.id) && cached) byId.set(restaurant.id, cached);
+  }
+  const guarded = applyVerdictGuard(
+    bindEvaluationToObservation({ ...output, verdicts: [...byId.values()] }, plan),
+    restaurants, context.goal, plan, context.targetCount
+  );
+  const sourceAttempt = context.attempts.length + 1;
+  const evaluated = evaluateSearchResult(
+    restaurants, context, plan, sourceAttempt, guarded.output
+  );
+  // Parallel plans have not committed yet. Project their real facts locally so
+  // early stopping uses the publication guard without mutating shared state.
+  const preview = {
+    ...context,
+    attempts: [...context.attempts, {
+      keywords: plan.keywords, radius: plan.radiusMeters, poiType: plan.poiType,
+      searchIntent: plan.searchIntent, allowedForPrimary: plan.allowedForPrimary,
+      reason: plan.reason, found: observation.rawCount, accepted: evaluated.acceptedCandidates.length,
+    }],
+    observations: [...context.observations, observation],
+    candidates: evaluated.acceptedCandidates,
+  };
+  return applyFinalGuard(preview).primaryCandidates.length >= context.targetCount;
 }
 
 function uniqueStrings(values: string[]): string[] {
