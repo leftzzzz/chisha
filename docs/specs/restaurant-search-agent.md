@@ -167,7 +167,11 @@ const primaryScopeAuthorized =
   覆盖 UserGoal；多轮修改生成新版本并记录来源。
 - 多轮目标修改必须由结构化 GoalPatch 明确区分追加和替换：`addRequestedItems` /
   `addCategories` 保留已有目标，`replaceRequestedItems` / `replaceCategories` /
-  `replacePrimaryKeywords` 才替换已有目标。处于追问阶段本身不能把追加操作改写成替换。
+  `replacePrimaryKeywords` 才替换已有目标。任一主目标 `replace*` 字段出现时，必须把本次
+  补丁视为跨菜品、分类、关键词和备选组的原子目标切换：未在本次补丁中重新声明的旧主目标
+  维度必须清空，旧目标的品类放宽、开放兜底和未验证候补授权同时失效；与保留硬距离约束
+  对应的距离授权可以继续保留。同一补丁中的 `add*` 和新授权只作用于新目标。处于追问阶段
+  本身不能把追加操作改写成替换。
 - UserGoal 和 GoalPatch 的目标、分类、关键词、排除项、偏好、授权及约束数组只允许对
   缺失、`null` 或单值转数组做结构修复。数组中任一语义条目或约束字段无效时，必须拒绝
   整次结构化输出并进入 schema repair 或显式失败，不能把整个字段静默变为空数组或

@@ -72,6 +72,78 @@ describe('goal algebra', () => {
     expect(patched.clarificationNeeded).toEqual([]);
   });
 
+  it('atomically replaces every primary target dimension when one replace field is present', () => {
+    const patched = applyGoalPatch(
+      goal({
+        requestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        acceptableCategories: [
+          { name: '火锅', confidence: 0.9 },
+          { name: '日料', confidence: 0.8 },
+        ],
+        alternativeGroups: [{
+          mode: 'any_of',
+          items: ['火锅', '日料'],
+        }],
+        primaryKeywords: ['火锅', '日料'],
+        authorizations: [
+          {
+            id: 'auth_category',
+            kind: 'category_broaden',
+            createdAt: 1,
+            reason: '用户允许火锅放宽到相邻品类。',
+          },
+          {
+            id: 'auth_fallback',
+            kind: 'fallback_primary',
+            createdAt: 2,
+            reason: '用户允许旧目标开放推荐。',
+          },
+          {
+            id: 'auth_distance',
+            kind: 'distance_expansion',
+            createdAt: 3,
+            reason: '用户允许扩大搜索距离。',
+            constraints: { maxMeters: 5000 },
+          },
+        ],
+        allowBroaden: true,
+      }),
+      {
+        replaceRequestedItems: [{ name: '日料', required: true, aliases: [] }],
+        reason: '用户说换成日料。',
+      },
+      '换成日料'
+    );
+
+    expect(patched.requestedItems.map((item) => item.name)).toEqual(['日料']);
+    expect(patched.acceptableCategories).toEqual([]);
+    expect(patched.alternativeGroups).toEqual([]);
+    expect(patched.primaryKeywords).toEqual(['日料']);
+    expect(patched.authorizations).toEqual([
+      expect.objectContaining({ id: 'auth_distance', kind: 'distance_expansion' }),
+    ]);
+    expect(patched.allowBroaden).toBe(false);
+  });
+
+  it('preserves existing primary targets when a category is explicitly added', () => {
+    const patched = applyGoalPatch(
+      goal({
+        requestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        acceptableCategories: [{ name: '火锅', confidence: 0.9 }],
+        primaryKeywords: ['火锅'],
+      }),
+      {
+        addCategories: [{ name: '日料', confidence: 0.8 }],
+        reason: '用户说再加上日料。',
+      },
+      '再加上日料'
+    );
+
+    expect(patched.requestedItems.map((item) => item.name)).toEqual(['火锅']);
+    expect(patched.acceptableCategories.map((category) => category.name)).toEqual(['火锅', '日料']);
+    expect(patched.primaryKeywords).toEqual(['火锅', '日料']);
+  });
+
   it('preserves existing targets when a clarification effect explicitly adds another target', () => {
     const patched = applyClarificationOptionToGoal(
       goal({

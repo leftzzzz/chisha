@@ -98,14 +98,22 @@ export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal
   const replacingPrimaryTargets = patch.replacePrimaryKeywords !== undefined
     || patch.replaceRequestedItems !== undefined
     || patch.replaceCategories !== undefined;
+  const requestedItemBase = replacingPrimaryTargets
+    ? (patch.replaceRequestedItems ?? [])
+    : goal.requestedItems;
+  const categoryBase = replacingPrimaryTargets
+    ? (patch.replaceCategories ?? [])
+    : goal.acceptableCategories;
+  const authorizationBase = replacingPrimaryTargets
+    ? (goal.authorizations ?? []).filter(authorizationSurvivesPrimaryTargetReplacement)
+    : (goal.authorizations ?? []);
   const patched: UserGoal = {
     ...goal,
     rawQuery,
     poiType: replacingPrimaryTargets ? undefined : goal.poiType,
-    requestedItems: patch.replaceRequestedItems
-      ?? mergeByName(goal.requestedItems, patch.addRequestedItems ?? []),
-    acceptableCategories: patch.replaceCategories
-      ?? mergeCategories(goal.acceptableCategories, patch.addCategories ?? []),
+    requestedItems: mergeByName(requestedItemBase, patch.addRequestedItems ?? []),
+    acceptableCategories: mergeCategories(categoryBase, patch.addCategories ?? []),
+    alternativeGroups: replacingPrimaryTargets ? [] : goal.alternativeGroups,
     relatedKeywords: replacingPrimaryTargets ? [] : goal.relatedKeywords,
     broadenedKeywords: replacingPrimaryTargets ? [] : goal.broadenedKeywords,
     relatedTargets: replacingPrimaryTargets ? [] : goal.relatedTargets,
@@ -118,23 +126,23 @@ export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal
       patch.addConstraints ?? []
     ),
     authorizations: mergeAuthorizations(
-      goal.authorizations ?? [],
+      authorizationBase,
       patch.addAuthorizations ?? inferAuthorizationsFromLegacyPatch(patch, goal)
     ),
-    allowBroaden: patch.allowBroaden ?? goal.allowBroaden,
+    allowBroaden: patch.allowBroaden ?? (replacingPrimaryTargets ? false : goal.allowBroaden),
     // Patch reason explains why the goal version changed; it is not evidence
     // that a user constraint remains unmet.
     ambiguity: goal.ambiguity,
     clarificationNeeded: [],
   };
 
-  const primaryKeywordBase = patch.replacePrimaryKeywords
-    ?? (replacingPrimaryTargets
-      ? [
-          ...(patch.replaceRequestedItems ?? []).map((item) => item.name),
-          ...(patch.replaceCategories ?? []).map((category) => category.name),
-        ]
-      : patched.primaryKeywords);
+  const primaryKeywordBase = replacingPrimaryTargets
+    ? [
+        ...(patch.replacePrimaryKeywords ?? []),
+        ...(patch.replaceRequestedItems ?? []).map((item) => item.name),
+        ...(patch.replaceCategories ?? []).map((category) => category.name),
+      ]
+    : patched.primaryKeywords;
   patched.primaryKeywords = mergeStrings(
     primaryKeywordBase,
     [
@@ -342,6 +350,12 @@ function authorizationKey(authorization: AgentAuthorization): string {
     (authorization.constraints?.allowedSearchIntents ?? []).join('|'),
     (authorization.constraints?.allowedKeywords ?? []).join('|'),
   ].join(':');
+}
+
+function authorizationSurvivesPrimaryTargetReplacement(
+  authorization: AgentAuthorization
+): boolean {
+  return authorization.kind === 'distance_expansion';
 }
 
 function emptyGoalForAuthorization(): UserGoal {
