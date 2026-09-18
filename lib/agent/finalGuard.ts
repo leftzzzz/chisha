@@ -270,6 +270,11 @@ function primaryAdmissionViolation(
         reference.restaurantId === candidate.restaurant.id
         && reference.value.trim().length > 0
         && candidate.restaurant[reference.field] === reference.value
+        && observation?.facts?.some((fact) =>
+          fact.id === reference.restaurantId
+          && fact.source === candidate.restaurant.source
+          && fact[reference.field] === reference.value
+        )
       );
       return declaredMatch && referencesValid && observationValid ? [target] : [];
     })

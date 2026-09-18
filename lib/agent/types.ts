@@ -396,6 +396,8 @@ export interface AgentObservation {
   plan: SearchPlan;
   provider: 'amap' | 'osm';
   fetchedAt: number;
+  /** 搜索返回时复制的最小事实快照；旧会话缺失时不得从候选反填。 */
+  facts?: Array<Pick<Restaurant, 'id' | 'source' | 'name' | 'cuisineType'>>;
   rawCount: number;
   hardRejected: Array<{
     restaurantId: string;

@@ -170,6 +170,9 @@ describe('runtime observation assembly', () => {
     }));
     const restored = JSON.parse(JSON.stringify(result.runtimeState));
     expect(restored.observations[0].acceptedPrimaryIds).toEqual(['r1']);
+    expect(restored.observations[0].facts).toEqual([{
+      id: 'r1', source: 'amap', name: '寿司店', cuisineType: '寿司',
+    }]);
     expect(restored.trace.find((entry: { id: string }) => entry.id === observations[0].traceId))
       .toEqual(expect.objectContaining({
         output: expect.objectContaining({ acceptedPrimaryIds: ['r1'] }),
@@ -180,5 +183,16 @@ describe('runtime observation assembly', () => {
       && observation.provider === candidate?.restaurant.source
       && typeof observation.fetchedAt === 'number'
     )).toBe(true);
+  });
+
+  it('captures facts before evaluation and does not share the mutable provider object', async () => {
+    const place = restaurant();
+    const runSearchAgentV3 = await loadRuntime(() => { place.name = '改名后的寿司店'; });
+    const result = await runSearchAgentV3(agentInput('寿司'), () => undefined, async () => [place]);
+    expect(result.runtimeState?.observations?.[0].facts).toEqual([{
+      id: 'r1', source: 'amap', name: '寿司店', cuisineType: '寿司',
+    }]);
+    place.name = '再次改名';
+    expect(result.runtimeState?.observations?.[0].facts?.[0].name).toBe('寿司店');
   });
 });

@@ -95,6 +95,10 @@ function observation(planId: string, provider: AgentObservation['provider'] = 'a
 }
 
 function context(overrides: Partial<AgentContext> = {}): AgentContext {
+  const source = observation('exact');
+  source.facts = overrides.candidates?.map(({ restaurant: { id, source, name, cuisineType } }) => ({
+    id, source, name, cuisineType,
+  }));
   return {
     query: '没有具体想吃的，你来选',
     location,
@@ -111,7 +115,7 @@ function context(overrides: Partial<AgentContext> = {}): AgentContext {
     maxSteps: 8,
     maxSearchCalls: 4,
     targetCount: 4,
-    observations: [observation('exact')],
+    observations: [source],
     ...overrides,
   };
 }
@@ -446,7 +450,7 @@ describe('FinalGuard evidence monotonicity', () => {
     const guarded = applyFinalGuard(context({
       goal: goal({ requestedItems: [{ name: '火锅', required: true, aliases: [] }] }),
       attempts: [fallbackAttempt({ searchIntent: 'exact', keywords: ['火锅'] })],
-      observations: [observation('valid')],
+      observations: [{ ...observation('valid'), facts: [{ ...selected.restaurant }] }],
       candidates: [selected],
     }));
 
@@ -472,6 +476,7 @@ describe('FinalGuard evidence monotonicity', () => {
       references: [{ restaurantId: 'r1', field: 'name', value: '测试店' }],
     }];
     const source = observation('exact');
+    source.facts = [{ ...selected.restaurant }];
     if (variant === 'wrong-provider') source.provider = 'osm';
     if (variant === 'missing-time') Object.assign(source, { fetchedAt: undefined });
     const ctx = context({
@@ -486,6 +491,34 @@ describe('FinalGuard evidence monotonicity', () => {
     expect(guarded.backupCandidates).toHaveLength(variant === 'valid' ? 0 : 1);
     expect(JSON.stringify(restored)).toBe(before);
   });
+
+  it.each(['missing', 'foreign-store', 'changed-fact', 'wrong-source', 'valid'])(
+    'requires observation-owned facts: %s', (variant) => {
+      const selected = candidate('r1', '测试店', 100);
+      selected.verification.itemMatches = [{
+        requestedItem: '目标甲', matchedBy: 'llm_semantic', confidence: 1,
+      }];
+      selected.verification.targetEvidence = [{
+        target: '目标甲', kind: 'item', verdict: 'supported', observationRef: 'exact-amap',
+        references: [{ restaurantId: 'r1', field: 'name', value: '测试店' }],
+      }];
+      const source = observation('exact');
+      if (variant !== 'missing') Object.assign(source, { facts: [{
+        id: variant === 'foreign-store' ? 'other' : 'r1',
+        name: variant === 'changed-fact' ? '另一店名' : '测试店',
+        cuisineType: '餐饮', source: variant === 'wrong-source' ? 'osm' : 'amap',
+      }] });
+      const restored = JSON.parse(JSON.stringify(context({
+        goal: goal({ requestedItems: [{ name: '目标甲', required: true, aliases: [] }] }),
+        attempts: [exactAttempt], candidates: [selected], observations: [source],
+      })));
+      const before = JSON.stringify(restored);
+      const guarded = applyFinalGuard(restored);
+      expect(guarded.primaryCandidates).toHaveLength(variant === 'valid' ? 1 : 0);
+      expect(guarded.backupCandidates).toHaveLength(variant === 'valid' ? 0 : 1);
+      expect(JSON.stringify(restored)).toBe(before);
+    }
+  );
 
   it.each(['unknown', 'contradicted', 'missing', 'invalid'])(
     'does not admit %s per-condition evidence', (verdict) => {
@@ -559,6 +592,7 @@ describe('FinalGuard evidence monotonicity', () => {
       references: [{ restaurantId: selected.restaurant.id, field: 'name', value: selected.restaurant.name }],
     }));
     const currentObservation = observation('exact');
+    currentObservation.facts = [{ ...selected.restaurant }];
     currentObservation.plan.keywords = ['柠檬茶'];
     const guarded = applyFinalGuard(context({
       goal: goal({ requestedItems: [

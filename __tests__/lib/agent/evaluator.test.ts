@@ -153,6 +153,7 @@ describe('候选排序', () => {
     ctx.observations = [{
       actionId: 'action-1', plan: { ...plan, planId: 'plan-1' },
       provider: facts.source, fetchedAt: 1_800_000_000_000,
+      facts: [{ id: facts.id, source: facts.source, name: facts.name, cuisineType: facts.cuisineType }],
       rawCount: 1, hardRejected: [], verdicts: output.verdicts,
       acceptedPrimaryIds: [], candidateIds: [facts.id], unmetConstraints: [],
     }];

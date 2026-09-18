@@ -601,3 +601,22 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
   type-check、lint、`git diff --check` 通过；新增回归在旧实现下未知裁决可入主推荐，
   修复后降为候补。真实模型/地图、浏览器、数据库落库、Next/Cloudflare 构建与部署
   验收仍未执行；本切片不关闭 R03 或项目整体验收。
+
+### Observation 最小事实快照
+
+- 继续审查发现，字段引用虽然绑定了 observation id、Provider 和获取时间，但字段原值仍只
+  与当前 `candidate.restaurant` 比较。Provider 返回对象若在模型评估或会话处理期间被改写，
+  引用和值可以一起变化，Guard 无法证明该字段确实属于搜索返回瞬间。
+- Runtime 现在在搜索 Promise 返回后、模型评估前复制每家门店的
+  `id/source/name/cuisineType`，随同一次 observation 持久化。快照不共享 Provider 或候选
+  对象引用；FinalGuard 要求引用同时匹配当前候选和该 observation 的同店、同来源、同字段值。
+- 对抗回归覆盖快照缺失、错门店、字段变化、来源不符和正向路径，并验证评估阶段修改原
+  Provider 对象不会回写已经复制的 observation。旧会话缺少 `facts` 时保持可读取，但不得
+  从当前候选反填或支持主推荐。
+- 本地验证：73 suites / 677 tests、offline eval 15/15、type-check、lint、docs:check 和
+  `git diff --check` 通过。eval 仍报告五个既有用例的主推荐数量低于 2026-08-17 基线，
+  未修改桩或历史基线追平数量。
+- 该快照的事实来源仍是同一次地图搜索结果，只解决“引用属于哪次 observation、哪家门店、
+  哪个原始字段”的本地可核对性，不是独立第三方菜单资料、商家更新时间或供应真实性证明。
+  真实模型/地图、浏览器、数据库落库、Next/Cloudflare 构建与部署验收仍未执行；R03 和
+  项目整体验收继续保持未关闭。

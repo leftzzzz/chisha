@@ -71,9 +71,12 @@
 - 显式目标组与非分组必选目标还要求 `targetEvidence`：模型声明完整目标、item/category 类型、
   本店 name/cuisineType 的完整字段引用和 `supported/contradicted/unknown` 逐条件裁决。
   Guard 按同一 schema 校验引用结构，并核对门店 id、
-  字段原值和对应匹配声明；缺引用、空引用、错店或字段变化不能支持目标组。
+  字段原值、对应匹配声明，以及 observation 在 Provider 返回时复制的最小事实快照；
+  证据引用必须同时匹配当前候选和该快照中的同一门店、同一来源、同一字段值。
+  缺引用、空引用、错店、错来源、字段变化或旧 observation 缺少事实快照时不能支持目标组。
   旧候选仅有 matchedBy 标签时不得豁免；非法模型引用移除引用资格但保留原裁决和候补机会。
-  这是事实快照引用检查，不是关键词匹配，也不是独立来源、获取时间或菜单真实性证明。
+  这是 observation 所有的事实快照引用检查，不是关键词匹配，也不是独立第三方资料源、
+  商家更新时间或菜单真实性证明。
   只有 `supported` 计入目标覆盖，`contradicted/unknown` 不计入；缺失或非法裁决可读取但
   不能支持主推荐。非分组必选目标逐项核对完整名称匹配，
   不能以非空数组、重复项或无关匹配替代；
@@ -176,6 +179,10 @@ const primaryScopeAuthorized =
 - 当前 `AgentObservation.fetchedAt` 记录 Runtime 收到搜索结果时的 Unix 毫秒时间，
   不得使用后续模型评估或批次提交时间替代。它不是商家资料的更新时间，也不证明
   菜单时效；旧会话没有该字段时，不得补成当前时间来伪造新鲜度。
+- 当前 `AgentObservation.facts` 在 Provider Promise 返回后、模型评估前复制每家门店的
+  `id/source/name/cuisineType`。它是该次 observation 的只读最小事实快照，不与后续可变
+  候选对象共享引用。FinalGuard 只接受同时匹配当前候选与该快照的字段引用；旧会话缺少
+  `facts` 时不得从候选反填，也不得继续支持主推荐。
 - Runtime 逐计划提交 observation 来源后，才合并候选并计算 `acceptedPrimaryIds`；
   不得在来源尚未进入当前上下文时计算准入。每个计划只保存一次 observation，事件、
   trace 与会话快照使用该次准入结果，不在整批结束时重复追加 observation。
