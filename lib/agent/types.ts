@@ -394,6 +394,9 @@ export interface AgentObservation {
   actionId: string;
   traceId?: string;
   plan: SearchPlan;
+  goalId?: string;
+  goalVersion?: number;
+  goalSignature?: string;
   provider: 'amap' | 'osm';
   fetchedAt: number;
   /** 搜索返回时复制的最小事实快照；旧会话缺失时不得从候选反填。 */

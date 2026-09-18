@@ -183,6 +183,10 @@ const primaryScopeAuthorized =
   `id/source/name/cuisineType`。它是该次 observation 的只读最小事实快照，不与后续可变
   候选对象共享引用。FinalGuard 只接受同时匹配当前候选与该快照的字段引用；旧会话缺少
   `facts` 时不得从候选反填，也不得继续支持主推荐。
+- Runtime 生成的 observation 同时记录当前 `goalId/goalVersion/goalSignature`。当当前目标
+  已版本化时，FinalGuard 要求 observation、候选验证版本和当前目标三者完全一致；旧
+  observation 缺少目标版本、引用其他目标或引用旧版本时，即使门店字段仍相同也不能支持
+  主推荐。Runtime 外未版本化的兼容调用不据此伪造版本。
 - Runtime 逐计划提交 observation 来源后，才合并候选并计算 `acceptedPrimaryIds`；
   不得在来源尚未进入当前上下文时计算准入。每个计划只保存一次 observation，事件、
   trace 与会话快照使用该次准入结果，不在整批结束时重复追加 observation。

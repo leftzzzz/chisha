@@ -259,6 +259,7 @@ function primaryAdmissionViolation(
         && observation.plan.planId === observationRef
         && observation.provider === candidate.restaurant.source
         && typeof observation.fetchedAt === 'number'
+        && observationMatchesCurrentGoal(observation, candidate, context.goal)
       );
       const declaredMatch = kind === 'item'
         ? verdict === 'supported'
@@ -313,6 +314,28 @@ function primaryAdmissionViolation(
   }
 
   return undefined;
+}
+
+function observationMatchesCurrentGoal(
+  observation: AgentObservation,
+  candidate: RestaurantCandidate,
+  goal: CandidateAdmissionContext['goal']
+): boolean {
+  // Runtime 会为当前目标补齐版本；未版本化只保留给不经过 Runtime 的旧调用兼容。
+  if (!goal.goalSignature) {
+    return true;
+  }
+
+  return Boolean(
+    goal.goalId
+    && goal.goalVersion !== undefined
+    && observation.goalId === goal.goalId
+    && observation.goalVersion === goal.goalVersion
+    && observation.goalSignature === goal.goalSignature
+    && candidate.goalId === observation.goalId
+    && candidate.verifiedAgainstGoalVersion === observation.goalVersion
+    && candidate.verifiedAgainstGoalSignature === observation.goalSignature
+  );
 }
 
 function isBackupRecommendationAllowed(

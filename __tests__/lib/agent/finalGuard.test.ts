@@ -258,6 +258,51 @@ describe('FinalGuard publication boundary', () => {
     expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['fresh']);
   });
 
+  it.each(['missing', 'wrong-id', 'wrong-version', 'wrong-signature', 'valid'])(
+    'binds target evidence observation to the current goal: %s', (variant) => {
+      const versionedGoal = withUpdatedGoalVersion(goal({
+        requestedItems: [{ name: '目标甲', required: true, aliases: [] }],
+        primaryKeywords: ['目标甲'],
+      }));
+      const selected: RestaurantCandidate = {
+        ...candidate('r1', '目标甲专门店', 100),
+        goalId: versionedGoal.goalId,
+        verifiedAgainstGoalVersion: versionedGoal.goalVersion,
+        verifiedAgainstGoalSignature: versionedGoal.goalSignature,
+        locationSignature: deriveLocationSignature(location),
+      };
+      selected.verification.itemMatches = [{
+        requestedItem: '目标甲', matchedBy: 'name', confidence: 1,
+      }];
+      selected.verification.targetEvidence = [{
+        target: '目标甲', kind: 'item', verdict: 'supported',
+        observationRef: 'exact-amap',
+        references: [{ restaurantId: 'r1', field: 'name', value: '目标甲专门店' }],
+      }];
+      const source = observation('exact');
+      source.facts = [{ ...selected.restaurant }];
+      if (variant !== 'missing') {
+        source.goalId = variant === 'wrong-id' ? 'other-goal' : versionedGoal.goalId;
+        source.goalVersion = variant === 'wrong-version'
+          ? (versionedGoal.goalVersion ?? 1) - 1
+          : versionedGoal.goalVersion;
+        source.goalSignature = variant === 'wrong-signature'
+          ? 'goal_old'
+          : versionedGoal.goalSignature;
+      }
+
+      const guarded = applyFinalGuard(context({
+        goal: versionedGoal,
+        attempts: [fallbackAttempt({ searchIntent: 'exact', keywords: ['目标甲'] })],
+        candidates: [selected],
+        observations: [source],
+      }));
+
+      expect(guarded.primaryCandidates).toHaveLength(variant === 'valid' ? 1 : 0);
+      expect(guarded.backupCandidates).toHaveLength(variant === 'valid' ? 0 : 1);
+    }
+  );
+
   it('does not treat distance-only authorization as category or fallback primary authorization', () => {
     const guarded = applyFinalGuard(context({
       goal: goal({

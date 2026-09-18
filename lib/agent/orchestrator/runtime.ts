@@ -1333,6 +1333,9 @@ function commitSearchPlanResult(
   const observation: AgentObservation = {
     actionId,
     plan,
+    goalId: context.goal.goalId,
+    goalVersion: context.goal.goalVersion,
+    goalSignature: context.goal.goalSignature,
     provider,
     fetchedAt: result.fetchedAt,
     facts: result.facts,

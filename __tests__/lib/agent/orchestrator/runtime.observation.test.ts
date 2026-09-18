@@ -173,6 +173,11 @@ describe('runtime observation assembly', () => {
     expect(restored.observations[0].facts).toEqual([{
       id: 'r1', source: 'amap', name: '寿司店', cuisineType: '寿司',
     }]);
+    expect(restored.observations[0]).toEqual(expect.objectContaining({
+      goalId: restored.goal.goalId,
+      goalVersion: restored.goal.goalVersion,
+      goalSignature: restored.goal.goalSignature,
+    }));
     expect(restored.trace.find((entry: { id: string }) => entry.id === observations[0].traceId))
       .toEqual(expect.objectContaining({
         output: expect.objectContaining({ acceptedPrimaryIds: ['r1'] }),

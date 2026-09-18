@@ -620,3 +620,17 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
   哪个原始字段”的本地可核对性，不是独立第三方菜单资料、商家更新时间或供应真实性证明。
   真实模型/地图、浏览器、数据库落库、Next/Cloudflare 构建与部署验收仍未执行；R03 和
   项目整体验收继续保持未关闭。
+
+### Observation 目标版本绑定
+
+- 继续对抗审查发现，候选本身已有 `goalId/verifiedAgainstGoalVersion/goalSignature`，
+  但 observation 只绑定计划、Provider、时间和门店事实。若恢复数据被错误拼接，只要
+  门店字段相同，当前候选仍可能引用另一目标或旧目标的 observation。
+- Runtime 现在把当前 `goalId/goalVersion/goalSignature` 写入 observation。版本化目标下，
+  FinalGuard 要求当前目标、候选验证版本和 observation 三者完全一致；缺版本、错目标、
+  旧版本或错签名均失败关闭并保留候补机会。
+- 对抗回归覆盖四种失败形状和正向路径，Runtime 回归核对目标引用经 JSON 快照保留。
+  未版本化兼容调用不自动补造版本；真实 Runtime 会先补齐当前目标版本，因此旧会话缺少
+  observation 版本时不能凭当前候选字段继续支持主推荐。
+- 本地验证：73 suites / 682 tests、offline eval 15/15、type-check、lint、docs:check 和
+  `git diff --check` 通过；既有五个 eval 用例的主推荐数量基线差异保持不变。

@@ -8,6 +8,7 @@
 
 import { evaluateSearchResult } from '@/lib/agent/evaluator';
 import { applyFinalGuard } from '@/lib/agent/finalGuard';
+import { withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
 import { EvaluationModelOutputSchema } from '@/lib/agent/schemas/verdict';
 import type {
   AgentContext,
@@ -45,7 +46,7 @@ function context(): AgentContext {
   return {
     query: '想吃火锅',
     location,
-    goal: goal(),
+    goal: withUpdatedGoalVersion(goal()),
     attempts: [],
     candidates: [],
     unmetConstraints: [],
@@ -152,6 +153,9 @@ describe('候选排序', () => {
     }));
     ctx.observations = [{
       actionId: 'action-1', plan: { ...plan, planId: 'plan-1' },
+      goalId: ctx.goal.goalId,
+      goalVersion: ctx.goal.goalVersion,
+      goalSignature: ctx.goal.goalSignature,
       provider: facts.source, fetchedAt: 1_800_000_000_000,
       facts: [{ id: facts.id, source: facts.source, name: facts.name, cuisineType: facts.cuisineType }],
       rawCount: 1, hardRejected: [], verdicts: output.verdicts,
