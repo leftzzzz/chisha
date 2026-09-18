@@ -771,3 +771,21 @@ thinking/status，随后以 `CONFIG_MISSING`、`recoverable:false` 结束，证�
   offline eval 15/15、类型检查、lint、文档检查和 `git diff --check` 通过。
 - 本阶段没有触碰生产 D1/DO。真实模型 usage 分布、真实高德中断和真实浏览器取消/重连
   仍需在获准的非生产环境单独验收，不能由本地桩测试代替。
+
+### R06 多轮目标语义与真实原因追问（本地回归通过）
+
+- 删除追问态把所有 `addRequestedItems/addCategories` 强制改写成 `replace*` 的兼容逻辑。
+  GoalUnderstandingModel 提示和 JSON schema 继续要求结构化 patch，明确“再加/还要/以及”
+  使用追加字段，“换成/改成/不要原来的”使用替换字段；目标代数只执行该声明，不根据
+  `pendingQuestion` 状态猜测用户意图。
+- 确定性 option effect 遵守同一契约：显式 `add*` 保留旧目标，显式 `replace*` 才清除
+  旧目标。替换仍会清空旧的派生扩词与 Provider 分类，追加会形成新目标版本并使旧候选按
+  既有上下文失效规则重新验证。
+- Policy 复用 FinalGuard 的单一准入原因。存在 `UNVERIFIED_EVIDENCE` 或
+  `REQUIRED_ITEM_UNSUPPORTED` 时，追问明确说明证据不足并允许用户补充或更换目标；strict
+  距离仍存在时也不再把该失败伪装为“范围太小”。真实零召回且没有更具体失败原因时，
+  既有扩大距离选项保持不变。
+- 回归覆盖追问 option 的追加/替换、自由文本模型 patch 的 add/replace 保真、严格距离与
+  证据缺口并存，以及 FinalGuard/Runtime 既有行为。全量 74 套件 / 717 测试、offline
+  eval 15/15、类型检查、lint、文档检查和 `git diff --check` 通过。真实模型对自然语言
+  关系的判断仍需在非生产 live eval 中单独验收，不能由提示词和桩响应代替。

@@ -167,6 +167,32 @@ describe('policy 追问', () => {
     expect(question.optionEffects?.expand_distance?.setDistanceMaxMeters).toBe(5000);
   });
 
+  it('explains insufficient evidence instead of blaming a strict distance limit', () => {
+    const strictDistance: Constraint = {
+      kind: 'distance',
+      label: '步行500米内',
+      value: 500,
+      maxMeters: 500,
+      strict: true,
+    };
+    const uncertain = candidate('r1', '名称疑似寿司店');
+    uncertain.verification.status = 'unverified';
+    uncertain.verification.primaryEligible = false;
+    uncertain.verification.itemMatches = [];
+    uncertain.verification.categoryMatches = [];
+    uncertain.verification.warnings = ['没有可追溯菜单证据证明供应寿司。'];
+
+    const question = buildNoPrimaryQuestion(context({
+      goal: goal({ hardConstraints: [strictDistance] }),
+      attempts: [attempt({ found: 1, accepted: 1 })],
+      candidates: [uncertain],
+    }));
+
+    expect(question.reason).toContain('证据不足');
+    expect(question.question).toContain('证据');
+    expect(question.options?.map((option) => option.id)).not.toContain('expand_distance');
+  });
+
   it('offers a broaden authorization when nothing passed admission', () => {
     const question = buildNoPrimaryQuestion(context());
 

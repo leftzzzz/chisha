@@ -165,6 +165,9 @@ const primaryScopeAuthorized =
 
 - UserGoal 必须保留用户原始表达和全部显式约束。派生搜索只能成为新 action，不能
   覆盖 UserGoal；多轮修改生成新版本并记录来源。
+- 多轮目标修改必须由结构化 GoalPatch 明确区分追加和替换：`addRequestedItems` /
+  `addCategories` 保留已有目标，`replaceRequestedItems` / `replaceCategories` /
+  `replacePrimaryKeywords` 才替换已有目标。处于追问阶段本身不能把追加操作改写成替换。
 - UserGoal 和 GoalPatch 的目标、分类、关键词、排除项、偏好、授权及约束数组只允许对
   缺失、`null` 或单值转数组做结构修复。数组中任一语义条目或约束字段无效时，必须拒绝
   整次结构化输出并进入 schema repair 或显式失败，不能把整个字段静默变为空数组或
@@ -232,6 +235,10 @@ const primaryScopeAuthorized =
   不得用零表示未知成本。
 - 追问选项使用稳定 id：`optionEffects` 的 key 是 `option.id`，前端回传 id，label 只
   用于展示。
+- 没有主推荐时，Policy 必须按实际准入失败原因生成追问。候选因
+  `UNVERIFIED_EVIDENCE` 或 `REQUIRED_ITEM_UNSUPPORTED` 无法进入主推荐时，应明确说明
+  证据不足并让用户调整或补充目标；即使目标同时存在 strict 距离，也不能默认把失败归因
+  于距离并只询问扩大范围。
 
 ## 禁止的实现方式
 

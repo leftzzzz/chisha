@@ -19,7 +19,10 @@ import {
   isSearchIntentAuthorizedForPrimary,
   primaryAuthorizationRef,
 } from '../authorization';
-import { isPrimaryRecommendationEligible } from '../finalGuard';
+import {
+  getPrimaryRecommendationAdmissionViolation,
+  isPrimaryRecommendationEligible,
+} from '../finalGuard';
 import type { FinishReason } from '../finishReason';
 import {
   applyClarificationOptionToGoal,
@@ -767,13 +770,21 @@ export function hasUnauthorizedBroadenedCandidates(ctx: PolicyContext): boolean 
 /**
  * 没有主推荐时的追问。
  *
- * 分支优先级：strict 距离 > 已授权放宽但仍无结果 > 通用调整/放宽。
+ * 分支优先级：证据不足 > strict 距离 > 已授权放宽但仍无结果 > 通用调整/放宽。
  */
 export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
   // 验证不可用不再走追问：那是系统故障，应该报错而不是伪装成"没找到"。
   // 见 decideNextAction 的 evaluationFailed 分支。
 
-  if (getStrictDistanceMaxMeters(ctx.goal) !== undefined) {
+  const evidenceQuestion = buildEvidenceInsufficiencyQuestion(ctx);
+  if (evidenceQuestion) {
+    return evidenceQuestion;
+  }
+
+  if (
+    getStrictDistanceMaxMeters(ctx.goal) !== undefined
+    && !hasUnauthorizedBroadenedCandidates(ctx)
+  ) {
     return {
       reason: '当前严格距离范围内没有找到通过主推荐准入的餐厅。',
       question: '当前距离范围内没有找到合适餐厅，要扩大范围再搜吗？',
@@ -820,6 +831,29 @@ export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
     optionEffects: {
       [CLARIFICATION_OPTION.AUTHORIZE_CATEGORY_BROADEN]: buildBroadenEffect(ctx.goal),
     },
+  };
+}
+
+function buildEvidenceInsufficiencyQuestion(ctx: PolicyContext): PendingQuestion | null {
+  const hasEvidenceGap = ctx.candidates.some((candidate) => {
+    const violation = getPrimaryRecommendationAdmissionViolation(candidate, ctx);
+    return violation?.code === 'UNVERIFIED_EVIDENCE'
+      || violation?.code === 'REQUIRED_ITEM_UNSUPPORTED';
+  });
+  if (!hasEvidenceGap) {
+    return null;
+  }
+
+  const target = primaryTargetLabel(ctx.goal);
+  return {
+    reason: '已找到可能相关的候选，但支持主推荐的证据不足。',
+    question: target
+      ? `找到的候选缺少足够证据确认符合「${target}」。可以换个目标，或补充更具体的菜品、菜系或餐厅类型。`
+      : '找到的候选缺少足够证据确认符合需求。可以换个目标，或补充更具体的菜品、菜系或餐厅类型。',
+    options: [
+      clarificationOption(CLARIFICATION_OPTION.CHANGE_TARGET),
+    ],
+    allowFreeText: true,
   };
 }
 

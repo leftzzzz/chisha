@@ -39,7 +39,7 @@ export function applyFinalGuard(
   ];
 
   for (const candidate of dedupedPrimary.candidates) {
-    const violation = primaryAdmissionViolation(candidate, context);
+    const violation = getPrimaryRecommendationAdmissionViolation(candidate, context);
     if (!violation && primaryCandidates.length < context.targetCount) {
       primaryCandidates.push(candidate);
       continue;
@@ -143,7 +143,7 @@ export function isPrimaryRecommendationAllowed(
   candidate: RestaurantCandidate,
   context: CandidateAdmissionContext
 ): boolean {
-  return primaryAdmissionViolation(candidate, context) === undefined;
+  return getPrimaryRecommendationAdmissionViolation(candidate, context) === undefined;
 }
 
 /**
@@ -157,7 +157,7 @@ export function isPrimaryRecommendationEligible(
   return isPrimaryRecommendationAllowed(candidate, context);
 }
 
-function primaryAdmissionViolation(
+export function getPrimaryRecommendationAdmissionViolation(
   candidate: RestaurantCandidate,
   context: CandidateAdmissionContext
 ): PrimaryAdmissionViolation | undefined {

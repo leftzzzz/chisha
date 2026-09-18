@@ -14,7 +14,7 @@ import {
   STRUCTURED_MODEL_MAX_TOKENS,
   STRUCTURED_MODEL_RETRY_MAX_TOKENS,
 } from '../modelClient';
-import { normalizePendingAnswerPatch, primaryTargetSetSignature } from '../goal';
+import { primaryTargetSetSignature } from '../goal';
 import type { MetricsSink } from '../metrics';
 import { UserGoalSchema } from '../schemas/goal';
 import { GoalUnderstandingOutputSchema } from '../schemas/clarification';
@@ -72,7 +72,7 @@ const SYSTEM_PROMPT = `你是 GoalUnderstandingModel，餐厅搜索系统的目�
 8. 用户明确说“随便/随意/随机/都行/都可以/无所谓/你决定/你看着办/帮我决定/直接推荐/不知道吃啥/不知道吃什么/没有具体想吃的”等，且没有具体菜品/菜系/餐厅类型时，表示开放随机推荐；输出 goal，allowBroaden=true，并加入 fallback_primary 授权（allowedSearchIntents=["fallback"]）；requestedItems/acceptableCategories/primaryKeywords 为空，clarificationNeeded=[]，加入“默认多样性”软偏好，进入 plan 后由 KeywordExpansionModel 生成开放探索词；不要 ask_user，也不要把这些词当 keywords。
 8a. 用户只是“附近有什么/吃点/清淡点/健康点/便宜点/环境好/人气高”等软偏好或开放询问、但没有明确授权随意/随机推荐且没有明确菜品/菜系/餐厅类型时，必须 ask_user 先澄清，不能直接搜索通用“餐厅/美食”。
 9. 如果 pendingQuestion 存在，用户回答“都行/随便/你决定/你推荐/直接推荐/按你推荐/你看着办”等，表示授权开放推荐；输出 patch.allowBroaden=true、addAuthorizations 中的 fallback_primary 授权（allowedSearchIntents=["fallback"]），加入“默认多样性”软偏好并进入 plan，不要再次 ask_user。
-10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。
+10. 如果 pendingQuestion 存在，用户补充了新的菜品/菜系/餐厅类型，必须把这次回答总结成 GoalPatch，并清空旧 clarificationNeeded；不要重复提出同一个澄清问题。“再加/还要/以及”表示保留旧目标并使用 addRequestedItems/addCategories；“换成/改成/不要原来的”表示替换旧目标并使用 replaceRequestedItems/replaceCategories/replacePrimaryKeywords。不能因为处于追问阶段就把 add 自动当成 replace。
 11. primaryKeywords 只能放用户正向想吃的、适合高德 keywords 的单个餐饮意图词，例如“牛排”“川菜”“咖啡”；不要放整句“想吃牛排”，也不要把多个无关意图合成“川菜|咖啡”。
 12. 不要为 primaryKeywords 生成搜索联想词；relatedKeywords/broadenedKeywords 及 relatedTargets/broadenedTargets 由 KeywordExpansionModel 负责生成，初始目标保持空数组即可。
 13. 处理 pendingQuestion 的用户回复时，必须结合 previousGoal.rawQuery、pendingQuestion 和历史 messages 重新总结完整需求；当前 message 不是独立新需求。
@@ -148,7 +148,7 @@ function normalizeGoalUnderstandingOutput(
 
   if (output.patch) {
     return {
-      patch: normalizePendingAnswerPatch(input.previousGoal, output.patch),
+      patch: output.patch,
       conversationMode,
     };
   }

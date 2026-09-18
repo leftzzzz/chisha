@@ -6,6 +6,7 @@
 
 import {
   applyGoalPatch,
+  applyClarificationOptionToGoal,
   applyClarificationOptionToSession,
 } from '@/lib/agent/goal';
 import type { AgentSession, UserGoal } from '@/lib/agent/types';
@@ -68,6 +69,53 @@ describe('goal algebra', () => {
     expect(patched.requestedItems.map((item) => item.name)).toEqual(['火锅']);
     expect(patched.relatedKeywords).toEqual([]);
     expect(patched.clarificationNeeded).toEqual([]);
+  });
+
+  it('preserves existing targets when a clarification effect explicitly adds another target', () => {
+    const patched = applyClarificationOptionToGoal(
+      goal({
+        rawQuery: '想吃火锅',
+        requestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        primaryKeywords: ['火锅'],
+      }),
+      {
+        question: '还想补充什么？',
+        options: [{ id: 'add_sushi', label: '再加寿司' }],
+        optionEffects: {
+          add_sushi: {
+            addRequestedItems: ['寿司'],
+          },
+        },
+      },
+      'add_sushi'
+    );
+
+    expect(patched?.requestedItems.map((item) => item.name)).toEqual(['火锅', '寿司']);
+    expect(patched?.primaryKeywords).toEqual(['火锅', '寿司']);
+  });
+
+  it('replaces existing targets only when a clarification effect explicitly requests replacement', () => {
+    const patched = applyClarificationOptionToGoal(
+      goal({
+        rawQuery: '想吃火锅',
+        requestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        primaryKeywords: ['火锅'],
+      }),
+      {
+        question: '想换成什么？',
+        options: [{ id: 'replace_with_sushi', label: '换成寿司' }],
+        optionEffects: {
+          replace_with_sushi: {
+            replaceRequestedItems: ['寿司'],
+            replacePrimaryKeywords: ['寿司'],
+          },
+        },
+      },
+      'replace_with_sushi'
+    );
+
+    expect(patched?.requestedItems.map((item) => item.name)).toEqual(['寿司']);
+    expect(patched?.primaryKeywords).toEqual(['寿司']);
   });
 
   it('applies soft preference patches without turning them into requested items', () => {

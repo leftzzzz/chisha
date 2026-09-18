@@ -57,35 +57,6 @@ export function hasPrimaryTargets(goal: UserGoal): boolean {
 }
 
 /**
- * 追问回答产生的 patch：把"补充"改写成"替换"。
- *
- * 用户在追问处说的新目标是对原目标的修正，不是追加——否则「川菜」会和
- * 上一轮的「火锅」并存，搜索方向被稀释。
- */
-export function normalizePendingAnswerPatch(previousGoal: UserGoal, patch: GoalPatch): GoalPatch {
-  const alreadyReplacesTargets = patch.replacePrimaryKeywords !== undefined
-    || patch.replaceRequestedItems !== undefined
-    || patch.replaceCategories !== undefined;
-  const addedTargets = [
-    ...(patch.addRequestedItems ?? []).map((item) => item.name),
-    ...(patch.addCategories ?? []).map((category) => category.name),
-  ].filter(Boolean);
-
-  if (alreadyReplacesTargets || addedTargets.length === 0 || !hasPrimaryTargets(previousGoal)) {
-    return patch;
-  }
-
-  return GoalPatchSchema.parse({
-    ...patch,
-    replaceRequestedItems: patch.addRequestedItems ?? [],
-    replaceCategories: patch.addCategories ?? [],
-    replacePrimaryKeywords: addedTargets,
-    addRequestedItems: undefined,
-    addCategories: undefined,
-  });
-}
-
-/**
  * 应用一个追问选项，得到更新后的目标。
  *
  * 按 **id** 查 effect——绝不按文案匹配。文案匹配正是死循环的成因：
@@ -103,10 +74,7 @@ export function applyClarificationOptionToGoal(
     return null;
   }
 
-  const patch = normalizePendingAnswerPatch(
-    goal,
-    goalPatchFromClarificationEffect(effect, goal)
-  );
+  const patch = goalPatchFromClarificationEffect(effect, goal);
   return applyGoalPatch(goal, patch, goal.rawQuery);
 }
 
