@@ -40,8 +40,8 @@ jest.mock('@/components/turntable', () => ({
   Turntable: (props: { onSegmentClick: (index: number) => void }) => (
     <div data-testid="turntable"><button data-testid="segment-restaurant" onClick={() => props.onSegmentClick(0)}>segment restaurant</button><button data-testid="segment-custom" onClick={() => props.onSegmentClick(3)}>segment custom</button></div>
   ),
-  TurntableControls: (props: { onSpin: () => void; onRemove: () => void; onRetry: () => void; onShare: () => void }) => (
-    <div data-testid="turntable-controls"><button data-testid="spin" onClick={props.onSpin}>spin</button><button data-testid="remove" onClick={props.onRemove}>remove</button><button data-testid="retry" onClick={props.onRetry}>retry</button><button data-testid="share" onClick={props.onShare}>share</button></div>
+  TurntableControls: (props: { onSpin: () => void; onRemove: () => void; onRetry: () => void; onShare: () => void; disabled?: boolean }) => (
+    <div data-testid="turntable-controls"><button data-testid="spin" onClick={props.onSpin} disabled={props.disabled}>spin</button><button data-testid="remove" onClick={props.onRemove}>remove</button><button data-testid="retry" onClick={props.onRetry}>retry</button><button data-testid="share" onClick={props.onShare}>share</button></div>
   ),
   TurntableManager: (props: { isOpen: boolean; onClose: () => void; onRestoreRestaurant: (i: number) => void; onAddFromCandidates: (i: number) => void; onRemoveToCandidates: (i: number) => void; onAddCustomOption: (o: CustomOption) => void; onRemoveCustomOption: (id: string) => void; onAddRestaurant: (r: Restaurant) => void }) => (
     <div data-testid="manager" data-open={props.isOpen ? 'true' : 'false'}><button data-testid="manager-close" onClick={props.onClose}>manager close</button><button data-testid="restore" onClick={() => props.onRestoreRestaurant(0)}>restore</button><button data-testid="candidate-add" onClick={() => props.onAddFromCandidates(0)}>candidate</button><button data-testid="candidate-remove" onClick={() => props.onRemoveToCandidates(0)}>candidate remove</button><button data-testid="custom-add" onClick={() => props.onAddCustomOption({ id: 'new', name: 'new', isCustom: true })}>custom add</button><button data-testid="custom-remove" onClick={() => props.onRemoveCustomOption('new')}>custom remove</button><button data-testid="restaurant-add" onClick={() => props.onAddRestaurant({ id: 'new-r', name: 'new', cuisineType: '菜', address: '', location: { lat: 0, lng: 0 }, source: 'amap' })}>restaurant add</button></div>
@@ -152,6 +152,13 @@ describe('HomePage orchestration', () => {
     share.parseShareData.mockReturnValue({ query: '分享', restaurants: [restaurant('s')], customOptions: [] });
     view.rerender(<HomePage />);
     await waitFor(() => expect(share.clearShareParamFromUrl).toHaveBeenCalled());
+  });
+
+  it('disables spinning when fewer than three options are available', () => {
+    configure({ step: 'READY', restaurants: [restaurant('1')] });
+    render(<HomePage />);
+
+    expect(screen.getAllByTestId('spin')[0]).toBeDisabled();
   });
 
   it('covers desktop focus, result persistence and custom-option removal paths', async () => {
