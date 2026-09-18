@@ -192,6 +192,32 @@ describe('并行搜索', () => {
     ]));
   });
 
+  it('does not record a cancelled provider call as a failed search attempt', async () => {
+    const runSearchAgentV3 = await loadRuntime(false);
+    const controller = new AbortController();
+    const cancelled = new Error('cancelled');
+    cancelled.name = 'AbortError';
+
+    const error = await runSearchAgentV3(
+      { ...agentInput(), signal: controller.signal },
+      () => undefined,
+      async () => {
+        controller.abort();
+        throw cancelled;
+      }
+    ).catch((caught) => caught);
+
+    expect(error).toMatchObject({ code: 'CANCELLED', name: 'AbortError' });
+    expect(error.runtimeState.attempts).toEqual([]);
+    expect(error.runtimeState.trace).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'error',
+        error: expect.objectContaining({ code: 'SEARCH_PROVIDER_FAILED' }),
+      }),
+    ]));
+    expect(error.runtimeState.trace.at(-1)?.output).toMatchObject({ outcome: 'cancelled' });
+  });
+
   it('never exceeds the remaining search budget', async () => {
     const runSearchAgentV3 = await loadRuntime(true);
     const searched: string[] = [];

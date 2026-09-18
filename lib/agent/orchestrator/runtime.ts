@@ -120,29 +120,38 @@ export async function runSearchAgentV3(
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>
 ): Promise<AgentFinalResult> {
   const contextRef: { current?: AgentV3Context } = {};
+  const turnMetrics: MetricsSink = {};
 
   try {
-    return await runAgentTurn(input, emit, searchPlaces, contextRef);
+    return await runAgentTurn(input, (event) => {
+      if (!input.signal?.aborted) emit(event);
+    }, searchPlaces, contextRef, turnMetrics);
   } catch (error) {
-    if (isAbortError(error)) {
-      throw error;
-    }
     if (error instanceof AgentRunError) {
       throw error;
     }
 
-    const code = toAgentErrorCode(error);
+    const code = isAbortError(error) || input.signal?.aborted ? 'CANCELLED' : toAgentErrorCode(error);
     const message = error instanceof Error ? error.message : String(error);
     const context = contextRef.current;
-
-    if (context) {
-      appendTrace(context, 'error', {
-        error: { code, message, retryable: isRetryableAgentError(error, code) },
-      });
-      throw new AgentRunError(message, code, snapshotRuntimeState(context), error);
-    }
-
-    throw new AgentRunError(message, code, undefined, error);
+    const state = context ? snapshotRuntimeState(context) : {
+      ...input.runtimeState,
+      attempts: [...(input.runtimeState?.attempts ?? [])],
+      candidates: [...(input.runtimeState?.candidates ?? [])],
+      actions: [...(input.runtimeState?.actions ?? [])],
+      observations: [...(input.runtimeState?.observations ?? [])],
+      trace: [...(input.runtimeState?.trace ?? [])],
+    };
+    const failedTurn = {
+      ...state, actions: state.actions ?? [], trace: state.trace ?? [],
+      sessionId: input.sessionId, turnId: context?.turnId ?? createTraceId('turn'),
+      modelCallMetrics: context?.modelCallMetrics ?? turnMetrics.modelCallMetrics,
+    };
+    appendTrace(failedTurn, 'error', {
+      error: { code, message, retryable: code !== 'CANCELLED' && isRetryableAgentError(error, code) },
+    });
+    recordTurnMetrics(failedTurn, code === 'CANCELLED' ? 'cancelled' : 'failed');
+    throw new AgentRunError(message, code, { ...state, trace: failedTurn.trace }, error);
   }
 }
 
@@ -150,13 +159,14 @@ async function runAgentTurn(
   input: AgentInput,
   emit: EmitAgentEvent,
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>,
-  contextRef: { current?: AgentV3Context }
+  contextRef: { current?: AgentV3Context },
+  turnMetrics: MetricsSink
 ): Promise<AgentFinalResult> {
   emit({ type: 'thinking', message: '正在理解你的需求...' });
   emit({ type: 'status', message: '正在分析您的需求...' });
 
   // context 要等目标解析完才能构造，先用独立容器收集这一阶段的模型指标。
-  const turnMetrics: MetricsSink = {};
+  throwIfCancelled(input.signal);
   const resolution = await resolveTurnGoal(input, turnMetrics);
   const supervisorOutput = resolution.supervisorOutput;
   const conversationMode = resolution.conversationMode;
@@ -175,6 +185,7 @@ async function runAgentTurn(
   const context = createInitialContext(input, baseGoal, resetPlan);
   context.modelCallMetrics = turnMetrics.modelCallMetrics ?? [];
   contextRef.current = context;
+  throwIfCancelled(input.signal);
   appendTrace(context, 'user_message', {
     input: {
       message: input.query,
@@ -218,8 +229,10 @@ async function runAgentTurn(
   }
 
   await expandKeywordsAlongsideFirstSearch(context, searchPlaces, emit);
+  throwIfCancelled(input.signal);
 
   while (context.actions.length < context.maxActions) {
+    throwIfCancelled(input.signal);
     const decision = await nextExecutableDecision(context, emit);
 
     if (decision.kind === 'abort') {
@@ -717,6 +730,13 @@ function isAbortError(error: unknown): error is Error {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+function throwIfCancelled(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error('Agent run cancelled');
+  error.name = 'AbortError';
+  throw error;
+}
+
 function isRetryableAgentError(error: unknown, code: AgentErrorCode): boolean {
   if (isAgentError(error)) {
     return error.retryable;
@@ -899,24 +919,27 @@ async function executeSearchBatch(
         result: await runSearchPlan(actionId, plan, baseRound + index, context, searchPlaces, emit),
       };
     } catch (error) {
-      if (isAbortError(error)) {
-        throw error;
-      }
       return { result: null, error };
     }
   });
 
   const observations: AgentObservation[] = [];
   const failures: unknown[] = [];
+  let cancellation: unknown;
   for (let index = 0; index < results.length; index += 1) {
     const outcome = results[index];
     const plan = plans[index];
     if (outcome.result) {
       observations.push(commitSearchPlanResult(outcome.result, context, emit));
+      cancellation ??= outcome.result.cancelled;
       continue;
     }
 
     const failure = outcome.error ?? new Error('Search plan failed without an error');
+    if (isAbortError(failure)) {
+      cancellation ??= failure;
+      continue;
+    }
     failures.push(failure);
     createTurnLogger(context.sessionId, context.turnId).warn('Parallel search plan failed', {
       keywords: plan.keywords,
@@ -934,6 +957,8 @@ async function executeSearchBatch(
     // 记为一次已尝试：否则这个关键词会被反复选中，直到预算耗尽。
     recordFailedAttempt(context, plan);
   }
+  if (cancellation) throw cancellation;
+  throwIfCancelled(context.signal);
 
   // A partial batch can still produce useful evidence. If every provider call
   // failed, treating the outage as "zero nearby restaurants" would mislead the
@@ -946,6 +971,7 @@ async function executeSearchBatch(
 }
 
 interface SearchPlanResult {
+  cancelled?: Error;
   actionId: string;
   plan: SearchPlan;
   restaurants: Restaurant[];
@@ -963,6 +989,7 @@ interface SearchPlanResult {
 
 /** 一个搜索计划的候选验证结果，区分"这次真判了几家"与"复用了几家"。 */
 interface PlanEvaluation {
+  cancelled?: Error;
   /** 拿到裁决的餐厅，顺序与后续 verdicts 一一对应 */
   restaurants: Restaurant[];
   output: EvaluationModelOutput;
@@ -1109,6 +1136,7 @@ async function runSearchPlan(
   });
 
   return {
+    cancelled: evaluation.cancelled,
     actionId,
     plan,
     restaurants,
@@ -1161,6 +1189,7 @@ async function evaluatePlanCandidates(
 
   const cache = context.verdictCache;
   let error: EvaluationModelOutput['error'];
+  let cancelled: Error | undefined;
   const outputs: EvaluationModelOutput[] = [];
   let pending = budgetedCandidates;
   let targetReached = false;
@@ -1208,18 +1237,19 @@ async function evaluatePlanCandidates(
         });
       } catch (evaluationError) {
         if (isAbortError(evaluationError)) {
-          throw evaluationError;
+          cancelled = evaluationError;
+        } else {
+          error = evaluationFailureFromError(evaluationError);
+          context.evaluationFailed = true;
+          context.evaluationError = isAgentError(evaluationError)
+            ? evaluationError
+            : new AgentError(
+                evaluationError instanceof Error ? evaluationError.message : String(evaluationError),
+                'EVALUATION_FAILED',
+                true,
+                { cause: evaluationError }
+              );
         }
-        error = evaluationFailureFromError(evaluationError);
-        context.evaluationFailed = true;
-        context.evaluationError = isAgentError(evaluationError)
-          ? evaluationError
-          : new AgentError(
-              evaluationError instanceof Error ? evaluationError.message : String(evaluationError),
-              'EVALUATION_FAILED',
-              true,
-              { cause: evaluationError }
-            );
         // 验证失败不再合成 unverified 候选：那是拿"没验证过"冒充验证结果。
         // 失败裁决同样不入缓存，别的计划不该继承一次抖动的结论。
       } finally {
@@ -1240,12 +1270,12 @@ async function evaluatePlanCandidates(
     pending = budgetedCandidates.filter(
       (restaurant) => !resolved.has(restaurant.id) && !cache.lookup(restaurant.id, plan)
     );
-    if (targetReached || error) {
+    if (targetReached || error || cancelled) {
       break;
     }
   }
 
-  return combinePlanVerdicts(
+  const combined = combinePlanVerdicts(
     hardPassed,
     budgetedCandidates,
     plan,
@@ -1254,6 +1284,11 @@ async function evaluatePlanCandidates(
     error,
     targetReached
   );
+  return {
+    ...combined,
+    cancelled,
+    stopReason: cancelled ? 'cancelled' : combined.stopReason,
+  };
 }
 
 /**
@@ -1536,8 +1571,10 @@ async function runProgressiveEvaluationModel(options: {
   const batchSize = Math.max(1, DEFAULT_AGENT_EVALUATION_BATCH_SIZE);
   const batches = chunkRestaurants(input.restaurants, batchSize);
   for (const restaurants of batches) {
+    throwIfCancelled(input.signal);
     const output = await runEvaluationModel({ ...input, restaurants });
     options.onBatch(output);
+    throwIfCancelled(input.signal);
     if (options.targetReached()) return true;
   }
 
@@ -1669,7 +1706,7 @@ function appendAction(
 }
 
 function appendTrace(
-  context: AgentV3Context,
+  context: Pick<AgentV3Context, 'trace' | 'sessionId' | 'turnId'>,
   type: AgentTraceItem['type'],
   item: Partial<Omit<AgentTraceItem, 'id' | 'sessionId' | 'turnId' | 'type' | 'createdAt'>> = {}
 ): AgentTraceItem {
@@ -1698,7 +1735,11 @@ function createTraceId(prefix: string): string {
  * 逐次调用的明细留在 metrics 数组里，trace 只保留一条汇总，
  * 避免高频节点把 session 行撑大。
  */
-function recordTurnMetrics(context: AgentV3Context, outcome: 'final' | 'paused'): void {
+function recordTurnMetrics(
+  context: Pick<AgentV3Context, 'trace' | 'sessionId' | 'turnId' | 'attempts' | 'actions' | 'candidates'>
+    & MetricsSink,
+  outcome: 'final' | 'paused' | 'failed' | 'cancelled'
+): void {
   const metrics = summarizeTurnMetrics(context);
   appendTrace(context, 'model_call', {
     output: { outcome, ...metrics },

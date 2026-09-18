@@ -122,7 +122,7 @@ async function runStructuredModelCall<T>(
   tracker: MetricsTracker
 ): Promise<T> {
   const first = parseStructuredModelResponse(
-    tracker.track(await requestStructuredModel(options, options.maxTokens)),
+    tracker.track(await requestStructuredModel(options, options.maxTokens, tracker)),
     options
   );
 
@@ -137,7 +137,7 @@ async function runStructuredModelCall<T>(
     });
 
     const retry = parseStructuredModelResponse(
-      tracker.track(await requestStructuredModel(options, options.retryMaxTokens!)),
+      tracker.track(await requestStructuredModel(options, options.retryMaxTokens!, tracker)),
       options
     );
 
@@ -168,7 +168,8 @@ async function runStructuredModelCall<T>(
     const retry = parseStructuredModelResponse(
       tracker.track(await requestStructuredModel(
         withSchemaRepairInstruction(options, first.error),
-        options.maxTokens
+        options.maxTokens,
+        tracker
       )),
       options
     );
@@ -188,6 +189,7 @@ async function runStructuredModelCall<T>(
 }
 
 interface MetricsTracker {
+  startAttempt(mode: ChatToolCallMode): void;
   /** 记录一次 HTTP 往返，并原样返回响应体供后续解析。 */
   track(outcome: RequestOutcome): ChatCompletionFunctionResponse;
   finish(ok: boolean): void;
@@ -195,6 +197,7 @@ interface MetricsTracker {
 
 function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTracker {
   const startedAt = Date.now();
+  let responsesWithUsage = 0;
   const state: Omit<ModelCallMetrics, 'durationMs' | 'ok'> = {
     modelRole: options.modelRole,
     model: options.model,
@@ -207,9 +210,14 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
   };
 
   return {
+    startAttempt(mode) {
+      state.attempts += 1;
+      state.mode = mode;
+    },
     track(outcome) {
-      state.attempts += outcome.attempts;
       state.mode = outcome.mode;
+      if (validTokenCount(outcome.data.usage?.prompt_tokens)
+        && validTokenCount(outcome.data.usage?.completion_tokens)) responsesWithUsage += 1;
       state.promptTokens = addTokens(state.promptTokens, outcome.data.usage?.prompt_tokens);
       state.completionTokens = addTokens(state.completionTokens, outcome.data.usage?.completion_tokens);
       if (outcome.data.choices?.[0]?.finish_reason === 'length') {
@@ -220,6 +228,7 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
     finish(ok) {
       recordModelCall(options.metricsSink, {
         ...state,
+        usageComplete: responsesWithUsage === state.attempts,
         durationMs: Date.now() - startedAt,
         ok,
       });
@@ -228,11 +237,15 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
 }
 
 function addTokens(current: number | undefined, next: number | undefined): number | undefined {
-  if (next === undefined) {
+  if (!validTokenCount(next)) {
     return current;
   }
 
   return (current ?? 0) + next;
+}
+
+function validTokenCount(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
 export function parseStructuredModelResponse<T>(
@@ -286,23 +299,22 @@ export function parseStructuredModelResponse<T>(
 interface RequestOutcome {
   data: ChatCompletionFunctionResponse;
   mode: ChatToolCallMode;
-  attempts: number;
 }
 
 async function requestStructuredModel<T>(
   options: StructuredModelOptions<T>,
-  maxTokens: number
+  maxTokens: number,
+  tracker: MetricsTracker
 ): Promise<RequestOutcome> {
   const modes = preferredToolCallModes();
   let lastError: Error | undefined;
-  let attempts = 0;
 
   for (const mode of modes) {
-    attempts += 1;
+    tracker.startAttempt(mode);
     const response = await requestChatCompletion(options, maxTokens, mode);
 
     if (response.ok) {
-      return { data: await response.json(), mode, attempts };
+      return { data: await response.json(), mode };
     }
 
     const error = await buildChatCompletionError(options.modelRole, options.model, mode, response);

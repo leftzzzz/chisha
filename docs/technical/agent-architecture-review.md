@@ -753,3 +753,21 @@ thinking/status，随后以 `CONFIG_MISSING`、`recoverable:false` 结束，证�
 - 定向测试覆盖慢首搜/快扩词失败、开放探索失败、证据缺失、第二批失败和终止后无迟到
   发布。全量 74 套件 / 704 测试通过；offline eval 15/15、类型/lint/文档检查通过。
   offline 评估故障用例重复评估由 5 降为 0；未据此声称真实费用、延迟或成功率改善。
+
+### R09 恢复、取消与观测（本地回归通过）
+
+- Runtime 对理解、搜索、评估阶段的失败和取消统一生成带类型化错误码的
+  `AgentRunError`，快照保留失败前的 goal、attempt、candidate、observation 和 trace。
+  取消发生在渐进评估中时，已完成批次仍写入 observation，停止原因为 `cancelled`；
+  Provider 取消不再追加“搜索失败” attempt 或 `SEARCH_PROVIDER_FAILED` trace。
+- 模型请求从每次 HTTP attempt 发起时计数，包括传输失败、tool/function 协议降级和
+  schema/truncation 重试。只有所有 attempt 都返回完整 usage 时才报告精确 token 总量；
+  否则总量为 `null`，已知部分保留在 `knownPromptTokens/knownCompletionTokens`。
+- 聊天路由暂存 Runtime `final`，先保存 runtime state 和助手消息，再发布一次终态及
+  `session_updated`。保存失败返回 `SESSION_PERSIST_FAILED`，取消或断流后不补发迟到的
+  `final/done`；失败与取消快照在租约仍有效时尽力保存。
+- 对抗回归覆盖理解阶段失败、传输失败无 usage、部分重试 usage、渐进评估取消、Provider
+  取消、失败 trace 持久化、保存失败和终态顺序。全量 74 套件 / 713 测试通过；
+  offline eval 15/15、类型检查、lint、文档检查和 `git diff --check` 通过。
+- 本阶段没有触碰生产 D1/DO。真实模型 usage 分布、真实高德中断和真实浏览器取消/重连
+  仍需在获准的非生产环境单独验收，不能由本地桩测试代替。

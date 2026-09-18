@@ -5,6 +5,7 @@ import {
 } from '@/lib/agent/modelClient';
 import { fetchWithTimeout } from '@/lib/withTimeout';
 import { AgentError } from '@/lib/agent/types';
+import { summarizeTurnMetrics, type MetricsSink } from '@/lib/agent/metrics';
 
 jest.mock('@/lib/withTimeout', () => ({
   fetchWithTimeout: jest.fn(),
@@ -226,6 +227,31 @@ describe('modelClient', () => {
     })).rejects.toThrow(
       "TestAgent API failed: 400 - Legacy function_call is also unsupported; type=invalid_request_error; code=unsupported_parameter"
     );
+  });
+
+  it('counts failed transport attempts without inventing usage', async () => {
+    const metricsSink: MetricsSink = {};
+    fetchWithTimeoutMock.mockRejectedValueOnce(new Error('network unavailable'));
+    await expect(callStructuredModel({ ...agentOptions(), metricsSink })).rejects.toThrow();
+    expect(metricsSink.modelCallMetrics?.[0]).toMatchObject({
+      attempts: 1, ok: false, usageComplete: false,
+    });
+    expect(summarizeTurnMetrics(metricsSink)).toMatchObject({
+      modelCalls: 1, failedModelCalls: 1, totalTokens: null, missingUsageCalls: 1,
+    });
+  });
+
+  it('keeps incomplete retry usage unknown and preserves the known subtotal', async () => {
+    const metricsSink: MetricsSink = {};
+    const response = modelResponse('{"value":"ok"}');
+    fetchWithTimeoutMock.mockResolvedValueOnce(modelResponse('{}')).mockResolvedValueOnce({
+      ...response,
+      json: async () => ({ ...await response.json(), usage: { prompt_tokens: 5, completion_tokens: 2 } }),
+    });
+    await callStructuredModel({ ...agentOptions(), metricsSink });
+    expect(summarizeTurnMetrics(metricsSink)).toMatchObject({
+      retries: 1, totalTokens: null, knownPromptTokens: 5, knownCompletionTokens: 2,
+    });
   });
 
   /**

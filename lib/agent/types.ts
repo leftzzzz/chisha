@@ -422,7 +422,8 @@ export type EvaluationStopReason =
   | 'target_reached'
   | 'all_evaluated'
   | 'budget_exhausted'
-  | 'evaluation_failed';
+  | 'evaluation_failed'
+  | 'cancelled';
 
 export type AgentTraceType =
   | 'user_message'
@@ -462,6 +463,8 @@ export type AgentErrorCode =
   | 'SEARCH_PROVIDER_FAILED'
   | 'RATE_LIMITED'
   | 'INVALID_OPTION'
+  | 'CANCELLED'
+  | 'SESSION_PERSIST_FAILED'
   | 'UNKNOWN';
 
 export interface AgentTraceItem {
@@ -599,7 +602,7 @@ export class AgentRunError extends Error {
     readonly cause?: unknown
   ) {
     super(message);
-    this.name = 'AgentRunError';
+    this.name = code === 'CANCELLED' ? 'AbortError' : 'AgentRunError';
   }
 }
 

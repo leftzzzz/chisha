@@ -15,7 +15,7 @@ import type {
   AgentRuntimeState,
   SearchPlan,
 } from '@/lib/agent/types';
-import { AgentError } from '@/lib/agent/types';
+import { AgentError, AgentRunError } from '@/lib/agent/types';
 import type { Restaurant } from '@/types';
 import {
   beginTurn,
@@ -141,7 +141,11 @@ async function runCase(
       createdAt: Date.now(),
     });
 
-    const metrics = snapshotMetrics(result, wallMs);
+    const failureState = outcome.error instanceof AgentRunError
+      ? outcome.error.runtimeState : undefined;
+    const metrics = snapshotMetrics(
+      failureState ? { ...result, runtimeState: failureState } : result, wallMs
+    );
     const failures = checkExpectations(turn.expect, result, metrics, outcome.error);
 
     turns.push({
@@ -194,8 +198,8 @@ function snapshotMetrics(result: AgentTurnResult, wallMs: number): TurnMetricsSn
     duplicateEvaluations: counters.evaluatedSlots - distinct,
     serialModelSteps: turnMetrics?.serialModelSteps ?? 0,
     modelCalls: turnMetrics?.modelCalls ?? 0,
-    promptTokens: turnMetrics?.promptTokens ?? 0,
-    completionTokens: turnMetrics?.completionTokens ?? 0,
+    promptTokens: turnMetrics?.promptTokens ?? null,
+    completionTokens: turnMetrics?.completionTokens ?? null,
     wallMs,
   };
 }

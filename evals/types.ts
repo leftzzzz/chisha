@@ -111,8 +111,8 @@ export interface TurnMetricsSnapshot {
   /** 模型调用串行步数（区间合并后），live 模式才有意义 */
   serialModelSteps: number;
   modelCalls: number;
-  promptTokens: number;
-  completionTokens: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
   wallMs: number;
 }
 

@@ -865,8 +865,10 @@ describe('runSearchAgentV3', () => {
     expect(error).toBeInstanceOf(AgentRunError);
     expect(error.code).toBe('MODEL_QUOTA_EXHAUSTED');
     expect(searchedPlans).toEqual([]);
-    // 目标还没解析出来，本轮不写任何会话状态，已有结果不会被抹掉。
-    expect(error.runtimeState).toBeUndefined();
+    // 理解失败只增加失败轨迹，不伪造目标或清除已有结果。
+    expect(error.runtimeState).toMatchObject({ attempts: [], candidates: [] });
+    expect(error.runtimeState.goal).toBeUndefined();
+    expect(error.runtimeState.trace.at(-1).output).toMatchObject({ outcome: 'failed' });
   });
 
   it('does not fall back to raw-query search when the Supervisor fails', async () => {

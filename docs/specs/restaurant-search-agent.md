@@ -224,6 +224,12 @@ const primaryScopeAuthorized =
 - 渐进评估按成功批次保留原始裁决；一批失败后停止本计划，不整计划重试已成功批次，
   失败及后续未评估门店不获得主推荐或候补资格。已有合格结果时显式部分成功，否则报错。
 - 错误码在抛出点使用 `AgentError` 类型化；消费端不得匹配错误 message 猜类型。
+- Runtime 失败和取消必须携带最新可恢复快照并记录对应终止类型。取消前已经完成的评估批次
+  可以保留，正在取消的 Provider 请求不得伪装成一次搜索失败 attempt，也不得在取消后发布
+  `final`。
+- 每个模型角色从请求发起时计入 attempt，传输失败和协议降级同样计数。任一 attempt 缺少
+  usage 时，整轮精确 token 总量记为 `null`，同时仅以 `known*Tokens` 报告已知小计；
+  不得用零表示未知成本。
 - 追问选项使用稳定 id：`optionEffects` 的 key 是 `option.id`，前端回传 id，label 只
   用于展示。
 
@@ -257,7 +263,7 @@ const primaryScopeAuthorized =
 - 模型角色 eval 必须检查自然语言 query、relation、授权、证据、停止原因和最终分区；
   模型或 Provider 不可用路径必须显式覆盖。
 - 对真实 OpenAI-compatible endpoint 的评测应报告目标保真、证据覆盖、成本、延迟和失败
-  率，不要求 Lead-only、subagent 调用或 child lifecycle 指标。
+  率，并单独报告 usage 缺失比例；不要求 Lead-only、subagent 调用或 child lifecycle 指标。
 - 必须区分确定性 policy 分支与受限模型角色的质量和成本，避免用其中一侧的指标替代
   整体 workflow 表现。
 - 评测集覆盖 typical、edge、adversarial、生产分布和 metamorphic/property cases：

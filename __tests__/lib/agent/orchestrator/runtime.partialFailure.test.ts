@@ -82,4 +82,29 @@ describe('partial keyword expansion failure', () => {
     expect(events.some((event) => event.type === 'final')).toBe(false);
     if (options.open) expect(search).not.toHaveBeenCalled();
   });
+
+  it('records metrics when goal understanding fails before context exists', async () => {
+    const run = await setup();
+    const { runGoalUnderstandingModel } = await import('@/lib/agent/models/goalUnderstandingModel');
+    (runGoalUnderstandingModel as jest.Mock).mockImplementationOnce(async (input) => {
+      input.metricsSink.modelCallMetrics = [{
+        modelRole: 'GoalUnderstandingModel', model: 'fixture', startedAt: 1, durationMs: 10,
+        attempts: 1, mode: 'tools', truncated: false, ok: false,
+      }];
+      throw new Error('understanding unavailable');
+    });
+    await expect(run({ query: '寿司', location }, () => undefined, async () => []))
+      .rejects.toMatchObject({
+        runtimeState: {
+          trace: expect.arrayContaining([
+            expect.objectContaining({
+              type: 'model_call',
+              output: expect.objectContaining({
+                outcome: 'failed', modelCalls: 1, totalTokens: null,
+              }),
+            }),
+          ]),
+        },
+      });
+  });
 });

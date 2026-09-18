@@ -25,7 +25,14 @@ jest.mock('@/lib/providerScheduler', () => {
 });
 
 import { POST } from '@/app/api/agent/chat/route';
-import { createAgentSession, getAgentSession, saveAgentSession } from '@/lib/agent/session';
+import {
+  createAgentSession,
+  getAgentSession,
+  inMemoryAgentSessionStore,
+  resetAgentSessionStore,
+  saveAgentSession,
+  setAgentSessionStore,
+} from '@/lib/agent/session';
 import { AgentRunError } from '@/lib/agent/types';
 import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
 import * as providerScheduler from '@/lib/providerScheduler';
@@ -161,6 +168,7 @@ describe('/api/agent/chat', () => {
     globalThis.TextDecoder = originalTextDecoder;
     if (originalProviderMaxWaitMs === undefined) delete process.env.PROVIDER_MAX_WAIT_MS;
     else process.env.PROVIDER_MAX_WAIT_MS = originalProviderMaxWaitMs;
+    resetAgentSessionStore();
     jest.restoreAllMocks();
     jest.clearAllMocks();
   });
@@ -250,6 +258,43 @@ describe('/api/agent/chat', () => {
 
     await expect(bodyPromise).resolves.toContain('"type":"session_updated"');
     expect(bodyEnded).toBe(true);
+  });
+
+  it('publishes one final event only after successful session persistence', async () => {
+    const response = await POST(jsonRequest({
+      message: '想吃日料',
+      location,
+    }));
+    const events = await readSseEvents(response);
+    const eventTypes = events.map((event) => event.type);
+
+    expect(eventTypes.filter((type) => type === 'final')).toHaveLength(1);
+    expect(eventTypes).not.toContain('done');
+    expect(eventTypes.indexOf('final')).toBeLessThan(eventTypes.indexOf('session_updated'));
+  });
+
+  it('reports session persistence failure without publishing a successful terminal event', async () => {
+    setAgentSessionStore({
+      ...inMemoryAgentSessionStore,
+      saveAsync: jest.fn(async () => {
+        throw new Error('D1 unavailable');
+      }),
+    });
+
+    const response = await POST(jsonRequest({
+      message: '想吃日料',
+      location,
+    }));
+    const events = await readSseEvents(response);
+    const eventTypes = events.map((event) => event.type);
+
+    expect(events.find((event) => event.type === 'error')).toEqual(expect.objectContaining({
+      code: 'SESSION_PERSIST_FAILED',
+      recoverable: true,
+    }));
+    expect(eventTypes).not.toContain('final');
+    expect(eventTypes).not.toContain('done');
+    expect(eventTypes).not.toContain('session_updated');
   });
 
   it('waits for an aborted run to unwind before releasing admission leases', async () => {

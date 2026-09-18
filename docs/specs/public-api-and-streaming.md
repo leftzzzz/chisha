@@ -51,6 +51,9 @@ type AgentChatRequest = {
   `question.options[].id` 是协议，`label` 仅用于展示。
 - `final` 是当前正常终止结果，包含主推荐 `restaurants`、候补 `candidates`、解释和未满足
   约束；`done` 保留为客户端可解析的兼容事件，但新 Runtime 不应以它建立第二套终止语义。
+- 路由必须暂存 Runtime 的终态事件，只有会话快照和助手消息全部保存成功后才能发布一次
+  `final`，随后发送 `session_updated`。保存失败发送 `SESSION_PERSIST_FAILED`，不得先发成功
+  终态；请求取消后不得补发迟到的 `final` 或 `done`。
 - `error` 包含 message、可选类型化 code 和 recoverable；消费者不得按 message 子串猜测
   错误类型。
 - `heartbeat` 只重置客户端无事件超时，不触发业务状态；服务端默认间隔与客户端 45 秒

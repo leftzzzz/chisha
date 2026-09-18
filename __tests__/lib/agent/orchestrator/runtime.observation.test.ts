@@ -1,4 +1,4 @@
-import type { AgentInput, UserGoal } from '@/lib/agent/types';
+import type { AgentInput, AgentRuntimeState, UserGoal } from '@/lib/agent/types';
 import type { Restaurant } from '@/types';
 
 const location = {
@@ -285,5 +285,33 @@ describe('runtime observation assembly', () => {
       evaluatedIds: ['r0', 'r1', 'r2'], evaluationStopReason: 'evaluation_failed',
     });
     expect(result.runtimeState?.observations?.[0].unevaluatedIds).toHaveLength(9);
+  });
+
+  it('keeps successful batches in the cancellation snapshot without publishing final', async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    const run = await loadRuntime(() => {
+      calls += 1;
+      if (calls === 2) {
+        controller.abort();
+        const error = new Error('cancelled');
+        error.name = 'AbortError';
+        throw error;
+      }
+    }, 3);
+    const emit = jest.fn();
+    const error = await run(
+      { ...agentInput('寿司'), signal: controller.signal }, emit,
+      async () => Array.from({ length: 12 }, (_, index) => ({
+        ...restaurant(), id: `r${index}`, name: `寿司店 ${index}`,
+      }))
+    ).catch((caught: { code: string; runtimeState: AgentRuntimeState }) => caught);
+    expect(error).toMatchObject({ code: 'CANCELLED', name: 'AbortError' });
+    const state = error.runtimeState!;
+    expect(state.observations?.[0]).toMatchObject({
+      evaluatedIds: ['r0', 'r1', 'r2'], evaluationStopReason: 'cancelled',
+    });
+    expect(state.trace?.at(-1)?.output).toMatchObject({ outcome: 'cancelled' });
+    expect(emit.mock.calls.some(([event]) => event.type === 'final')).toBe(false);
   });
 });
