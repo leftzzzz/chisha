@@ -4,6 +4,7 @@
 // @ts-ignore: .open-next/worker.js is generated after Next's type-check phase.
 import openNextWorker from './.open-next/worker.js';
 import { redirectPublicHttpToHttps } from './lib/httpsRedirect';
+import { fetchWithClientAbortBridge } from './lib/workerClientAbort';
 
 export { ProviderSchedulerDurableObject } from './lib/providerSchedulerDurableObject';
 
@@ -14,6 +15,11 @@ export default {
     env: Parameters<typeof openNextWorker.fetch>[1],
     ctx: Parameters<typeof openNextWorker.fetch>[2]
   ) {
-    return redirectPublicHttpToHttps(request) ?? openNextWorker.fetch(request, env, ctx);
+    const redirect = redirectPublicHttpToHttps(request);
+    if (redirect) return redirect;
+    if (request.method === 'POST' && new URL(request.url).pathname === '/api/agent/chat') {
+      return fetchWithClientAbortBridge(openNextWorker.fetch, request, env, ctx);
+    }
+    return openNextWorker.fetch(request, env, ctx);
   },
 };
