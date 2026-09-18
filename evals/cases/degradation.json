@@ -2,6 +2,7 @@
   {
     "id": "model-unavailable",
     "description": "模型不可用时必须直接报错：不搜索、不验证、不拿词表抽词冒充理解",
+    "modes": ["offline"],
     "turns": [
       {
         "message": "想吃火锅",
@@ -17,6 +18,7 @@
   {
     "id": "evaluation-unavailable",
     "description": "验证服务不可用时立即收敛：不再换关键词重复搜同一批 POI",
+    "modes": ["offline"],
     "turns": [
       {
         "message": "想吃火锅",

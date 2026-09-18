@@ -35,7 +35,9 @@
     "test:coverage": "jest --coverage",
     "test:api": "node scripts/test-api.js",
     "eval": "jest --config jest.eval.config.js --runInBand",
-    "eval:baseline": "EVAL_UPDATE_BASELINE=1 jest --config jest.eval.config.js --runInBand",
+    "eval:live-model-fixture-map": "EVAL_MODE=live-model-fixture-map jest --config jest.eval.config.js --runInBand",
+    "eval:live-model-live-map": "EVAL_MODE=live-model-live-map jest --config jest.eval.config.js --runInBand",
+    "eval:baseline": "EVAL_MODE=offline EVAL_UPDATE_BASELINE=1 jest --config jest.eval.config.js --runInBand",
     "docs:check": "node scripts/check-docs.mjs",
     "test:docs": "node --test scripts/__tests__/check-docs.test.mjs",
     "check": "node scripts/check-setup.js"

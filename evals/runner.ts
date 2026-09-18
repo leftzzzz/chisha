@@ -7,7 +7,6 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
 import type { TurnMetrics } from '@/lib/agent/metrics';
 import type {
   AgentEvent,
@@ -16,15 +15,15 @@ import type {
   AgentRuntimeState,
   SearchPlan,
 } from '@/lib/agent/types';
+import { AgentError } from '@/lib/agent/types';
 import type { Restaurant } from '@/types';
 import {
-  AgentError,
-} from '@/lib/agent/types';
-import {
   beginTurn,
+  configureHarness,
   createFixtureSearchPlaces,
   EVAL_LOCATION,
   readCounters,
+  trackSearchPlaces,
 } from './harness';
 import type {
   AmapFixture,
@@ -35,7 +34,13 @@ import type {
   EvalTurnResult,
   TurnMetricsSnapshot,
 } from './types';
-import { resolveEvalMode } from './config';
+import {
+  prepareEvalProcess,
+  resolveEvalMode,
+  validateEvalConfiguration,
+  type EvalExecutionConfig,
+  type EvalMode,
+} from './config';
 
 const CASES_DIR = join(__dirname, 'cases');
 const FIXTURE_PATH = join(__dirname, 'fixtures', 'amap.json');
@@ -51,25 +56,28 @@ export function loadCases(): EvalCase[] {
     .flatMap((file) => JSON.parse(readFileSync(join(CASES_DIR, file), 'utf8')) as EvalCase[]);
 }
 
-export async function runSuite(modeOverride?: 'offline' | 'live'): Promise<EvalSuiteResult> {
+type RunSearchAgent = typeof import('@/lib/agent/orchestrator/runtime').runSearchAgentV3;
+type EvalSearchProvider = (
+  plan: SearchPlan,
+  location: AgentInput['location']
+) => Promise<Restaurant[]>;
+
+export async function runSuite(modeOverride?: EvalMode): Promise<EvalSuiteResult> {
   const mode = modeOverride ?? resolveEvalMode();
+  const config = validateEvalConfiguration(mode);
+  prepareEvalProcess(config);
+  configureHarness(mode);
 
-  if (mode === 'live') {
-    // fixture provider 的行为不能用 live 标签发布；真实 Provider 模式需要独立
-    // 的入口、预算、超时和失败报告后再接入。
-    throw new AgentError(
-      'live eval mode is not implemented',
-      'CONFIG_MISSING',
-      false
-    );
-  }
-
-  const fixture = loadFixture();
-  const searchPlaces = createFixtureSearchPlaces(fixture);
+  // 配置预检和确定性开关准备必须先于这些动态导入。模型与高德模块会在导入时
+  // 读取环境变量，提前导入会让 live 模式意外继承测试桩或空凭证。
+  const [{ runSearchAgentV3 }, searchProvider] = await Promise.all([
+    import('@/lib/agent/orchestrator/runtime'),
+    createSearchProvider(config),
+  ]);
   const cases: EvalCaseResult[] = [];
 
-  for (const evalCase of loadCases()) {
-    cases.push(await runCase(evalCase, searchPlaces));
+  for (const evalCase of loadCases().filter((item) => caseRunsInMode(item, mode))) {
+    cases.push(await runCase(evalCase, searchProvider, runSearchAgentV3));
   }
 
   return {
@@ -83,9 +91,13 @@ export async function runSuite(modeOverride?: 'offline' | 'live'): Promise<EvalS
 
 async function runCase(
   evalCase: EvalCase,
-  searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>
+  searchProvider: EvalSearchProvider,
+  runSearchAgentV3: RunSearchAgent
 ): Promise<EvalCaseResult> {
   const location = evalCase.location ?? EVAL_LOCATION;
+  const searchPlaces = trackSearchPlaces(
+    (plan: SearchPlan) => searchProvider(plan, location)
+  );
   const messages: AgentMessage[] = [];
   let runtimeState: AgentRuntimeState | undefined;
   const turns: EvalTurnResult[] = [];
@@ -150,7 +162,7 @@ async function runCase(
   };
 }
 
-type AgentTurnResult = Awaited<ReturnType<typeof runSearchAgentV3>>;
+type AgentTurnResult = Awaited<ReturnType<RunSearchAgent>>;
 
 function emptyTurnResult(): AgentTurnResult {
   return {
@@ -308,4 +320,71 @@ function aggregate(cases: EvalCaseResult[]): EvalSuiteResult['totals'] {
       ? Number((turns.filter((turn) => turn.metrics.askedUser).length / turns.length).toFixed(3))
       : 0,
   };
+}
+
+async function createSearchProvider(
+  config: EvalExecutionConfig
+): Promise<EvalSearchProvider> {
+  if (config.map === 'fixture') {
+    const searchFixture = createFixtureSearchPlaces(loadFixture());
+    return (plan) => searchFixture(plan);
+  }
+
+  const {
+    amapPoiSearch,
+    AmapProviderError,
+    enrichRestaurantsWithAmapDetails,
+  } = await import('@/lib/amap');
+  const { ProviderSchedulerError } = await import('@/lib/providerScheduler');
+  const pageCount = parsePositiveInt(process.env.AGENT_POI_PAGES_PER_SEARCH, 2);
+  const detailLimit = parsePositiveInt(process.env.AGENT_DETAIL_ENRICH_LIMIT, 6);
+
+  return async (plan, location) => {
+    try {
+      const restaurants = await amapPoiSearch(
+        plan.keywords,
+        location,
+        plan.radiusMeters,
+        plan.poiType,
+        pageCount
+      );
+      return enrichRestaurantsWithAmapDetails(restaurants, detailLimit);
+    } catch (error) {
+      if (error instanceof AmapProviderError) {
+        throw new AgentError(
+          error.message,
+          error.category === 'rate_limited'
+            ? 'RATE_LIMITED'
+            : error.category === 'configuration' ? 'CONFIG_MISSING' : 'SEARCH_PROVIDER_FAILED',
+          error.retryable,
+          { cause: error }
+        );
+      }
+      if (error instanceof ProviderSchedulerError) {
+        const blockedByConfiguration = error.providerCategory === 'configuration';
+        const blockedByQuota = error.providerCategory === 'quota_exhausted';
+        throw new AgentError(
+          error.message,
+          blockedByConfiguration
+            ? 'CONFIG_MISSING'
+            : blockedByQuota ? 'SEARCH_PROVIDER_FAILED'
+            : error.kind === 'busy' || error.kind === 'blocked'
+            ? 'RATE_LIMITED'
+            : 'SEARCH_PROVIDER_FAILED',
+          !blockedByConfiguration && !blockedByQuota && error.kind !== 'configuration',
+          { cause: error }
+        );
+      }
+      throw error;
+    }
+  };
+}
+
+function caseRunsInMode(evalCase: EvalCase, mode: EvalMode): boolean {
+  return !evalCase.modes || evalCase.modes.includes(mode);
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
 }

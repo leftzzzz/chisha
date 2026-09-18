@@ -64,6 +64,10 @@ export function formatReport(result: EvalSuiteResult): string {
 }
 
 export function compareWithBaseline(result: EvalSuiteResult): string {
+  if (result.mode !== 'offline') {
+    return '（真实调用模式不适用 offline baseline）';
+  }
+
   if (!existsSync(BASELINE_PATH)) {
     return '（无基线，跳过对比。用 EVAL_UPDATE_BASELINE=1 生成）';
   }
@@ -111,6 +115,10 @@ export function compareWithBaseline(result: EvalSuiteResult): string {
 }
 
 export function writeBaseline(result: EvalSuiteResult): void {
+  if (result.mode !== 'offline') {
+    throw new Error('only offline eval results can update the baseline');
+  }
+
   const baseline: Baseline = {
     updatedAt: new Date().toISOString().slice(0, 10),
     totals: result.totals,

@@ -225,6 +225,14 @@ const primaryScopeAuthorized =
 
 - 模型桩 + fixture eval 用于证明 Runtime/workflow 的搜索步数、调用量、重复评估、事件、
   缓存、持久化和最终分区回归；它不证明真实模型语义质量。
+- 评测模式只允许 `offline`、`live-model-fixture-map` 和
+  `live-model-live-map`。三者分别表示“桩模型 + fixture 地图”“真实模型 + fixture
+  地图”和“真实模型 + 真实高德”，不得接受 `live` 等模糊标签或让模式名称与执行路径分离。
+- 任一 live 模式必须在模型或地图调用前完成配置预检并关闭 `AGENT_DETERMINISTIC`。
+  真实模型缺 `OPENAI_API_KEY`、真实地图缺 `AMAP_API_KEY` 或缺少显式 Provider 调用确认时，
+  必须以 `CONFIG_MISSING` 失败，不能回落到桩、fixture 或确定性模型分支。
+- offline baseline 只适用于 `offline`。真实模式不得读取、比较或更新该 baseline；故障注入
+  用例若依赖模型桩，必须显式限定为 offline。
 - 模型角色 eval 必须检查自然语言 query、relation、授权、证据、停止原因和最终分区；
   模型或 Provider 不可用路径必须显式覆盖。
 - 对真实 OpenAI-compatible endpoint 的评测应报告目标保真、证据覆盖、成本、延迟和失败

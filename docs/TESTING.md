@@ -60,7 +60,20 @@ npm test -- finalGuard.test.ts
 npm run eval
 ```
 
-eval 使用桩模型和 `evals/fixtures/amap.json` 驱动真实 Runtime，适合检查：
+Agent eval 有三种含义明确、互不冒充的模式：
+
+| 命令 | 模型 | 地图 | 用途 |
+| --- | --- | --- | --- |
+| `npm run eval` | 桩 | fixture | Runtime、回归与 offline baseline |
+| `npm run eval:live-model-fixture-map` | 真实 | fixture | 隔离评估模型语义质量与波动 |
+| `EVAL_ALLOW_LIVE_PROVIDER=1 npm run eval:live-model-live-map` | 真实 | 真实高德 | 经授权的端到端外部服务验收 |
+
+两个真实模型模式都要求 `OPENAI_API_KEY`。真实地图模式还要求 `AMAP_API_KEY` 和显式的
+`EVAL_ALLOW_LIVE_PROVIDER=1`；缺少任一项会在导入模型或地图实现、发起外部调用之前以
+`CONFIG_MISSING` 失败。模糊旧标签 `EVAL_MODE=live` 不受支持。live 模式会移除
+`AGENT_DETERMINISTIC`，不能被测试环境静默切回确定性分支。
+
+offline eval 使用桩模型和 `evals/fixtures/amap.json` 驱动真实 Runtime，适合检查：
 
 - 每轮搜索步数、批次和 Provider 调用量；
 - 候选评估次数、重复评估和缓存；
@@ -68,13 +81,15 @@ eval 使用桩模型和 `evals/fixtures/amap.json` 驱动真实 Runtime，适合
 - 会话恢复、退化路径和预算行为。
 
 它不证明真实模型能正确理解所有自然语言，也不应产生真实供应商请求。修改 baseline 只能
-在行为变化已审查且被接受后执行：
+在行为变化已审查且被接受后执行，baseline 只接受 offline 结果：
 
 ```bash
 npm run eval:baseline
 ```
 
-PR 中应说明 baseline 为什么变化，而不是只提交新快照。
+真实模式不读取、不比较也不能更新 offline baseline。故障注入用例可以限定为只在 offline
+运行；真实模式不得用桩错误冒充供应商故障。PR 中应说明 baseline 为什么变化，而不是只提交
+新快照。
 
 ### 文档检查
 

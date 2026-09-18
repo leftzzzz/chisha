@@ -1,6 +1,12 @@
-// offline 模式：确定性策略 + 桩模型。
-// live 模式（EVAL_MODE=live）下解除该开关，让真实模型参与决策。
-if (process.env.EVAL_MODE !== 'live') {
+// 评测入口会再次按解析后的模式设置开关；这里先保证模块导入阶段不误读旧值。
+const liveModes = new Set([
+  'live-model-fixture-map',
+  'live-model-live-map',
+])
+
+if (liveModes.has(process.env.EVAL_MODE)) {
+  delete process.env.AGENT_DETERMINISTIC
+} else {
   process.env.AGENT_DETERMINISTIC = '1'
 }
 

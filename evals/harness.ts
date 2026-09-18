@@ -17,6 +17,7 @@ import type {
   StubExpansion,
   StubGoal,
 } from './types';
+import type { EvalMode } from './config';
 
 export const EVAL_LOCATION: Location = {
   lat: 31.2304,
@@ -42,7 +43,7 @@ interface EvalStubs {
 }
 
 interface EvalHarnessState {
-  mode: 'offline' | 'live';
+  mode: EvalMode;
   fixture: AmapFixture;
   stubs: EvalStubs;
   counters: EvalCounters;
@@ -67,6 +68,10 @@ export const harnessState: EvalHarnessState = {
   counters: emptyCounters(),
 };
 
+export function configureHarness(mode: EvalMode): void {
+  harnessState.mode = mode;
+}
+
 export function beginTurn(stubs: EvalStubs): void {
   harnessState.stubs = stubs;
   harnessState.counters = emptyCounters();
@@ -84,11 +89,28 @@ export function readCounters(): EvalCounters {
  * fixture 版 searchPlaces。
  *
  * 按关键词命中 fixture，再按 plan 半径过滤——半径过滤是真实存在的行为，
- * 严格距离用例依赖它。同时记录并发峰值，供 fan-out 验收使用。
+ * 严格距离用例依赖它。调用量与并发峰值由外层 trackSearchPlaces 统一记录，
+ * 这样真实地图模式使用同一统计口径。
  */
 export function createFixtureSearchPlaces(
   fixture: AmapFixture
 ): (plan: { keywords: string[]; radiusMeters: number }) => Promise<Restaurant[]> {
+  return async (plan) => {
+    // 让并发真的重叠：没有 await 的话所有计划会顺序跑完
+    await new Promise((resolve) => setTimeout(resolve, 2));
+
+    const matched = plan.keywords.flatMap((keyword) => fixture[keyword] ?? []);
+    const seen = new Set<string>();
+    return matched
+      .filter((item) => item.distance <= plan.radiusMeters)
+      .filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)))
+      .map(toRestaurant);
+  };
+}
+
+export function trackSearchPlaces<TPlan>(
+  searchPlaces: (plan: TPlan) => Promise<Restaurant[]>
+): (plan: TPlan) => Promise<Restaurant[]> {
   return async (plan) => {
     const counters = harnessState.counters;
     counters.searchCalls += 1;
@@ -99,15 +121,7 @@ export function createFixtureSearchPlaces(
     );
 
     try {
-      // 让并发真的重叠：没有 await 的话所有计划会顺序跑完
-      await new Promise((resolve) => setTimeout(resolve, 2));
-
-      const matched = plan.keywords.flatMap((keyword) => fixture[keyword] ?? []);
-      const seen = new Set<string>();
-      return matched
-        .filter((item) => item.distance <= plan.radiusMeters)
-        .filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)))
-        .map(toRestaurant);
+      return await searchPlaces(plan);
     } finally {
       counters.inFlightSearches -= 1;
     }
@@ -150,6 +164,10 @@ export function routeGoalUnderstanding(
   input: SupervisorStubInput,
   context?: unknown
 ): Promise<unknown> {
+  if (harnessState.mode !== 'offline') {
+    return actual.runGoalUnderstandingModel(input, context);
+  }
+
   if (input.goal && input.limits) {
     harnessState.counters.plannerModelCalls += 1;
     return actual.runGoalUnderstandingModel(input, context);
@@ -247,7 +265,18 @@ function createStubAgentError(message: string, code: string): Error {
   );
 }
 
-export function keywordExpansionStub() {
+export function routeKeywordExpansion(
+  actual: { runKeywordExpansionModel: (input: unknown) => Promise<unknown> },
+  input: unknown
+): Promise<unknown> {
+  if (harnessState.mode !== 'offline') {
+    return actual.runKeywordExpansionModel(input);
+  }
+
+  return keywordExpansionStub();
+}
+
+function keywordExpansionStub() {
   const expansion = harnessState.stubs.expansion ?? {};
   const related = expansion.related ?? [];
   const broadened = expansion.broadened ?? [];
@@ -282,19 +311,25 @@ interface EvaluationStubInput {
  * 这不是在模拟模型的判断力，而是在固定它——评测关心的是 loop 调了几次评估、
  * 有没有重复评估，而不是模型判得准不准。
  */
-export function evaluationStub(input: EvaluationStubInput) {
-  const counters = harnessState.counters;
-  counters.evaluationCalls += 1;
+export function routeEvaluation(
+  actual: { runEvaluationModel: (input: unknown) => Promise<unknown> },
+  input: EvaluationStubInput
+): Promise<unknown> {
+  if (harnessState.mode !== 'offline') {
+    recordEvaluationCall(input);
+    return actual.runEvaluationModel(input);
+  }
+
+  return evaluationStub(input);
+}
+
+function evaluationStub(input: EvaluationStubInput) {
+  recordEvaluationCall(input);
 
   const evaluationError = harnessState.stubs.evaluationError;
   if (evaluationError) {
-    counters.evaluatedSlots += input.restaurants.length;
-    counters.evaluatedIds.push(...input.restaurants.map((item) => item.id));
     return Promise.reject(createStubAgentError('EvaluationModel 桩故障', evaluationError));
   }
-
-  counters.evaluatedSlots += input.restaurants.length;
-  counters.evaluatedIds.push(...input.restaurants.map((item) => item.id));
 
   const targets = Array.from(new Set([
     ...input.plan.keywords,
@@ -371,4 +406,11 @@ export function evaluationStub(input: EvaluationStubInput) {
     unmetConstraints: verdicts.flatMap((verdict) => verdict.conflicts),
     source: 'model' as const,
   });
+}
+
+function recordEvaluationCall(input: EvaluationStubInput): void {
+  const counters = harnessState.counters;
+  counters.evaluationCalls += 1;
+  counters.evaluatedSlots += input.restaurants.length;
+  counters.evaluatedIds.push(...input.restaurants.map((item) => item.id));
 }

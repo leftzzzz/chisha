@@ -656,3 +656,26 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
   未修改 fixture 或历史基线掩盖差异。
 - 本切片闭合 R02 的本地 schema 契约，不证明真实模型输出分布、提示词质量或真实服务
   可用性；这些仍需在 live eval 中单独报告。
+
+### R04 三种评测模式隔离
+
+- 评测入口收敛为三个精确模式：`offline` 使用桩模型与地图 fixture；
+  `live-model-fixture-map` 使用真实模型与同一地图 fixture；
+  `live-model-live-map` 使用真实模型与真实高德。旧的 `live` 模糊标签继续拒绝，模式名称
+  不能再与实际执行路径分离。
+- 配置预检先于 Runtime、模型和高德模块的动态导入。两个 live 模式缺
+  `OPENAI_API_KEY` 时失败；真实地图模式还要求 `AMAP_API_KEY` 和
+  `EVAL_ALLOW_LIVE_PROVIDER=1`。这些缺口统一返回 `CONFIG_MISSING`，不会调用模型、
+  高德或回落到 fixture。
+- Jest 的三个模型替身现在由同一 harness 模式路由：只有 offline 使用桩；live 模式调用
+  真实 GoalUnderstanding、KeywordExpansion 和 Evaluation 实现，并在模块导入前删除
+  `AGENT_DETERMINISTIC`。SearchReplan 同样因此走真实模型分支。地图调用量和并发统计移到
+  fixture/真实 Provider 共用包装层。
+- offline 专用故障注入用例显式声明运行模式。真实模式不使用桩错误冒充供应商故障，
+  不读取、不比较也不能更新 offline baseline；`eval:baseline` 明确固定为 offline。
+- 本地验证已确认模式单测、类型检查和 offline eval 15/15 通过；五个既有用例的主推荐
+  数量仍低于 2026-08-17 baseline，未修改历史快照。缺模型 key 的真实模型模式、缺高德
+  key/授权的真实地图模式均在任何外部请求前失败关闭。
+- 当前本地环境没有可用于本项目验收的真实模型和高德凭证，因此没有运行付费或公网实调，
+  也不宣称模型语义、地图数据、延迟、成本或成功率已经通过。R04 的本地模式隔离完成，
+  真实服务验收仍是开放项。

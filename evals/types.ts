@@ -7,6 +7,7 @@
  */
 
 import type { Location, Restaurant } from '@/types';
+import type { EvalMode } from './config';
 
 /** 桩 Supervisor 要返回的目标。字段是 UserGoal 的最小子集，其余按空值补齐。 */
 export interface StubGoal {
@@ -74,6 +75,8 @@ export interface EvalExpectation {
 export interface EvalCase {
   id: string;
   description: string;
+  /** 缺省在所有模式运行；故障注入等桩专用用例应显式限定为 offline。 */
+  modes?: EvalMode[];
   location?: Location;
   turns: EvalTurn[];
 }
@@ -130,7 +133,7 @@ export interface EvalCaseResult {
 }
 
 export interface EvalSuiteResult {
-  mode: 'offline' | 'live';
+  mode: EvalMode;
   passed: number;
   failed: number;
   cases: EvalCaseResult[];
