@@ -1955,7 +1955,7 @@ export function summarizeAction(action: AgentAction): string {
   }
 
   if (action.type === 'ask_user') {
-    return action.question.reason ?? action.question.question;
+    return action.question.question;
   }
 
   return action.explanation;

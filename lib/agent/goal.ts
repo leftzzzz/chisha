@@ -122,7 +122,9 @@ export function applyGoalPatch(goal: UserGoal, patch: GoalPatch, rawQuery = goal
       patch.addAuthorizations ?? inferAuthorizationsFromLegacyPatch(patch, goal)
     ),
     allowBroaden: patch.allowBroaden ?? goal.allowBroaden,
-    ambiguity: mergeStrings(goal.ambiguity, [patch.reason]),
+    // Patch reason explains why the goal version changed; it is not evidence
+    // that a user constraint remains unmet.
+    ambiguity: goal.ambiguity,
     clarificationNeeded: [],
   };
 

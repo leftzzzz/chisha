@@ -135,7 +135,7 @@ jest.mock('@/lib/agent/models/evaluationModel', () => ({
   }),
 }));
 
-import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
+import { runSearchAgentV3, summarizeAction } from '@/lib/agent/orchestrator/runtime';
 import { runGoalUnderstandingModel } from '@/lib/agent/models/goalUnderstandingModel';
 import { runEvaluationModel } from '@/lib/agent/models/evaluationModel';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
@@ -198,6 +198,17 @@ function input(searchGoal: UserGoal, query = searchGoal.rawQuery): AgentInput {
 describe('runSearchAgentV3', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  it('summarizes a clarification action with the user-facing question', () => {
+    expect(summarizeAction({
+      type: 'ask_user',
+      question: {
+        reason: '内部诊断信息不应直接展示给用户，且可能很长。',
+        question: '你更想吃哪一类？',
+        allowFreeText: true,
+      },
+    })).toBe('你更想吃哪一类？');
   });
 
   it('uses Supervisor actions and FinalGuard for primary recommendations', async () => {
@@ -1037,6 +1048,7 @@ describe('runSearchAgentV3', () => {
     }));
     expect(second.restaurants.map((item) => item.name)).toEqual(['重庆火锅']);
     expect(second.runtimeState?.goal.primaryKeywords).toEqual(['火锅']);
+    expect(second.unmetConstraints).not.toContain('用户补充了新的主目标。');
   });
 
   it('preserves sentence keywords before executing search tools', async () => {

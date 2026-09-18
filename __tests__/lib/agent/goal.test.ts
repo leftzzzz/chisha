@@ -48,6 +48,7 @@ describe('goal algebra', () => {
     expect(patched.hardConstraints).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: 'distance', maxMeters: 500 })])
     );
+    expect(patched.ambiguity).toEqual([]);
   });
 
   it('replaces stale primary targets when a clarification answer names a new target', () => {
