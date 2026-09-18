@@ -383,8 +383,9 @@ Adapter 仅对同一物理门店精确去重；上游选择器在合格集合内
 ### 3. 尚未确认的关键信息
 
 未做真实模型/地图联调、生产日志或用户转化分析；没有证据证明推荐质量、延迟或成本改善。
-LoopX CLI 可读取本地状态，但 bootstrap 返回身份选择 gate 且没有可选身份，未恢复自动循环，
-不把本地提交描述为 LoopX 已完成的自动任务。实现按仓库文档继续。
+2026-09-17 早期切片中，LoopX bootstrap 曾返回没有可选身份的选择 gate；后续已修复状态投影，
+当前目标由 registry 中的 `architecture-implementer` lane 继续执行。该变化只证明本地调度
+恢复，不是产品功能、真实服务或生产环境验收证据。
 
 ### 4. 当前方案的关键假设
 
@@ -466,7 +467,7 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
 本地验收：模式回归通过；完整 `npm test -- --runInBand --silent` 为 72 suites /
 640 tests 通过；`npm run type-check`、`npm run lint`、`npm run docs:check` 和
 `npm run eval` 通过，eval 基线无变化。未调用真实模型或地图；真实模型/地图模式
-仍未实现。LoopX 身份修复不是架构项目完成，自动调度仍未启用。
+仍未实现。LoopX 身份修复不是架构项目完成；后续切片已恢复自动调度，但不能替代功能验收。
 
 ### 后续切片：显式目标组的字段引用
 
@@ -679,3 +680,45 @@ FinalGuard 不补位、不重排、不修改原候选 verdict。未发现本次�
 - 当前本地环境没有可用于本项目验收的真实模型和高德凭证，因此没有运行付费或公网实调，
   也不宣称模型语义、地图数据、延迟、成本或成功率已经通过。R04 的本地模式隔离完成，
   真实服务验收仍是开放项。
+
+### 最终对抗性审查与本地验收（2026-09-18）
+
+审查实现范围为 `c78c67b..e2fd77d`。复查重点包括目标与 Provider query 保真、核心目标
+schema 失败关闭、逐条件证据到 observation 事实快照和目标版本的绑定、Runtime 提交顺序、
+三种 eval 模式与 baseline 隔离、会话 JSON 恢复边界以及 Cloudflare 构建绑定。没有发现该
+范围内新的、可复现的阻断缺陷；这表示已实现切片的本地门禁通过，不表示整个改进项目无风险。
+
+本地验证结果：
+
+- `npm run test:ci -- --silent` 通过：73 suites / 692 tests，覆盖率门禁通过。
+- `npm run eval` 通过：offline 15/15；五个既有用例的主推荐数量仍低于
+  2026-08-17 baseline，没有修改 fixture 或历史快照掩盖差异。
+- `npm run type-check`、`npm run lint`、`npm run docs:check`、`npm run test:docs`
+  和 `git diff --check` 通过。
+- `npm run build`、`npm run build:cloudflare` 和 `npm run deploy -- --dry-run` 通过。
+  Wrangler dry-run 识别 Durable Object、D1、Rate Limit 和 Assets 绑定；没有部署、
+  上传凭证或执行远端 migration。
+
+本地运行验收使用 `http://127.0.0.1:3100`，显式清空模型和地图凭证，并设置本地
+Provider scheduler 与仅本机使用的 session owner secret。首页和 `/history` 返回 200，
+首页主要功能区与空历史状态可见；缺少 location 的 Agent 请求返回 400，
+`/api/map/config` 返回 `configured:false`。首次 Agent 请求因本地 D1 未迁移返回 503；
+只执行 `npm run db:migrate:local` 后，SSE 返回 200 和 `text/event-stream`，发出
+thinking/status，随后以 `CONFIG_MISSING`、`recoverable:false` 结束，证明无模型凭证时在
+外部模型或地图请求前失败关闭。没有把这条失败路径当成成功搜索验收。
+
+`next dev` 对生产 Durable Object 导出给出本地运行限制提示；本次验收通过
+`PROVIDER_SCHEDULER_MODE=local` 避开该能力，Cloudflare build/dry-run 只证明产物和绑定可被
+静态识别，不证明真实 Durable Object 调度已经运行。390px 移动视口下首页灵感 chips 右侧
+存在既有裁切/横向溢出；该问题不在本次 Agent 架构 diff 中，作为范围外 UI 残余保留，
+没有混入当前提交。
+
+本轮可以确认 R01-R04 已批准切片的本地实现与失败关闭边界，但不能关闭完整项目：
+
+- 未使用真实模型、真实高德或真实菜单/商家资料，模型语义和事实质量未验收；
+- 未验收生产 D1、生产 Durable Object、真实会话恢复、负载、延迟、成本或线上成功率；
+- 未完成带真实服务的浏览器成功搜索、主推荐/候补展示和转盘端到端验收；
+- R05-R09 仍未实施，文档中待评审的排序、召回、反馈、局部失败和持久化决策不得上线。
+
+因此本次结论是“已实现切片通过本地验收，完整项目继续开放”，不是上线批准、部署批准或
+项目结项。
