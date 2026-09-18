@@ -546,7 +546,8 @@ export function getStats(): HistoryStats {
 /**
  * 从本地历史记录生成 Agent 可用的偏好摘要。
  *
- * 选中结果是强正向信号；手动删除的餐厅是负向信号。
+ * 转盘随机选中结果只用于历史展示，不能自动成为偏好。
+ * 显式反馈是强信号；参与转盘的候选只提供弱曝光信号。
  * 历史偏好只用于默认策略和排序，后端仍以当次硬约束为准。
  */
 export function buildUserPreferenceSummary(records: TurntableRecord[] = getRecords()): UserPreferenceSummary {
@@ -563,32 +564,40 @@ export function buildUserPreferenceSummary(records: TurntableRecord[] = getRecor
 
   recentRecords.forEach((record, index) => {
     const recencyWeight = Math.max(0.35, 1 - index * 0.03);
+    const selectedRestaurant = isCustomOption(record.selected) ? undefined : record.selected;
 
-    if (!isCustomOption(record.selected)) {
+    if (selectedRestaurant && record.userFeedback === 'like') {
       addWeight(
         favoriteCuisineWeights,
-        record.selected.cuisineType,
-        selectedPreferenceWeight(record.selected) * recencyWeight
+        selectedRestaurant.cuisineType,
+        explicitPreferenceWeight(selectedRestaurant) * recencyWeight
       );
-      selectedRestaurants.push(record.selected.name);
+      selectedRestaurants.push(selectedRestaurant.name);
 
-      if (record.selected.distance !== undefined) {
-        selectedDistances.push(record.selected.distance);
+      if (selectedRestaurant.distance !== undefined) {
+        selectedDistances.push(selectedRestaurant.distance);
       }
 
-      if (record.selected.averagePrice !== undefined) {
-        selectedPrices.push(record.selected.averagePrice);
+      if (selectedRestaurant.averagePrice !== undefined) {
+        selectedPrices.push(selectedRestaurant.averagePrice);
       }
     }
 
+    if (selectedRestaurant && record.userFeedback === 'dislike') {
+      addWeight(avoidedCuisineWeights, selectedRestaurant.cuisineType, 1.5 * recencyWeight);
+      rejectedRestaurants.push(selectedRestaurant.name);
+    }
+
     for (const restaurant of record.restaurants) {
-      if (restaurant.id !== record.selected.id) {
-        addWeight(
-          favoriteCuisineWeights,
-          restaurant.cuisineType,
-          weakPreferenceWeight(restaurant, 0.2) * recencyWeight
-        );
+      if (record.userFeedback === 'dislike' && restaurant.id === selectedRestaurant?.id) {
+        continue;
       }
+
+      addWeight(
+        favoriteCuisineWeights,
+        restaurant.cuisineType,
+        weakPreferenceWeight(restaurant, 0.2) * recencyWeight
+      );
     }
 
     for (const restaurant of record.rejectedRestaurants ?? []) {
@@ -607,7 +616,7 @@ export function buildUserPreferenceSummary(records: TurntableRecord[] = getRecor
   };
 }
 
-function selectedPreferenceWeight(restaurant: Restaurant): number {
+function explicitPreferenceWeight(restaurant: Restaurant): number {
   return isWeakRecommendationSignal(restaurant) ? 0.6 : 3;
 }
 

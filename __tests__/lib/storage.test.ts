@@ -397,7 +397,7 @@ describe('Storage', () => {
   });
 
   describe('buildUserPreferenceSummary', () => {
-    it('should convert selected and rejected restaurants into preference weights', () => {
+    it('should not turn a random winner into a strong preference', () => {
       const cantoneseRestaurant: Restaurant = {
         ...mockRestaurant,
         id: 'r2',
@@ -413,31 +413,97 @@ describe('Storage', () => {
         cuisineType: '火锅',
         distance: 1200,
       };
-      const record: TurntableRecord = {
-        id: 'rec1',
+      const baseRecord = {
         timestamp: 2000,
         query: '随便吃点',
         location: mockLocation,
         restaurants: [cantoneseRestaurant, hotpotRestaurant],
-        rejectedRestaurants: [hotpotRestaurant],
-        selected: cantoneseRestaurant,
       };
 
-      const summary = buildUserPreferenceSummary([record]);
+      const cantoneseWon = buildUserPreferenceSummary([{
+        ...baseRecord,
+        id: 'rec1',
+        selected: cantoneseRestaurant,
+      }]);
+      const hotpotWon = buildUserPreferenceSummary([{
+        ...baseRecord,
+        id: 'rec2',
+        selected: hotpotRestaurant,
+      }]);
 
-      expect(summary.favoriteCuisines?.[0]).toEqual(
-        expect.objectContaining({ name: '粤菜' })
-      );
-      expect(summary.avoidedCuisines?.[0]).toEqual(
-        expect.objectContaining({ name: '火锅' })
+      expect(cantoneseWon).toEqual(hotpotWon);
+      expect(cantoneseWon.favoriteCuisines).toEqual([
+        { name: '粤菜', weight: 0.2 },
+        { name: '火锅', weight: 0.2 },
+      ]);
+      expect(cantoneseWon.preferredDistanceMeters).toBeUndefined();
+      expect(cantoneseWon.preferredPriceRange).toBeUndefined();
+      expect(cantoneseWon.recentSelectedRestaurants).toEqual([]);
+    });
+
+    it('should use explicit feedback and manual rejection as strong preference signals', () => {
+      const likedRestaurant: Restaurant = {
+        ...mockRestaurant,
+        id: 'r2',
+        name: '粤菜餐厅',
+        cuisineType: '粤菜',
+        distance: 800,
+        averagePrice: 100,
+      };
+      const dislikedRestaurant: Restaurant = {
+        ...mockRestaurant,
+        id: 'r3',
+        name: '火锅餐厅',
+        cuisineType: '火锅',
+        distance: 1200,
+      };
+      const rejectedRestaurant: Restaurant = {
+        ...mockRestaurant,
+        id: 'r4',
+        name: '烧烤餐厅',
+        cuisineType: '烧烤',
+      };
+      const records: TurntableRecord[] = [
+        {
+          id: 'liked',
+          timestamp: 3000,
+          query: '随便吃点',
+          location: mockLocation,
+          restaurants: [likedRestaurant, dislikedRestaurant],
+          selected: likedRestaurant,
+          userFeedback: 'like',
+        },
+        {
+          id: 'disliked',
+          timestamp: 2000,
+          query: '随便吃点',
+          location: mockLocation,
+          restaurants: [likedRestaurant, dislikedRestaurant],
+          rejectedRestaurants: [rejectedRestaurant],
+          selected: dislikedRestaurant,
+          userFeedback: 'dislike',
+        },
+      ];
+
+      const summary = buildUserPreferenceSummary(records);
+
+      expect(summary.favoriteCuisines?.find((item) => item.name === '粤菜')?.weight)
+        .toBeGreaterThan(1);
+      expect(summary.avoidedCuisines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: '火锅' }),
+          expect.objectContaining({ name: '烧烤' }),
+        ])
       );
       expect(summary.preferredDistanceMeters).toBe(800);
       expect(summary.preferredPriceRange).toEqual({ min: 70, max: 130 });
       expect(summary.recentSelectedRestaurants).toContain('粤菜餐厅');
-      expect(summary.recentRejectedRestaurants).toContain('火锅餐厅');
+      expect(summary.recentRejectedRestaurants).toEqual(
+        expect.arrayContaining(['火锅餐厅', '烧烤餐厅'])
+      );
     });
 
-    it('should learn unverified or backup selections only as weak cuisine signals', () => {
+    it('should learn displayed unverified or backup candidates only as weak cuisine signals', () => {
       const verifiedRestaurant: Restaurant = {
         ...mockRestaurant,
         id: 'r2',

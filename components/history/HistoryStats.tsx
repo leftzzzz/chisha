@@ -50,10 +50,10 @@ export const HistoryStats: React.FC<HistoryStatsProps> = ({ stats }) => {
 
       {/* 详细统计 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* 最常去的餐厅 */}
+        {/* 转盘抽中次数 */}
         <Card>
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            最常去的餐厅
+            转盘抽中最多
           </h3>
           {stats.mostVisited.length === 0 ? (
             <p className="text-sm text-gray-500 text-center py-4">
@@ -101,10 +101,10 @@ export const HistoryStats: React.FC<HistoryStatsProps> = ({ stats }) => {
           )}
         </Card>
 
-        {/* 最喜欢的菜系 */}
+        {/* 抽中菜系分布 */}
         <Card>
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            最喜欢的菜系
+            抽中菜系分布
           </h3>
           {stats.favoriteCuisines.length === 0 ? (
             <p className="text-sm text-gray-500 text-center py-4">

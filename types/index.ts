@@ -203,8 +203,8 @@ export interface TurntableRecord {
   restaurants: Restaurant[]; // 参与的餐厅
   rejectedRestaurants?: Restaurant[]; // 用户手动删除的餐厅
   customOptions?: CustomOption[]; // 参与的自定义选项
-  selected: Restaurant | CustomOption; // 选中的餐厅或自定义选项
-  userFeedback?: 'like' | 'dislike'; // 用户反馈
+  selected: Restaurant | CustomOption; // 转盘随机选中的餐厅或自定义选项，仅用于历史展示
+  userFeedback?: 'like' | 'dislike'; // 用户对 selected 的显式反馈，才可形成强偏好信号
 }
 
 // ============ 错误类型 ============
