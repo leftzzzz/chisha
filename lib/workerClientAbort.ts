@@ -27,7 +27,13 @@ export async function fetchWithClientAbortBridge<Env, Context>(
   }
 
   const routeRequest = new Request(request, { signal: clientAbort.signal });
-  const response = await handler(routeRequest, env, context);
+  let response: Response;
+  try {
+    response = await handler(routeRequest, env, context);
+  } catch (error) {
+    detach();
+    throw error;
+  }
   if (!response.body) {
     detach();
     return response;
@@ -39,6 +45,7 @@ export async function fetchWithClientAbortBridge<Env, Context>(
       try {
         const { done, value } = await source.read();
         if (done) {
+          detach();
           controller.close();
           return;
         }

@@ -127,4 +127,50 @@ describe('fetchWithClientAbortBridge', () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('aborted');
   });
+
+  it('removes the request abort listener after healthy stream completion', async () => {
+    const listeners = new Map<string, Array<() => void>>();
+    const signal = {
+      aborted: false,
+      addEventListener(type: string, listener: () => void) {
+        listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+      },
+      removeEventListener(type: string, listener: () => void) {
+        listeners.set(type, (listeners.get(type) ?? []).filter((item) => item !== listener));
+      },
+    } as AbortSignal;
+    const response = await fetchWithClientAbortBridge(
+      () => streamingResponse(['data: done\n\n']),
+      new Request('https://chisha.leftzzzz.top/api/agent/chat', { method: 'POST', signal }),
+      {},
+      {}
+    );
+
+    expect(await response.text()).toBe('data: done\n\n');
+    expect(listeners.get('abort')).toEqual([]);
+  });
+
+  it('removes the request abort listener when the handler throws', async () => {
+    const listeners = new Map<string, Array<() => void>>();
+    const signal = {
+      aborted: false,
+      addEventListener(type: string, listener: () => void) {
+        listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+      },
+      removeEventListener(type: string, listener: () => void) {
+        listeners.set(type, (listeners.get(type) ?? []).filter((item) => item !== listener));
+      },
+    } as AbortSignal;
+
+    await expect(fetchWithClientAbortBridge(
+      async () => {
+        throw new Error('handler failed');
+      },
+      new Request('https://chisha.leftzzzz.top/api/agent/chat', { method: 'POST', signal }),
+      {},
+      {}
+    )).rejects.toThrow('handler failed');
+
+    expect(listeners.get('abort')).toEqual([]);
+  });
 });
