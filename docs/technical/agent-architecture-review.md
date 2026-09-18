@@ -815,3 +815,56 @@ thinking/status，随后以 `CONFIG_MISSING`、`recoverable:false` 结束，证�
 - 定向回归通过；完整 `npm run test:ci -- --silent --coverageReporters=json-summary`
   为 74 套件 / 719 测试通过，offline eval 15/15，type-check 和 lint 通过。该修复不改变
   资格、排序、预算上限或用户可见契约，只让已经达到目标的路径及时停止评估。
+
+### 批准阶段最终验收收口（2026-09-18）
+
+本次收口覆盖已批准顺序 R05、R08、R09、R06、R07 及其最终对抗性修复，对应本地提交为
+`4b74fda`、`f2e7963`、`04ac747`、`b84fcd1`、`2450ad5`、`2ad0b60`。这些提交均为独立
+阶段提交，没有推送、合并或部署。
+
+完整本地质量门禁结果：
+
+- `npm run test:ci -- --silent --coverageReporters=json-summary` 通过：74 suites /
+  719 tests，覆盖率门禁通过；
+- `npm run eval` 通过：offline 15/15；没有改写历史 baseline 掩盖既有主推荐数量差异；
+- `npm run type-check`、`npm run lint`、`npm run docs:check` 通过；
+- `npm run build`、`npm run build:cloudflare`、`npm run deploy -- --dry-run` 通过；
+  dry-run 没有部署，也没有执行远端 D1 migration。
+
+最终对抗性审查发现并修复一项中等级别问题：渐进评估早停预览只读取当前计划的新候选，
+遗漏先前计划已经提交的主推荐，导致总数已经达到目标时仍多调用两个模型批次。回归先在
+旧实现下稳定得到 `[3, 3, 3]`，修复后只评估首批 `[3]`。审查未发现其余可复现的阻断
+缺陷，但这只证明当前本地实现和测试覆盖下没有已知阻断，不等于真实模型或地图质量已经
+通过。
+
+非生产浏览器验收使用 `http://127.0.0.1:3100`、本地 Provider scheduler 和临时生成的
+session owner secret。没有连接生产 D1 或 Durable Object。验收结果如下：
+
+- Chrome 自动定位返回上海测试坐标。缺少高德凭证时反向地理编码返回 503，页面仍保留
+  坐标，没有把位置状态清空；
+- Agent 请求返回 HTTP 200 和 `text/event-stream`，先发送 `thinking/status`，再以
+  `CONFIG_MISSING`、`recoverable:false` 结束。页面显示配置错误，没有发布主推荐、候补、
+  转盘或伪成功终态；
+- 点击错误页“返回”后，原查询“想吃寿司，步行 15 分钟内”和坐标仍保留，用户可修复配置
+  后重试；
+- `/history` 显示 0 条记录和明确空态，失败搜索没有生成转盘历史；
+- 1280x720 桌面视口及 390x844 移动视口下，首页和历史空态均未发现横向溢出。失败请求
+  后控制台仅出现与缺失高德/模型配置对应的 503 和 Agent 错误；重新加载的首页与历史页
+  没有额外 warning 或 error。
+
+真实服务验收仍未通过。当前安全运行环境只暴露变量名检查结果，没有
+`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`、`AMAP_API_KEY` 或
+`EVAL_ALLOW_LIVE_PROVIDER`。`live-model-fixture-map` 和 `live-model-live-map` 入口因此
+在任何外部调用前分别拒绝执行；没有读取私有文件，也没有输出或提交凭证值。
+
+因此当前可以确认：
+
+- R05、R08、R09、R06、R07 的已批准本地实现、阶段提交、全量回归、离线评测、构建、
+  Cloudflare dry-run、浏览器失败关闭与恢复路径均已完成；
+- 真实模型语义、真实高德数据、真实 usage/延迟、成功搜索后的主推荐与候补分区、转盘、
+  多轮追问、取消和重连仍未实证；
+- 生产 D1/DO、推送、合并和部署始终未获授权且未执行。
+
+完整项目继续保持开放。下一次可执行验收需要在启动评测和本地服务的同一安全运行环境中
+注入上述模型与高德配置，再依次运行真实模型固定地图评测、真实模型真实地图评测和浏览器
+成功路径；在这些证据产生前，不得把当前结论表述为真实服务验收通过或上线批准。
