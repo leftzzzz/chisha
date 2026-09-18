@@ -55,7 +55,8 @@ function agentInput(query = '没有具体想吃的，你来选'): AgentInput {
 async function loadRuntime(
   onEvaluate: (restaurants: Restaurant[]) => void = () => undefined,
   evaluationBatchSize?: number,
-  missingEvidence: (restaurant: Restaurant) => boolean = () => false
+  missingEvidence: (restaurant: Restaurant) => boolean = () => false,
+  goalOutput: () => UserGoal = goal
 ) {
   jest.resetModules();
   process.env.AGENT_DETERMINISTIC = '1';
@@ -70,7 +71,7 @@ async function loadRuntime(
     const actual = jest.requireActual('@/lib/agent/models/goalUnderstandingModel');
     return {
       ...actual,
-      runGoalUnderstandingModel: jest.fn(async () => ({ goal: goal() })),
+      runGoalUnderstandingModel: jest.fn(async () => ({ goal: goalOutput() })),
       runSearchReplan: jest.fn(async () => null),
     };
   });
@@ -264,6 +265,61 @@ describe('runtime observation assembly', () => {
     expect(observation?.evaluationStopReason).toBe('budget_exhausted');
     expect(observation?.acceptedPrimaryIds).toEqual(['r9', 'r10', 'r11']);
     expect(result.restaurants.map((item) => item.id)).toEqual(['r9', 'r10', 'r11']);
+  });
+
+  it('counts committed primaries when stopping a later progressive evaluation', async () => {
+    let currentGoal = goal();
+    const evaluatedBatches: string[][] = [];
+    const runSearchAgentV3 = await loadRuntime(
+      (restaurants) => evaluatedBatches.push(restaurants.map((item) => item.id)),
+      3,
+      () => false,
+      () => currentGoal
+    );
+    let firstSearchCalls = 0;
+    const first = await runSearchAgentV3(agentInput('寿司'), () => undefined, async () => {
+      firstSearchCalls += 1;
+      return firstSearchCalls === 1
+        ? Array.from({ length: 5 }, (_, index) => ({
+            ...restaurant(),
+            id: `existing-${index}`,
+            name: `已有寿司店 ${index}`,
+          }))
+        : [];
+    });
+    expect(first.restaurants).toHaveLength(5);
+
+    currentGoal = {
+      ...first.runtimeState!.goal,
+      relatedKeywords: ['拉面'],
+      relatedTargets: [{ keyword: '拉面' }],
+      broadenedKeywords: [],
+      broadenedTargets: [],
+    };
+    evaluatedBatches.length = 0;
+    const second = await runSearchAgentV3(
+      {
+        ...agentInput('继续找'),
+        runtimeState: {
+          ...first.runtimeState!,
+          goal: currentGoal,
+        },
+      },
+      () => undefined,
+      async () => Array.from({ length: 12 }, (_, index) => ({
+        ...restaurant(),
+        id: `later-${index}`,
+        name: `后续寿司店 ${index}`,
+      }))
+    );
+
+    expect(evaluatedBatches.map((batch) => batch.length)).toEqual([3]);
+    expect(second.restaurants).toHaveLength(8);
+    expect(second.runtimeState?.observations?.at(-1)).toMatchObject({
+      evaluatedIds: ['later-0', 'later-1', 'later-2'],
+      evaluationStopReason: 'target_reached',
+    });
+    expect(second.runtimeState?.observations?.at(-1)?.unevaluatedIds).toHaveLength(9);
   });
 
   it('retains successful batches and does not retry or promote a failed batch', async () => {

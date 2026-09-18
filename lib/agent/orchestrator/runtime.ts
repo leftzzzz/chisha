@@ -1663,7 +1663,7 @@ function hasEnoughEvaluatedPrimaries(
   );
   // Parallel plans have not committed yet. Project their real facts locally so
   // early stopping uses the publication guard without mutating shared state.
-  const preview = {
+  const preview: AgentV3Context = {
     ...context,
     attempts: [...context.attempts, {
       keywords: plan.keywords, radius: plan.radiusMeters, poiType: plan.poiType,
@@ -1671,8 +1671,9 @@ function hasEnoughEvaluatedPrimaries(
       reason: plan.reason, found: observation.rawCount, accepted: evaluated.acceptedCandidates.length,
     }],
     observations: [...context.observations, observation],
-    candidates: evaluated.acceptedCandidates,
+    candidates: [...context.candidates],
   };
+  mergeCandidates(preview, evaluated.acceptedCandidates);
   return applyFinalGuard(preview).primaryCandidates.length >= context.targetCount;
 }
 

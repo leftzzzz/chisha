@@ -802,3 +802,16 @@ thinking/status，随后以 `CONFIG_MISSING`、`recoverable:false` 结束，证�
   显式反馈和手动移除的正负信号。全量 74 套件 / 718 测试、offline eval 15/15、
   类型检查、lint、文档检查和 `git diff --check` 通过。真实浏览器历史写入与后续搜索
   传递仍需单独验收。
+
+### 对抗性审查修复：跨计划渐进评估早停
+
+- 已确认中等级别、高置信度缺陷：`hasEnoughEvaluatedPrimaries` 的只读预览原先用当前计划
+  的新候选替换 `context.candidates`。当先前计划已经提交 5 家合格主推荐、后续计划首批再
+  验证 3 家时，真实总数已经达到 8 家，但预览只看到新 3 家，继续额外调用两个评估批次。
+  该缺陷主要增加模型成本和完成延迟，不会把未验证候选提升为主推荐。
+- 新回归先在旧实现下稳定失败：期望第二轮只评估一批 3 家，实际评估批次为
+  `[3, 3, 3]`。修复后预览先复制已提交候选，再通过现有 `mergeCandidates` 语义合并当前
+  评估结果，最后仍由同一个 FinalGuard 判断是否达到目标；真实上下文不被预览修改。
+- 定向回归通过；完整 `npm run test:ci -- --silent --coverageReporters=json-summary`
+  为 74 套件 / 719 测试通过，offline eval 15/15，type-check 和 lint 通过。该修复不改变
+  资格、排序、预算上限或用户可见契约，只让已经达到目标的路径及时停止评估。
