@@ -16,6 +16,7 @@ import {
 import { CLARIFICATION_OPTION } from '@/lib/agent/clarificationOptions';
 import type {
   AgentInput,
+  AgentObservation,
   ContextInvalidationPlan,
   PendingQuestion,
   PolicyContext,
@@ -67,6 +68,38 @@ function input(overrides: Partial<AgentInput> = {}): AgentInput {
   } as AgentInput;
 }
 
+function cancelledObservation(): AgentObservation {
+  return {
+    actionId: 'action_1',
+    plan: {
+      keywords: ['日本料理'],
+      radiusMeters: 1800,
+      searchIntent: 'exact',
+      allowedForPrimary: true,
+      reason: 'test',
+    },
+    provider: 'amap',
+    fetchedAt: 1,
+    facts: [{
+      id: 'r1',
+      source: 'amap',
+      name: '寿司店',
+      cuisineType: '日本料理',
+      address: '测试地址',
+      location,
+    }],
+    rawCount: 1,
+    hardRejected: [],
+    verdicts: [],
+    evaluatedIds: [],
+    unevaluatedIds: ['r1'],
+    evaluationStopReason: 'cancelled',
+    acceptedPrimaryIds: [],
+    candidateIds: [],
+    unmetConstraints: [],
+  };
+}
+
 const invalidation = (
   overrides: Partial<ContextInvalidationPlan> = {}
 ): ContextInvalidationPlan => ({
@@ -82,6 +115,28 @@ describe('decideTurnEntry', () => {
   it('sends free text to the goal understanding agent', () => {
     expect(decideTurnEntry(input({ query: '想吃火锅' })))
       .toEqual({ kind: 'understand', message: '想吃火锅' });
+  });
+
+  it('reruns the current goal for a bare continuation after cancellation', () => {
+    const previousGoal = goal({ primaryKeywords: ['日本料理'] });
+    const decision = decideTurnEntry(input({
+      query: ' 继续 ',
+      runtimeState: {
+        goal: previousGoal,
+        attempts: [],
+        candidates: [],
+        observations: [cancelledObservation()],
+      },
+    }));
+
+    expect(decision).toEqual({ kind: 'rerun_current_goal', goal: previousGoal });
+  });
+
+  it('still sends bare continuation to the model without a cancelled observation', () => {
+    expect(decideTurnEntry(input({
+      query: '继续',
+      runtimeState: { goal: goal(), attempts: [], candidates: [] },
+    }))).toEqual({ kind: 'understand', message: '继续' });
   });
 
   it('rejects an option that is no longer on the pending question', () => {

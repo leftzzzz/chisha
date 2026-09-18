@@ -207,6 +207,9 @@ const primaryScopeAuthorized =
   不新增 Provider search action 或重复
   observation。恢复中再次取消必须保留本轮已完成评估批次；`evaluation_failed` 不自动重试。
   恢复完成后必须先交给 policy 判断 finish、ask 或后续 search，不得无条件扩词。
+- 会话中存在带未评估事实的 cancelled observation 时，去掉首尾空白后正好是「继续」的自由文本
+  是执行控制指令，必须原样重跑当前目标，不得交给 GoalUnderstandingModel 重建目标或清空
+  可恢复 observation。除此之外的自由文本仍由 GoalUnderstandingModel 判断语义。
 - Runtime 逐计划提交 observation 来源后，才合并候选并计算 `acceptedPrimaryIds`；
   不得在来源尚未进入当前上下文时计算准入。每个计划只保存一次 observation，事件、
   trace 与会话快照使用该次准入结果，不在整批结束时重复追加 observation。

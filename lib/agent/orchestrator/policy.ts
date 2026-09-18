@@ -1024,12 +1024,17 @@ export type TurnEntryDecision =
 
 export function decideTurnEntry(input: AgentInput): TurnEntryDecision {
   const optionId = input.optionId?.trim();
-  if (!optionId) {
-    return { kind: 'understand', message: input.query };
-  }
-
   const previousGoal = input.runtimeState?.goal;
   const pendingQuestion = input.runtimeState?.pendingQuestion;
+
+  if (!optionId) {
+    // 取消后的裸“继续”是执行控制指令，不是新的餐饮需求。交给模型重建目标
+    // 会把 cancelled observation 误判成 start_new_goal 并清空可恢复事实。
+    if (previousGoal && input.query.trim() === '继续' && hasRecoverableCancellation(input)) {
+      return { kind: 'rerun_current_goal', goal: previousGoal };
+    }
+    return { kind: 'understand', message: input.query };
+  }
 
   if (!previousGoal || !hasClarificationOption(pendingQuestion, optionId)) {
     return { kind: 'invalid_option', optionId, reason: 'unavailable' };
@@ -1066,6 +1071,14 @@ export function decideTurnEntry(input: AgentInput): TurnEntryDecision {
   return label
     ? { kind: 'understand', message: label }
     : { kind: 'invalid_option', optionId, reason: 'no_label' };
+}
+
+function hasRecoverableCancellation(input: AgentInput): boolean {
+  return (input.runtimeState?.observations ?? []).some((observation) =>
+    observation.evaluationStopReason === 'cancelled'
+    && (observation.unevaluatedIds?.length ?? 0) > 0
+    && (observation.facts?.length ?? 0) > 0
+  );
 }
 
 // ---------------------------------------------------------------------------
