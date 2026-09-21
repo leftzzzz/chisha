@@ -198,6 +198,6 @@ process.env.AGENT_DETERMINISTIC = '1';
 
 ## CI
 
-GitHub Actions 使用 Node 20，先运行文档检查，再运行 type-check、lint、`test:ci` 和 eval；
+GitHub Actions 使用 Node 22，先运行文档检查，再运行 type-check、lint、`test:ci` 和 eval；
 质量 job 成功后才执行 Cloudflare build 与 dry-run。CI 不持有生产凭证，也不证明真实模型
 或真实账号配额的线上质量。

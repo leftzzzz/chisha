@@ -21,7 +21,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-推荐 Node.js 20。真实凭证只写入 `.env.local` 或本机的 Cloudflare secret store，不得进入
+推荐 Node.js 22。真实凭证只写入 `.env.local` 或本机的 Cloudflare secret store，不得进入
 提交、日志 fixture、截图或 issue。
 
 ## 分支与提交
