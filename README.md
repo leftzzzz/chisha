@@ -24,7 +24,7 @@ ChiSha 是一个开源餐厅推荐应用。用户用自然语言描述想吃什�
 
 ### 前置条件
 
-- Node.js 20
+- Node.js 22
 - npm
 - OpenAI-compatible API Key
 - 高德 Web 服务 API Key

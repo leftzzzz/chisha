@@ -79,4 +79,4 @@ body:
     id: env
     attributes:
       label: 系统与浏览器
-      placeholder: Node 20 / macOS / Chrome
+      placeholder: Node 22 / macOS / Chrome
