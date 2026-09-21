@@ -4,8 +4,8 @@
 
 本文落实
 [`../requirements/final-recommendation-publication.md`](../requirements/final-recommendation-publication.md)
-的发布边界。当前实现仍是 `runSearchAgentV3` 确定性 workflow；本文描述本次可落地的
-终止边界，以及未来 model-tool loop 可以直接复用的契约。
+的发布边界。当前生效架构是 `runSearchAgentV3` 确定性 workflow；本文描述其终止边界，
+不依赖未来 model-tool loop。
 
 当前强制约束以
 [`../specs/restaurant-search-agent.md`](../specs/restaurant-search-agent.md) 为准。
@@ -136,19 +136,9 @@ FinalGuard 使用当前餐厅事实重新执行 `distance`、`budget` 和 `open_
 5. 调用 `assembleRecommendations`；
 6. 发送 final 或 paused result。
 
-当前 workflow 没有可以接收 FinalGuard observation 的 Lead Agent loop，因此本阶段不新增
-伪重试。目标 Agent Runtime 落地后，终止协议扩展为：
-
-```text
-final candidate
-  -> FinalGuard
-     -> accepted: commit
-     -> retryable rejection: append structured observation, continue model turn
-     -> fatal/budget exhausted: safe terminal result
-```
-
-FinalGuard 重试计入模型轮次和 token 预算，并设置独立的小上限，避免模型反复提交相同
-非法结果。
+当前 workflow 没有 Lead Agent loop，因此不新增伪 observation 重试。FinalGuard 拒绝后
+复用既有追问或安全结束路径。若未来通过新技术决策启用其他 Agent 架构，必须重新定义
+拒绝回填、重试上限和预算契约，不能把该能力视为当前待办。
 
 ## ResultAssembler 边界
 

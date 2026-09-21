@@ -95,6 +95,11 @@ jest.mock('@/lib/agent/models/evaluationModel', () => ({
         primaryEligible: true,
         confidence: 0.9,
         matchedItems: ['火锅'],
+        targetEvidence: [{
+          target: '火锅', kind: 'item',
+          verdict: 'supported',
+          references: [{ restaurantId: item.id, field: 'name', value: item.name }],
+        }],
         matchedCategories: ['火锅'],
         conflicts: [],
         evidence: ['ok'],

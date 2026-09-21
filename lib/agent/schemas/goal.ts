@@ -24,7 +24,7 @@ function defaultArray<T extends z.ZodTypeAny>(schema: T) {
     }
 
     return Array.isArray(value) ? value : [value];
-  }, z.array(schema).default([]).catch([]));
+  }, z.array(schema).default([]));
 }
 
 function optionalArray<T extends z.ZodTypeAny>(schema: T) {
@@ -34,15 +34,15 @@ function optionalArray<T extends z.ZodTypeAny>(schema: T) {
     }
 
     return Array.isArray(value) ? value : [value];
-  }, z.array(schema)).optional().catch(undefined);
+  }, z.array(schema)).optional();
 }
 
 const OptionalStringArraySchema = optionalArray(z.string());
 const DefaultStringArraySchema = defaultArray(z.string());
 
 const OptionalStringSchema = z.preprocess((value) => {
-  return typeof value === 'string' ? value : undefined;
-}, z.string()).optional().catch(undefined);
+  return value === undefined || value === null ? undefined : value;
+}, z.string()).optional();
 
 const OptionalBooleanSchema = z.preprocess((value) => {
   if (typeof value === 'string') {
@@ -51,7 +51,7 @@ const OptionalBooleanSchema = z.preprocess((value) => {
   }
 
   return value;
-}, z.boolean()).optional().catch(undefined);
+}, z.boolean()).optional();
 
 function booleanWithDefault(defaultValue: boolean) {
   return z.preprocess((value) => {
@@ -61,7 +61,7 @@ function booleanWithDefault(defaultValue: boolean) {
     }
 
     return value;
-  }, z.boolean()).default(defaultValue).catch(defaultValue);
+  }, z.boolean()).default(defaultValue);
 }
 
 const OptionalNumberSchema = z.preprocess((value) => {
@@ -70,7 +70,7 @@ const OptionalNumberSchema = z.preprocess((value) => {
   }
 
   return value;
-}, z.coerce.number()).optional().catch(undefined);
+}, z.coerce.number()).optional();
 
 function numberWithDefault(defaultValue: number) {
   return z.preprocess((value) => {
@@ -79,7 +79,7 @@ function numberWithDefault(defaultValue: number) {
     }
 
     return value;
-  }, z.coerce.number()).default(defaultValue).catch(defaultValue);
+  }, z.coerce.number()).default(defaultValue);
 }
 
 function boundedNumberWithDefault(defaultValue: number, min: number, max: number) {
@@ -89,7 +89,7 @@ function boundedNumberWithDefault(defaultValue: number, min: number, max: number
     }
 
     return value;
-  }, z.coerce.number().min(min).max(max)).default(defaultValue).catch(defaultValue);
+  }, z.coerce.number().min(min).max(max)).default(defaultValue);
 }
 
 function stringWithDefault(defaultValue: string) {
@@ -132,6 +132,14 @@ export const ConstraintSchema = z.object({
   min: OptionalNumberSchema,
   max: OptionalNumberSchema,
 });
+
+const HardConstraintListSchema = z.preprocess((value) => {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+}, z.array(ConstraintSchema));
 
 export const PreferenceSchema = z.preprocess((value) => {
   if (typeof value === 'string') {
@@ -324,7 +332,7 @@ export const UserGoalSchema = z.object({
   broadenedKeywords: DefaultStringArraySchema,
   relatedTargets: defaultArray(SearchKeywordTargetSchema),
   broadenedTargets: defaultArray(SearchKeywordTargetSchema),
-  hardConstraints: defaultArray(ConstraintSchema),
+  hardConstraints: HardConstraintListSchema,
   softPreferences: defaultArray(PreferenceSchema),
   exclusions: DefaultStringArraySchema,
   ambiguity: DefaultStringArraySchema,
@@ -340,7 +348,10 @@ export const GoalPatchSchema = z.object({
   addRequestedItems: optionalArray(RequestedItemSchema),
   addCategories: optionalArray(GoalCategorySchema),
   addSoftPreferences: optionalArray(PreferenceSchema),
-  addConstraints: optionalArray(ConstraintSchema),
+  addConstraints: z.preprocess(
+    (value) => value === null ? undefined : value,
+    HardConstraintListSchema.optional()
+  ),
   removeConstraints: OptionalStringArraySchema,
   addAuthorizations: optionalArray(AgentAuthorizationSchema),
   allowBroaden: OptionalBooleanSchema,

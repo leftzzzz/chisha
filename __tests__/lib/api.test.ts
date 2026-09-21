@@ -197,6 +197,37 @@ describe('agentChat', () => {
     expect(result.sessionId).toBe('session-next');
     expect(onSessionUpdated).toHaveBeenCalledWith('session-next');
   });
+
+  it('exposes a new session id before the first terminal result', async () => {
+    const restaurants = [{
+      id: 'r1',
+      name: '寿司店',
+      cuisineType: '日本料理',
+      address: '测试地址',
+      location,
+      source: 'amap' as const,
+    }];
+
+    mockFetchResponse({
+      ok: true,
+      body: streamFromEvents([
+        { type: 'session_created', sessionId: 'session-created' },
+        {
+          type: 'final',
+          restaurants,
+          candidates: [],
+          explanation: '已找到日料。',
+          unmetConstraints: [],
+        },
+      ]),
+    } as Response);
+
+    const onSessionCreated = jest.fn();
+    const result = await agentChat('想吃日料', location, { onSessionCreated });
+
+    expect(onSessionCreated).toHaveBeenCalledWith('session-created');
+    expect(result.sessionId).toBe('session-created');
+  });
 });
 
 function mockFetchResponse(response: Response): void {

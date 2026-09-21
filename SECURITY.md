@@ -2,80 +2,144 @@
 
 ## 报告漏洞
 
-**不要用公开 issue 报告安全问题。** 请通过 GitHub 的
-[私密安全通告](https://github.com/leftzzzz/chisha/security/advisories/new)
-提交。这是个业余项目，没有 SLA，但会尽力在一周内回复。
+不要用公开 issue 报告安全问题。请通过 GitHub
+[私密安全通告](https://github.com/leftzzzz/chisha/security/advisories/new)提交，并包含影响、
+复现条件和建议修复方向。提交前删除 API Key、Cookie、真实坐标、完整对话和私有 trace。
 
-## 自建部署前必须知道的事
+这是个人维护的开源项目，没有响应 SLA，也不提供托管服务安全承诺。
 
-这个项目开源的是代码，不附带任何 API Key。你自己部署一份之后，**账单是你的**，
-以下几点直接决定你会不会被刷。
+## 支持的生产边界
 
-### 1. 部署到 Workers 时，别漏掉 ratelimits 配置
+当前公开生产拓扑是 Cloudflare Workers + D1 + Durable Objects + Rate Limiting bindings。
+详细部署步骤见 [Cloudflare 部署指南](./docs/DEPLOYMENT.md)，强制边界见
+[Public Runtime Protection Spec](./docs/specs/public-runtime-protection.md)。
 
-`lib/rateLimit.ts` 有两套后端：Cloudflare Workers 原生 Rate Limiting binding，
-以及进程内存兜底。**内存兜底在 Serverless 上等于没有限流**——每个请求可能落在
-不同的隔离实例里，内存不共享。
+普通 Vercel、Netlify 或自托管 Node 默认缺少跨实例会话、Provider 容量和原生入口限流，
+不能直接视为等价的公开部署。用于私有实验可以，公开服务前必须补齐等价保护。
 
-生产必须走 binding。`wrangler.jsonc` 里的 `ratelimits` 段声明了四个命名空间，
-额度与 `lib/rateLimit.ts` 的 `RATE_LIMITS` 表一一对应（由
-`__tests__/lib/rateLimit.config.test.ts` 强制一致）。**少配任何一个，对应入口就会
-静默退回内存计数**——只在日志里留一条 warn：
+## 凭证
 
-```
+- `OPENAI_API_KEY`、`AMAP_API_KEY`、`AMAP_SECURITY_CODE` 和
+  `SESSION_OWNER_SECRET` 只能存在服务端 secret store。
+- `NEXT_PUBLIC_AMAP_KEY`/`AMAP_JS_API_KEY` 是 Web 端 JS Key，会暴露在浏览器；防护方式是
+  高德域名白名单与安全密钥，不是把它伪装成服务端 secret。
+- 生产 `SESSION_OWNER_SECRET` 必须至少 32 个随机字符。缺失或过短时 Agent session 入口
+  应失败关闭。
+- `.env.local`、`.dev.vars`、Cloudflare 下载配置、shell 输出和真实 trace 不得提交。
+
+公开环境变量名称与默认关系以 [`.env.example`](./.env.example) 为准。
+
+## 公网准入
+
+### HTTPS
+
+`worker.ts` 在 OpenNext 之前把非本地公网 HTTP 以 308 重定向到同 host、path 和 query 的
+HTTPS。308 保留 POST 方法和请求体，避免 Agent SSE 建连或 Secure Cookie 在跳转时丢失。
+本地回环地址继续允许 HTTP。
+
+### Rate Limiting
+
+`wrangler.jsonc` 声明五个 Cloudflare Rate Limiting bindings：
+
+| Binding | Boundary |
+| --- | --- |
+| `RL_AGENT_CHAT` | Agent chat 按客户端 IP |
+| `RL_AGENT_CHAT_ALL` | Agent chat 全局廉价闸门 |
+| `RL_AMAP_PROXY` | 高德前端地图代理 |
+| `RL_GEOCODE` | 正/逆向地理编码 |
+| `RL_AGENT_SESSION` | session 读取和删除 |
+
+额度与 `lib/rateLimit.ts` 的 `RATE_LIMITS` 必须一致，并由测试强制。Cloudflare binding 是
+廉价反滥用，不是严格账单硬上限；Agent active runs、同 session 互斥和每个 Provider 的
+物理容量由 Durable Object 单独协调。
+
+缺少 binding 时本地开发会使用进程内存计数。Serverless 多实例中的内存计数不构成公开
+保护；生产日志出现以下内容应视为配置缺陷：
+
+```text
 Rate limit binding missing on a serverless runtime; falling back to in-process memory
 ```
 
-部署后 grep 一下这条日志，有就是配漏了。
+### Provider Scheduler
 
-`/api/agent/chat` 上有两道闸门：按 IP（6 次/分钟）挡普通滥用，按常量 key 的总量
-闸门（60 次/分钟）挡轮换 IP 的脚本——后者才是真正给账单封顶的那道。注意原生
-binding **按 Cloudflare 机房各自计数**，所以总量闸门的实际上限是这个数乘以攻击者
-能打到的机房数。它大幅收窄风险，但不是硬上限。
+`PROVIDER_SCHEDULER` Durable Object 管理：
 
-**部署到 Vercel 或自托管 Node 的话，这套 binding 不存在**，限流会退回内存。
-Vercel 的 Node runtime 单实例内内存是共享的，比 Edge 好一些，但仍然不跨实例。
-要挂公开站点就得自己接一个全局方案（Redis/Upstash 之类）。
+- 全站同时运行的 Agent 数；
+- 同一 session 的单运行互斥；
+- 高德、OSM 和模型的 token/lease、在途与可选速率上限；
+- 已知配额耗尽或配置故障的短路与恢复探测。
 
-### 2. 不要把 `/_AMapService` 改回通配转发
+每个外部 HTTP 尝试都必须先取得对应 lease，调用结束在 `finally` 释放，长调用自动 renew。
+等待有上限；拥塞返回带 `Retry-After` 的 429，基础设施或上游不可用返回 503。生产缺少
+核心调度 binding 时昂贵入口应失败关闭。
 
-`app/api/amap-service/[...path]/route.ts` 是一条公开路径，服务端会给转发出去的
-请求注入 `AMAP_SECURITY_CODE`。它现在只放行 JS API 实际需要的几条路径
-（`v3/vectormap`、`v4/map/styles`、`maps`），其余 404。
+## 匿名会话
 
-放开成"任意路径转发给 restapi.amap.com"就等于把你的高德配额挂到公网上，
-任何人都能拿你的域名当免费跳板。前端加了新的高德插件导致地图报错时，
-把具体路径加进 `ALLOWED_PATHS`，不要改回通配。
+首次 Agent 请求签发 `chisha_owner` Cookie：
 
-### 3. 前端 Key 和服务端 Key 要分开
+- 密码学随机 owner id；
+- HMAC-SHA-256 签名并包含服务端校验的到期时间；
+- HttpOnly、SameSite=Lax、Path=/；生产增加 Secure；
+- 合法访问时滚动刷新。
 
-- `NEXT_PUBLIC_AMAP_KEY`（Web 端 JS API）**必然**暴露在浏览器里，这是高德的
-  设计。防护手段是在高德控制台给它配**域名白名单**和安全密钥，而不是藏起来。
-- `AMAP_API_KEY`（Web 服务）和 `OPENAI_API_KEY` 只在服务端使用，绝不能加
-  `NEXT_PUBLIC_` 前缀。
+D1 session 保存 `owner_id`。chat resume、session GET/trace、DELETE 都必须先匹配 owner；
+不存在、过期和 owner 不匹配统一返回 404，避免枚举。Cookie 不是账号系统，清除 Cookie 或
+换浏览器后不能继续旧会话。
 
-### 4. 会话里存了什么
+同一 session 的并发执行由跨实例 lease 互斥，避免整行 runtime state 最后写入覆盖。
 
-`agent_sessions` 表（`migrations/0001_create_agent_sessions.sql`）在 D1 里明文存：
+## 数据
 
-- `location_json`：用户的经纬度和地址
-- `messages_json`：完整的多轮对话原文
-- `runtime_state_json`：搜索历史与候选裁决
+### D1 Agent sessions
 
-有 `expires_at` 做过期清理。如果你对外提供服务，这些属于个人信息，需要自己
-承担相应的告知与合规义务。
+`agent_sessions` 可能明文保存：
 
-### 5. 第三方服务条款
+- 经纬度和地址；
+- 多轮对话原文；
+- 目标、搜索 action、候选、裁决和 trace；
+- owner id 与过期时间。
 
-- 高德 POI 数据受高德开放平台条款约束，仅可作为运行时缓存使用，不得导出、
-  存档或再分发。仓库里 `evals/fixtures/amap.json` 是手工构造的假数据，
-  不是抓取结果——**请不要往里面提交真实 POI 返回**。
-- 模型调用受你所用服务商的条款约束。
+部署者负责隐私告知、保留期限、访问控制、备份和删除策略。`expires_at` 是应用清理边界，
+不是法律合规承诺。
 
-## 依赖
+### 浏览器与分享
+
+- 转盘历史位于用户浏览器 `localStorage`，包含查询、位置和选择结果。
+- 历史导出文件由用户自行保管。
+- 分享 URL 不含位置或 session，但包含查询和餐厅；持有链接的人可以读取这些内容。
+
+### Fixture 与第三方数据
+
+高德 POI 数据受其平台条款约束。`evals/fixtures/amap.json` 必须保持手工构造，禁止提交
+真实响应、缓存导出或用户查询结果。模型输出也受所选供应商条款约束。
+
+## 高德地图代理
+
+`app/api/amap-service/[...path]/route.ts` 会注入安全密钥，因此只能代理前端地图实际需要的
+精确白名单路径。不得恢复为通配 REST 转发；需要新地图资源时，只加入观察到的具体路径并
+补测试。
+
+## 日志与诊断
+
+允许记录 trace id、事件类型、计数、等待时长、Provider 分类和 lease 生命周期。禁止记录：
+
+- API Key、Cookie、HMAC、authorization header；
+- 完整 prompt、完整用户 query 或完整坐标；
+- D1 原始 session row 或未打码 Provider 响应。
+
+分享日志或 issue 前再次人工打码。`?include=trace` 只用于自己的 session 排障，不应公开
+转贴完整响应。
+
+## 依赖与更新
 
 ```bash
 npm audit
+npm run type-check
+npm run lint
+npm run test:ci
+npm run build:cloudflare
+npm run deploy -- --dry-run
 ```
 
-依赖漏洞按常规流程报 issue 即可，不需要走私密通道。
+普通依赖升级问题可以使用公开 issue；可利用漏洞仍走私密安全通告。不要不经审查直接运行
+会改写依赖树的自动修复并提交。

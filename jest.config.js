@@ -17,8 +17,16 @@ const customJestConfig = {
     '**/__tests__/**/*.test.ts',
     '**/__tests__/**/*.test.tsx',
   ],
-  testPathIgnorePatterns: ['<rootDir>/.claude/'],
-  modulePathIgnorePatterns: ['<rootDir>/.claude/'],
+  testPathIgnorePatterns: [
+    '<rootDir>/.claude/',
+    '<rootDir>/.next/',
+    '<rootDir>/.open-next/',
+  ],
+  modulePathIgnorePatterns: [
+    '<rootDir>/.claude/',
+    '<rootDir>/.next/',
+    '<rootDir>/.open-next/',
+  ],
   collectCoverageFrom: [
     'app/**/*.{js,jsx,ts,tsx}',
     'components/**/*.{js,jsx,ts,tsx}',
@@ -31,10 +39,10 @@ const customJestConfig = {
   ],
   coverageThreshold: {
     global: {
-      branches: 70,
-      functions: 70,
-      lines: 70,
-      statements: 70,
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      statements: 80,
     },
   },
 }

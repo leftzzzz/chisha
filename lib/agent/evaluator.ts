@@ -21,17 +21,17 @@ export function evaluateSearchResult(
   sourceAttempt: number,
   evaluation: EvaluationModelOutput
 ): Observation {
-  const restaurantById = new Map(restaurants.map((restaurant) => [restaurant.id, restaurant]));
-  const acceptedCandidates = evaluation.verdicts
-    .filter((verdict) => verdict.status !== 'failed')
-    .map((verdict) => {
-      const restaurant = restaurantById.get(verdict.restaurantId);
-      return restaurant
-        ? buildCandidate(restaurant, verdict, context, plan, sourceAttempt)
+  const verdictByRestaurantId = new Map(
+    evaluation.verdicts.map((verdict) => [verdict.restaurantId, verdict])
+  );
+  const acceptedCandidates = restaurants
+    .map((restaurant) => {
+      const verdict = verdictByRestaurantId.get(restaurant.id);
+      return verdict && verdict.status !== 'failed'
+        ? buildCandidate(restaurant, verdict, context, sourceAttempt)
         : null;
     })
-    .filter((candidate): candidate is RestaurantCandidate => Boolean(candidate))
-    .sort((a, b) => b.score - a.score);
+    .filter((candidate): candidate is RestaurantCandidate => Boolean(candidate));
 
   return {
     plan,
@@ -59,21 +59,20 @@ export function mergeCandidates(
     mergeCandidateInto(candidates, candidateMap, incoming, admissible);
   }
 
-  context.candidates = candidates.sort((a, b) => b.score - a.score);
+  context.candidates = candidates;
 }
 
 function buildCandidate(
   restaurant: Restaurant,
   verdict: CandidateVerdict,
   context: AgentContext,
-  plan: SearchPlan,
   sourceAttempt: number
 ): RestaurantCandidate {
   const warnings = mergeStrings(
     context.goal.ambiguity,
     [...verdict.conflicts, ...verdict.warnings]
   );
-  const score = calculateScore(restaurant, verdict, plan);
+  const score = calculateRecommendationUtility(restaurant, context);
   const goalSignature = context.goal.goalSignature ?? deriveGoalSignature(context.goal);
   const goalVersion = context.goal.goalVersion ?? 1;
   const goalId = context.goal.goalId ?? goalSignature;
@@ -105,6 +104,7 @@ function buildCandidate(
         confidence: verdict.confidence,
       })),
       categoryMatches: verdict.matchedCategories,
+      targetEvidence: verdict.targetEvidence,
       warnings: verdict.warnings,
       confidence: verdict.confidence,
     },
@@ -115,48 +115,49 @@ function buildCandidate(
 /**
  * 候选打分。
  *
- * 此前还有一项 "模型把它选进 selectedIds 就 +30"。那是让一个只看到 6 家店的
- * 分批模型角色 去做全局选择，再把结果当权重——已随 EvaluationModel 的选择
- * 输出一起删除。现在打分完全由裁决内容与距离决定，同样输入必得同样顺序。
+ * 资格与效用必须分开：模型置信度只说明目标判断把握，不说明餐厅更值得推荐。
+ * 这里仅记录不跨 Provider 比较的确定性效用；同来源评分比较和品牌多样性由
+ * policy 在合格集合内统一完成。
  */
-function calculateScore(
+function calculateRecommendationUtility(
   restaurant: Restaurant,
-  verdict: CandidateVerdict,
-  plan: SearchPlan
+  context: AgentContext
 ): number {
-  let score = Math.round(verdict.confidence * 100);
-
-  if (verdict.status === 'unverified') {
-    score -= 20;
-  }
-
-  if (!verdict.primaryEligible || !plan.allowedForPrimary) {
-    score -= 25;
-  }
-
-  score += Math.min(20, verdict.matchedItems.length * 8);
-  score += Math.min(16, verdict.matchedCategories.length * 6);
-  score += distanceScore(restaurant.distance);
-
-  if (plan.searchIntent === 'exact') {
-    score += 8;
-  } else if (plan.searchIntent === 'fallback') {
-    score -= 8;
-  }
-
-  return score;
+  return distanceScore(restaurant.distance)
+    + preferredPriceScore(restaurant.averagePrice, context.preferenceSummary?.preferredPriceRange);
 }
 
 function distanceScore(distance?: number): number {
   if (distance === undefined) {
-    return 4;
+    return 0;
   }
 
-  if (distance <= 500) return 16;
-  if (distance <= 1000) return 13;
-  if (distance <= 2000) return 9;
-  if (distance <= 3000) return 5;
-  return 1;
+  if (distance <= 500) return 30;
+  if (distance <= 1000) return 24;
+  if (distance <= 2000) return 16;
+  if (distance <= 3000) return 8;
+  return 2;
+}
+
+function preferredPriceScore(
+  averagePrice: number | undefined,
+  preferredRange: { min?: number; max?: number } | undefined
+): number {
+  if (averagePrice === undefined || !preferredRange) {
+    return 0;
+  }
+
+  const { min, max } = preferredRange;
+  if ((min === undefined || averagePrice >= min) && (max === undefined || averagePrice <= max)) {
+    return 20;
+  }
+
+  const distanceFromRange = min !== undefined && averagePrice < min
+    ? min - averagePrice
+    : max !== undefined && averagePrice > max
+      ? averagePrice - max
+      : 0;
+  return Math.max(0, 12 - Math.ceil(distanceFromRange / 10) * 2);
 }
 
 function buildObservationReason(found: number, accepted: number, plan: SearchPlan): string {

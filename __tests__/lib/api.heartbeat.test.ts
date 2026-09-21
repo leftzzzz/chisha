@@ -85,6 +85,22 @@ describe('agentChat 卡死检测', () => {
     await assertion;
   });
 
+  it('keeps the early session id on timeout failures', async () => {
+    const stream = mockAbortableStream();
+    const pending = agentChat('想吃日料', location);
+    const assertion = expect(pending).rejects.toEqual(
+      expect.objectContaining({
+        name: 'APIError',
+        code: 'SEARCH_TIMEOUT',
+        sessionId: 'session-cancelled',
+      } satisfies Partial<APIError>)
+    );
+
+    stream.emit({ type: 'session_created', sessionId: 'session-cancelled' });
+    await jest.advanceTimersByTimeAsync(HEARTBEAT_TIMEOUT_MS + 1000);
+    await assertion;
+  });
+
   it('keeps waiting while the server sends heartbeats', async () => {
     const stream = mockAbortableStream();
     const pending = agentChat('想吃日料', location);

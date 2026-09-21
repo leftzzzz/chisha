@@ -161,6 +161,91 @@ describe('GoalUnderstandingModel', () => {
       jest.dontMock('@/lib/withTimeout');
     }
   });
+
+  it('preserves explicit add and replace semantics in free-text clarification patches', async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'test-key';
+    jest.resetModules();
+
+    const fetchWithTimeout = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              function_call: {
+                name: 'understandRestaurantGoal',
+                arguments: JSON.stringify({
+                  patch: {
+                    addRequestedItems: [{ name: '寿司', required: true, aliases: [] }],
+                    reason: '用户说再加寿司。',
+                  },
+                }),
+              },
+            },
+          }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              function_call: {
+                name: 'understandRestaurantGoal',
+                arguments: JSON.stringify({
+                  patch: {
+                    replaceRequestedItems: [{ name: '寿司', required: true, aliases: [] }],
+                    replacePrimaryKeywords: ['寿司'],
+                    reason: '用户说换成寿司。',
+                  },
+                }),
+              },
+            },
+          }],
+        }),
+      });
+    jest.doMock('@/lib/withTimeout', () => ({ fetchWithTimeout }));
+
+    try {
+      const { runGoalUnderstandingModel } = await import('@/lib/agent/models/goalUnderstandingModel');
+      const previousGoal = goal({
+        rawQuery: '想吃火锅',
+        requestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        primaryKeywords: ['火锅'],
+      });
+      const pendingQuestion = {
+        question: '还想补充或调整什么？',
+        allowFreeText: true,
+      };
+
+      const added = await runGoalUnderstandingModel({
+        message: '再加寿司',
+        previousGoal,
+        pendingQuestion,
+      });
+      const replaced = await runGoalUnderstandingModel({
+        message: '换成寿司',
+        previousGoal,
+        pendingQuestion,
+      });
+      const firstRequest = JSON.parse(fetchWithTimeout.mock.calls[0][1].body as string);
+
+      expect(added.patch?.addRequestedItems?.map((item) => item.name)).toEqual(['寿司']);
+      expect(added.patch?.replaceRequestedItems).toBeUndefined();
+      expect(replaced.patch?.replaceRequestedItems?.map((item) => item.name)).toEqual(['寿司']);
+      expect(replaced.patch?.addRequestedItems).toBeUndefined();
+      expect(firstRequest.messages[0].content).toContain('“再加/还要/以及”');
+      expect(firstRequest.messages[0].content).toContain('“换成/改成/不要原来的”');
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      jest.dontMock('@/lib/withTimeout');
+    }
+  });
 });
 
 describe('GoalUnderstandingModel output schema', () => {

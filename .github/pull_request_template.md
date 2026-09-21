@@ -1,37 +1,35 @@
-## 改了什么
+## 问题与结果
 
-<!-- 一两句话说清楚这个 PR 解决的问题，而不是罗列改了哪些文件 -->
+<!-- 说明要解决的问题、用户/系统影响，以及改动后的可观察结果。 -->
 
-## 类型
+## 行为与边界
 
-- [ ] Bug 修复
-- [ ] 新功能
-- [ ] 破坏性变更
-- [ ] 文档 / 重构 / 测试
+<!-- 列出改变的外部行为，以及明确保持不变的 API、数据或部署契约。 -->
 
-## 验证方式
+## 验证
 
-<!-- 跑了哪些命令、加了哪些用例、手工验了什么 -->
+<!-- 只勾选实际运行并通过的命令；未运行的检查请说明原因。 -->
 
+- [ ] `npm run docs:check`
+- [ ] `npm run test:docs`
 - [ ] `npm run type-check`
 - [ ] `npm run lint`
-- [ ] `npm test`
-- [ ] `npm run eval`（**改动 `lib/agent/` 下的 policy / runtime / 缓存时必填**，
-      并在下面贴出与基线的 diff）
-
-<details>
-<summary>eval 基线 diff</summary>
-
-```
-（粘贴 npm run eval 的报告与基线差异；行为没有变化就写"无差异"）
-```
-
-</details>
+- [ ] `npm test` 或相关 Jest 用例
+- [ ] `npm run test:ci`
+- [ ] `npm run eval`（Agent policy/runtime/model role 行为变化时必需）
+- [ ] `npm run build:cloudflare`
+- [ ] `npm run deploy -- --dry-run`
 
 ## Checklist
 
-- [ ] 新代码放的层符合 CLAUDE.md 的分层判据（语义→`subagents/`，
-      状态选择→`policy.ts`，I/O→`runtime.ts`，确定性规则→规则库）
-- [ ] 没有新增"从用户原话里用关键词表抽词"的模型兜底路径
-- [ ] 追问选项按 id 走协议，没有在代码里硬编码用户说法
-- [ ] 文档（README / CLAUDE.md / AGENTS.md / docs/）与代码同步
+- [ ] 修复包含能复现问题的回归测试，或说明不适合自动测试的原因。
+- [ ] 没有提交 API Key、Cookie、真实坐标、完整对话、真实 Provider 数据或私有 trace。
+- [ ] 当前行为、产品决策或技术决策变化已同步到对应 Specs/Requirements/Technical 文档。
+- [ ] 没有把 model role 误称为 subagent，也没有把暂缓的 Lead Agent 方案写成当前目标。
+- [ ] 没有新增按菜名、菜系、品牌、地域叫法或失败 query 分支的语义兜底。
+- [ ] 追问选项按稳定 id 传输，展示 label 不承担协议语义。
+- [ ] Cloudflare 变更没有让 PR 检查执行远程 D1 migration 或真实部署。
+
+## 剩余风险
+
+<!-- 包括未执行检查、环境限制、迁移/回滚要求、eval baseline 差异。没有则写“无”。 -->

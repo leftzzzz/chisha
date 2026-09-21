@@ -195,6 +195,7 @@ export interface CandidateVerdict {
   confidence: number;
   matchedItems: string[];
   matchedCategories: string[];
+  targetEvidence?: TargetEvidence[];
   conflicts: string[];
   evidence: string[];
   warnings: string[];
@@ -271,6 +272,18 @@ export interface ItemMatch {
   confidence: number;
 }
 
+export interface TargetEvidence {
+  target: string;
+  kind: 'item' | 'category';
+  verdict?: 'supported' | 'contradicted' | 'unknown';
+  references: Array<{
+    restaurantId: string;
+    field: 'name' | 'cuisineType';
+    value: string;
+  }>;
+  observationRef?: string;
+}
+
 export interface CandidateVerification {
   restaurantId: string;
   status: 'passed' | 'failed' | 'unverified';
@@ -278,6 +291,7 @@ export interface CandidateVerification {
   hardFailures: VerificationFailure[];
   itemMatches: ItemMatch[];
   categoryMatches: string[];
+  targetEvidence?: TargetEvidence[];
   warnings: string[];
   confidence: number;
 }
@@ -376,21 +390,56 @@ export interface AgentActionRecord {
   summary: string;
 }
 
+export type ObservationFact = Pick<
+  Restaurant,
+  | 'id'
+  | 'source'
+  | 'name'
+  | 'cuisineType'
+  | 'rating'
+  | 'distance'
+  | 'address'
+  | 'businessStatus'
+  | 'averagePrice'
+  | 'poiTypeCode'
+  | 'location'
+>;
+
 export interface AgentObservation {
   actionId: string;
   traceId?: string;
   plan: SearchPlan;
+  goalId?: string;
+  goalVersion?: number;
+  goalSignature?: string;
   provider: 'amap' | 'osm';
+  fetchedAt: number;
+  /** 搜索返回时复制的最小事实快照；旧会话缺失时不得从候选反填。 */
+  facts?: ObservationFact[];
+  locationSignature?: string;
   rawCount: number;
   hardRejected: Array<{
     restaurantId: string;
     reasons: string[];
   }>;
   verdicts: CandidateVerdict[];
+  /** 真正拿到模型或本轮缓存裁决的门店；旧会话可缺失。 */
+  evaluatedIds?: string[];
+  /** 通过硬过滤但本轮没有裁决的门店，不等同于失败；旧会话可缺失。 */
+  unevaluatedIds?: string[];
+  /** 本计划停止继续评估的直接原因；旧会话可缺失。 */
+  evaluationStopReason?: EvaluationStopReason;
   acceptedPrimaryIds: string[];
   candidateIds: string[];
   unmetConstraints: string[];
 }
+
+export type EvaluationStopReason =
+  | 'target_reached'
+  | 'all_evaluated'
+  | 'budget_exhausted'
+  | 'evaluation_failed'
+  | 'cancelled';
 
 export type AgentTraceType =
   | 'user_message'
@@ -430,6 +479,8 @@ export type AgentErrorCode =
   | 'SEARCH_PROVIDER_FAILED'
   | 'RATE_LIMITED'
   | 'INVALID_OPTION'
+  | 'CANCELLED'
+  | 'SESSION_PERSIST_FAILED'
   | 'UNKNOWN';
 
 export interface AgentTraceItem {
@@ -491,6 +542,7 @@ export interface PolicyContext {
    * 搜到的东西没人能验证，继续扩搜只会重复调用高德。
    */
   evaluationFailed?: boolean;
+  keywordExpansionFailed?: boolean;
 }
 
 export interface AgentContext extends AgentInput {
@@ -510,6 +562,7 @@ export interface AgentContext extends AgentInput {
    * 因此这个标记同时意味着"继续扩搜没有意义"——策略层据此立即收敛。
    */
   evaluationFailed?: boolean;
+  keywordExpansionFailed?: boolean;
   /** 触发 evaluationFailed 的原始错误，用于在没有主推荐时原样抛出。 */
   evaluationError?: AgentError;
 }
@@ -565,7 +618,7 @@ export class AgentRunError extends Error {
     readonly cause?: unknown
   ) {
     super(message);
-    this.name = 'AgentRunError';
+    this.name = code === 'CANCELLED' ? 'AbortError' : 'AgentRunError';
   }
 }
 
@@ -613,7 +666,16 @@ type AgentEventPayload =
   | { type: 'tool_result'; tool: string; summary: unknown; planId?: string }
   | { type: 'partial_results'; restaurants: Restaurant[] }
   | { type: 'action'; actionId: string; actionType: AgentAction['type']; summary: string }
-  | { type: 'observation'; actionId: string; found: number; accepted: number; rejected: number }
+  | {
+      type: 'observation';
+      actionId: string;
+      found: number;
+      accepted: number;
+      rejected: number;
+      evaluated?: number;
+      unevaluated?: number;
+      evaluationStopReason?: EvaluationStopReason;
+    }
   | { type: 'guardrail'; actionId: string; message: string; severity: 'info' | 'warn' }
   | {
       type: 'question';
@@ -622,6 +684,7 @@ type AgentEventPayload =
       options?: PendingQuestionOption[];
       allowFreeText: boolean;
     }
+  | { type: 'session_created'; sessionId: string }
   | { type: 'session_paused'; sessionId: string }
   | { type: 'session_resumed'; sessionId: string }
   | { type: 'session_updated'; sessionId: string }

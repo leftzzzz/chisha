@@ -60,7 +60,6 @@ export function promoteAuthorizedBroadenedResults(
     promotedCandidates += 1;
     return {
       ...candidate,
-      score: candidate.verification.primaryEligible ? candidate.score : candidate.score + 25,
       verification: {
         ...candidate.verification,
         primaryEligible: true,

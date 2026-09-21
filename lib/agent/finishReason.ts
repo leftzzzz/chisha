@@ -22,6 +22,7 @@ export type FinishReason =
   | 'BROADEN_PROMOTION'
   /** 部分候选验证失败，但已有通过验证的主推荐 */
   | 'PARTIAL_EVALUATION_FAILURE'
+  | 'PARTIAL_EXPANSION_FAILURE'
   /** 追问原地打转：同一个问题不再问第二次 */
   | 'CLARIFICATION_STALLED';
 
@@ -34,6 +35,7 @@ const FINISH_TEXT: Record<FinishReason, string> = {
   NO_MORE_STRATEGY: '已为您搜索多个方向，以下是精选推荐。',
   BROADEN_PROMOTION: '已根据您的要求扩大搜索范围，以下是推荐结果。',
   PARTIAL_EVALUATION_FAILURE: '部分餐厅没能完成验证，以下是已确认符合要求的结果。',
+  PARTIAL_EXPANSION_FAILURE: '相关搜索暂时不可用，以下是按原需求找到并验证的结果。',
   CLARIFICATION_STALLED: '没能更好地理解你的需求，先给出目前找到的结果。',
 };
 
@@ -51,6 +53,7 @@ const FINISH_INTERNAL_NOTE: Record<FinishReason, string> = {
   NO_MORE_STRATEGY: 'No further verifiable search strategy.',
   BROADEN_PROMOTION: 'Promoted broadened candidates after user authorization.',
   PARTIAL_EVALUATION_FAILURE: 'Some candidates could not be verified; returning verified ones.',
+  PARTIAL_EXPANSION_FAILURE: 'Keyword expansion failed; returning verified explicit-target results.',
   CLARIFICATION_STALLED: 'Clarification made no progress; converging instead of re-asking.',
 };
 

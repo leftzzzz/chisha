@@ -84,6 +84,7 @@ export interface AgentSearchCallbacks {
   onPartialResults?: (restaurants: Restaurant[]) => void;
   onSessionPaused?: (sessionId: string) => void;
   onSessionResumed?: (sessionId: string) => void;
+  onSessionCreated?: (sessionId: string) => void;
   onSessionUpdated?: (sessionId: string) => void;
   onTrace?: (trace: AgentTraceEvent) => void;
 }
@@ -127,6 +128,7 @@ function summarizeAgentTraceEvent(event: AgentEvent): string | undefined {
     case 'tool_result':
       return `${event.tool} 返回结果`;
     case 'partial_results':
+    case 'session_created':
     case 'session_paused':
     case 'session_resumed':
     case 'session_updated':
@@ -144,7 +146,8 @@ export class APIError extends Error {
   constructor(
     message: string,
     public code?: string,
-    public statusCode?: number
+    public statusCode?: number,
+    public sessionId?: string
   ) {
     super(message);
     this.name = 'APIError';
@@ -538,6 +541,7 @@ async function requestAgentStream(
   // 超过阈值没有任何事件才判定为卡死。不能在响应头到达后就取消计时，
   // 否则流可以无限挂起而客户端永远不会超时。
   let timeoutId = setTimeout(() => controller.abort(), HEARTBEAT_TIMEOUT_MS);
+  let currentSessionId: string | undefined;
   const resetTimeout = () => {
     clearTimeout(timeoutId);
     timeoutId = setTimeout(() => controller.abort(), HEARTBEAT_TIMEOUT_MS);
@@ -578,7 +582,6 @@ async function requestAgentStream(
     let result: AgentSearchResult = { restaurants: [], candidates: [] };
     let hasReceivedResult = false;
     let pausedQuestion: AgentQuestion | undefined;
-    let currentSessionId: string | undefined;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -652,6 +655,10 @@ async function requestAgentStream(
             case 'session_paused':
               currentSessionId = event.sessionId;
               callbacks?.onSessionPaused?.(event.sessionId);
+              break;
+            case 'session_created':
+              currentSessionId = event.sessionId;
+              callbacks?.onSessionCreated?.(event.sessionId);
               break;
             case 'session_resumed':
               currentSessionId = event.sessionId;
@@ -757,7 +764,7 @@ async function requestAgentStream(
     }
 
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new APIError('搜索超时，请重试', 'SEARCH_TIMEOUT');
+      throw new APIError('搜索超时，请重试', 'SEARCH_TIMEOUT', undefined, currentSessionId);
     }
 
     throw new APIError(

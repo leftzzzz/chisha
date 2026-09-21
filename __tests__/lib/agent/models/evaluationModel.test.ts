@@ -1,4 +1,5 @@
 import type { SearchPlan, UserGoal } from '@/lib/agent/types';
+import { EvaluationModelOutputSchema } from '@/lib/agent/schemas/verdict';
 import type { Location, Restaurant } from '@/types';
 import { DEFAULT_BAILIAN_BASE_URL } from '@/lib/agent/modelConfig';
 
@@ -119,6 +120,11 @@ describe('EvaluationModel', () => {
           confidence: 0.92,
           matchedItems: ['牛排'],
           matchedCategories: ['西餐'],
+          targetEvidence: [{
+            target: '牛排', kind: 'item',
+            verdict: 'supported',
+            references: [{ restaurantId: 'r2', field: 'name', value: '城中牛排馆' }],
+          }],
           conflicts: [],
           evidence: ['Agent 认为名称明确命中牛排。'],
           warnings: [],
@@ -143,6 +149,12 @@ describe('EvaluationModel', () => {
 
     expect(output.selectedIds).toEqual(['r2']);
     expect(output.source).toBe('model');
+    expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r2')?.targetEvidence)
+      .toEqual([{
+        target: '牛排', kind: 'item',
+          verdict: 'supported',
+        references: [{ restaurantId: 'r2', field: 'name', value: '城中牛排馆' }],
+      }]);
     expect(output.verdicts.find((verdict) => verdict.restaurantId === 'r1')).toEqual(
       expect.objectContaining({
         status: 'failed',
@@ -156,6 +168,38 @@ describe('EvaluationModel', () => {
         method: 'POST',
       })
     );
+  });
+
+  it('parses per-condition verdict metadata with an invalid status fallback', () => {
+    const parsed = EvaluationModelOutputSchema.parse({
+      verdicts: [{
+        restaurantId: 'r1',
+        status: 'not-a-status',
+        primaryEligible: true,
+        confidence: 0.9,
+        matchedItems: ['牛排'],
+        matchedCategories: [],
+        targetEvidence: [{
+          target: '牛排',
+          kind: 'item',
+        verdict: 'supported',
+          references: [{ restaurantId: 'r1', field: 'name', value: '城中牛排馆' }],
+        }],
+        conflicts: [],
+        evidence: [],
+        warnings: [],
+      }],
+      selectedIds: [],
+      candidateIds: [],
+      explanation: 'ok',
+      unmetConstraints: [],
+    });
+
+    expect(parsed.verdicts[0].status).toBe('unverified');
+    expect(parsed.verdicts[0].targetEvidence).toEqual([{
+      target: '牛排', kind: 'item', verdict: 'supported',
+      references: [{ restaurantId: 'r1', field: 'name', value: '城中牛排馆' }],
+    }]);
   });
 
   it('requires OPENAI_API_KEY instead of falling back to hardcoded validation', async () => {

@@ -57,7 +57,7 @@ const OptionalBooleanSchema = z.preprocess((value) => {
 
 const OptionEffectsSchema = z.preprocess((value) => {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
-}, z.record(ClarificationEffectSchema)).optional().catch(undefined);
+}, z.record(ClarificationEffectSchema)).optional();
 
 interface NormalizedOption {
   id: string;

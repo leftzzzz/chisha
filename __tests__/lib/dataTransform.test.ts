@@ -57,7 +57,7 @@ describe('DataTransform', () => {
       expect(result).toHaveLength(1);
     });
 
-    it('should dedup same-brand restaurants at different locations', () => {
+    it('should keep same-brand restaurants at different locations', () => {
       const r1 = createMockRestaurant({
         id: 'r1',
         name: '海底捞',
@@ -71,7 +71,16 @@ describe('DataTransform', () => {
 
       const result = combineAndFilterRestaurants([r1, r2]);
 
-      expect(result).toHaveLength(1);
+      expect(result.map((restaurant) => restaurant.id)).toEqual(['r1', 'r2']);
+    });
+
+    it('keeps earlier identity aliases attached after repeated replacement', () => {
+      const first = createMockRestaurant({ id: 'first', name: '同一家' });
+      const second = { ...first, id: 'second', phone: '123456' };
+      const third = { ...second, id: 'third', openingHours: '9:00-22:00' };
+      const refreshed = { ...first, name: '更新店名', phone: '123456',
+        openingHours: '9:00-22:00', averagePrice: 60 };
+      expect(combineAndFilterRestaurants([first, second, third, refreshed])).toEqual([refreshed]);
     });
 
     it('should prefer restaurant with more complete information', () => {

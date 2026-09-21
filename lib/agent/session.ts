@@ -1,4 +1,5 @@
 import { persistableTrace } from './tracePersistence';
+import { AgentError } from './types';
 import type {
   AgentMessage,
   AgentRuntimeState,
@@ -76,9 +77,13 @@ export function saveAgentSession(session: AgentSession): AgentSession {
 }
 
 export async function saveAgentSessionAsync(session: AgentSession): Promise<AgentSession> {
-  return activeAgentSessionStore.saveAsync
-    ? activeAgentSessionStore.saveAsync(session)
-    : activeAgentSessionStore.save(session);
+  try {
+    return await (activeAgentSessionStore.saveAsync
+      ? activeAgentSessionStore.saveAsync(session)
+      : activeAgentSessionStore.save(session));
+  } catch (cause) {
+    throw new AgentError('会话保存失败，请稍后重试。', 'SESSION_PERSIST_FAILED', true, { cause });
+  }
 }
 
 function createInMemoryAgentSession(message: string, location: Location, ownerId?: string): AgentSession {

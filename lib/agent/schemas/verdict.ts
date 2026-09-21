@@ -29,6 +29,18 @@ const StringArraySchema = z.preprocess((value) => {
   return value;
 }, z.array(z.string()).default([]).catch([]));
 
+export const TargetEvidenceSchema = z.object({
+  target: z.string().trim().min(1),
+  kind: z.enum(['item', 'category']),
+  verdict: z.enum(['supported', 'contradicted', 'unknown']).optional().catch(undefined),
+  references: z.array(z.object({
+    restaurantId: z.string().min(1),
+    field: z.enum(['name', 'cuisineType']),
+    value: z.string().min(1),
+  })).min(1),
+  observationRef: z.string().min(1).optional().catch(undefined),
+});
+
 export const CandidateVerdictSchema = z.preprocess((value) => {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const record = value as Record<string, unknown>;
@@ -48,6 +60,7 @@ export const CandidateVerdictSchema = z.preprocess((value) => {
   confidence: NumericConfidenceSchema,
   matchedItems: StringArraySchema,
   matchedCategories: StringArraySchema,
+  targetEvidence: z.array(TargetEvidenceSchema).optional().catch(undefined),
   conflicts: StringArraySchema,
   evidence: StringArraySchema,
   warnings: StringArraySchema,

@@ -7,10 +7,14 @@
  */
 
 import { normalizeSearchKeywords } from './poiTaxonomy';
-import type { PolicyContext, SearchPlan } from './types';
+import type { PolicyContext, SearchAttempt, SearchPlan } from './types';
 
 export function searchPlanKey(plan: SearchPlan): string {
-  return `${plan.keywords.join('|')}:${plan.radiusMeters}:${plan.poiType ?? ''}`;
+  return searchKey(plan.keywords, plan.radiusMeters, plan.poiType);
+}
+
+export function searchAttemptKey(attempt: SearchAttempt): string {
+  return searchKey(attempt.keywords, attempt.radius, attempt.poiType);
 }
 
 export function hasTriedPlan(ctx: PolicyContext, plan: SearchPlan): boolean {
@@ -19,6 +23,10 @@ export function hasTriedPlan(ctx: PolicyContext, plan: SearchPlan): boolean {
     (attempt) =>
       `${attempt.keywords.join('|')}:${attempt.radius}:${attempt.poiType ?? ''}` === key
   );
+}
+
+function searchKey(keywords: string[], radiusMeters: number, poiType?: string): string {
+  return `${keywords.join('|')}:${radiusMeters}:${poiType ?? ''}`;
 }
 
 export function hasTriedKeyword(ctx: PolicyContext, keyword: string): boolean {

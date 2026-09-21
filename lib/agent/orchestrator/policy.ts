@@ -9,14 +9,20 @@
  * Supervisor / KeywordExpansion），也不做候选准入（属于 FinalGuard）。
  */
 
-import { countDistinctBrands } from '@/lib/restaurantIdentity';
+import {
+  countDistinctBrands,
+  getRestaurantBrand,
+} from '@/lib/restaurantIdentity';
 import { getAmapFoodPoiType } from '../amapPoiTypeCatalog';
 import {
   isOpenExplorationAuthorized,
   isSearchIntentAuthorizedForPrimary,
   primaryAuthorizationRef,
 } from '../authorization';
-import { isPrimaryRecommendationEligible } from '../finalGuard';
+import {
+  getPrimaryRecommendationAdmissionViolation,
+  isPrimaryRecommendationEligible,
+} from '../finalGuard';
 import type { FinishReason } from '../finishReason';
 import {
   applyClarificationOptionToGoal,
@@ -36,7 +42,6 @@ import {
   canonicalizePoiTerm,
   DEFAULT_POI_TYPE,
   lookupFoodPoiTypes,
-  normalizeSearchKeywords,
 } from '../poiTaxonomy';
 import { SearchPlanSchema } from '../schemas/plan';
 import { createSearchAction, isPrimaryScopeAuthorized, searchRelationFromIntent } from '../searchAction';
@@ -161,6 +166,9 @@ export function decideNextAction(
     return hasPrimaryCandidates(ctx)
       ? finishDecision(ctx, 'PARTIAL_EVALUATION_FAILURE', 0.6)
       : { kind: 'abort', reason: 'EVALUATION_FAILED' };
+  }
+  if (ctx.keywordExpansionFailed && hasPrimaryCandidates(ctx)) {
+    return finishDecision(ctx, 'PARTIAL_EXPANSION_FAILURE', 0.6);
   }
 
   const distinctBrands = distinctPrimaryBrandCount(ctx);
@@ -338,7 +346,7 @@ function buildPlanBatch(
       break;
     }
 
-    const [keyword] = normalizeSearchKeywords([target.keyword]);
+    const keyword = target.keyword.trim();
     if (!keyword || usedKeywords.has(keyword) || hitsExclusion(ctx.goal, keyword)) {
       continue;
     }
@@ -363,20 +371,28 @@ function buildPlanBatch(
   return plans;
 }
 
-function finishDecision(
+export function finishDecision(
   ctx: PolicyContext,
   reason: FinishReason,
   confidence: number
 ): Extract<PolicyDecision, { kind: 'finish' }> {
   const primary = primaryCandidates(ctx);
-  const primarySet = new Set(primary);
+  const selected = primary.slice(0, ctx.targetCount);
+  const selectedSet = new Set(selected);
+  const rankedOverflow = primary.slice(ctx.targetCount);
+  const rankedPrimarySet = new Set(primary);
+  const backups = [
+    ...rankedOverflow,
+    ...ctx.candidates.filter((candidate) =>
+      !selectedSet.has(candidate) && !rankedPrimarySet.has(candidate)
+    ),
+  ];
 
   return {
     kind: 'finish',
     reason,
-    selectedIds: primary.slice(0, ctx.targetCount).map((candidate) => candidate.restaurant.id),
-    candidateIds: ctx.candidates
-      .filter((candidate) => !primarySet.has(candidate))
+    selectedIds: selected.map((candidate) => candidate.restaurant.id),
+    candidateIds: backups
       .slice(0, 20)
       .map((candidate) => candidate.restaurant.id),
     confidence,
@@ -432,9 +448,7 @@ export function buildSearchPlan(
   reason: string
 ): SearchPlan {
   const rawKeyword = typeof target === 'string' ? target : target.keyword;
-  const targetPoiTypes = typeof target === 'string' ? undefined : target.poiTypes;
-  const [normalizedKeyword] = normalizeSearchKeywords([rawKeyword]);
-  const keyword = normalizedKeyword || '餐厅';
+  const keyword = rawKeyword.trim();
 
   const action = createSearchAction({
     query: keyword,
@@ -457,7 +471,7 @@ export function buildSearchPlan(
   return SearchPlanSchema.parse({
     keywords: [keyword],
     radiusMeters: nextSearchRadius(ctx),
-    poiType: resolvePlanPoiType(ctx.goal, keyword, targetPoiTypes),
+    poiType: undefined,
     searchIntent,
     allowedForPrimary: effectiveAllowedForPrimary,
     reason,
@@ -477,19 +491,13 @@ export function nextSearchRadius(ctx: PolicyContext): number {
   return clampRadius(Math.round(latestRadius * RADIUS_GROWTH));
 }
 
-/** 构造计划时的 poiType 选择：target 自带 > 关键词推断 > goal.poiType。 */
+/** 旧兼容入口：搜索计划不再携带 Provider 分类码。 */
 export function resolvePlanPoiType(
-  goal: UserGoal,
-  keyword: string,
-  targetPoiTypes?: string[]
+  _goal: UserGoal,
+  _keyword: string,
+  _targetPoiTypes?: string[]
 ): string | undefined {
-  const sanitizedTargetPoiTypes = sanitizePoiTypeCodes(targetPoiTypes?.join('|'));
-  if (sanitizedTargetPoiTypes.length > 0) {
-    return sanitizedTargetPoiTypes.join('|');
-  }
-
-  const inferred = inferPoiTypesForGoalKeyword(goal, keyword) ?? goal.poiType;
-  return inferred === DEFAULT_POI_TYPE ? undefined : inferred;
+  return undefined;
 }
 
 export function inferPoiTypesForGoalKeyword(
@@ -635,7 +643,22 @@ function toTarget(goal: UserGoal, keyword: string): SearchKeywordTarget {
 
 // 迁移期与 FinalGuard 共用严格准入口径，避免策略结束后再由下游补位。
 export function primaryCandidates(ctx: PolicyContext): RestaurantCandidate[] {
-  return ctx.candidates.filter((candidate) => isPrimaryRecommendationEligible(candidate, ctx));
+  const qualified = ctx.candidates.filter((candidate) =>
+    isPrimaryRecommendationEligible(candidate, ctx)
+  );
+  const originalOrder = new Map(qualified.map((candidate, index) => [candidate, index]));
+  const ratingBonuses = buildSameProviderRatingBonuses(qualified);
+  const ranked = [...qualified].sort((left, right) => {
+    const utilityDelta = recommendationUtility(right, ratingBonuses)
+      - recommendationUtility(left, ratingBonuses);
+    if (utilityDelta !== 0) {
+      return utilityDelta;
+    }
+
+    return (originalOrder.get(left) ?? 0) - (originalOrder.get(right) ?? 0);
+  });
+
+  return diversifyBrands(ranked);
 }
 
 export function hasPrimaryCandidates(ctx: PolicyContext): boolean {
@@ -644,6 +667,65 @@ export function hasPrimaryCandidates(ctx: PolicyContext): boolean {
 
 export function distinctPrimaryBrandCount(ctx: PolicyContext): number {
   return countDistinctBrands(primaryCandidates(ctx).map((candidate) => candidate.restaurant));
+}
+
+function buildSameProviderRatingBonuses(
+  candidates: RestaurantCandidate[]
+): Map<RestaurantCandidate, number> {
+  const byProvider = new Map<string, RestaurantCandidate[]>();
+  for (const candidate of candidates) {
+    if (!Number.isFinite(candidate.restaurant.rating)) {
+      continue;
+    }
+    const providerCandidates = byProvider.get(candidate.restaurant.source) ?? [];
+    providerCandidates.push(candidate);
+    byProvider.set(candidate.restaurant.source, providerCandidates);
+  }
+
+  const bonuses = new Map<RestaurantCandidate, number>();
+  for (const providerCandidates of byProvider.values()) {
+    const ratings = providerCandidates.map((candidate) => candidate.restaurant.rating!);
+    const min = Math.min(...ratings);
+    const max = Math.max(...ratings);
+    if (max === min) {
+      continue;
+    }
+
+    for (const candidate of providerCandidates) {
+      const normalized = (candidate.restaurant.rating! - min) / (max - min);
+      bonuses.set(candidate, Math.round(normalized * 12));
+    }
+  }
+  return bonuses;
+}
+
+function recommendationUtility(
+  candidate: RestaurantCandidate,
+  ratingBonuses: Map<RestaurantCandidate, number>
+): number {
+  return candidate.score + (ratingBonuses.get(candidate) ?? 0);
+}
+
+function diversifyBrands(
+  rankedCandidates: RestaurantCandidate[]
+): RestaurantCandidate[] {
+  const firstPerBrand: RestaurantCandidate[] = [];
+  const repeatedBrands: RestaurantCandidate[] = [];
+  const seenBrands = new Set<string>();
+
+  for (const candidate of rankedCandidates) {
+    const brand = getRestaurantBrand(candidate.restaurant)
+      ?? `place:${candidate.restaurant.id}`;
+    if (seenBrands.has(brand)) {
+      repeatedBrands.push(candidate);
+      continue;
+    }
+
+    seenBrands.add(brand);
+    firstPerBrand.push(candidate);
+  }
+
+  return [...firstPerBrand, ...repeatedBrands];
 }
 
 export function isOpenExplorationContext(ctx: PolicyContext): boolean {
@@ -688,13 +770,21 @@ export function hasUnauthorizedBroadenedCandidates(ctx: PolicyContext): boolean 
 /**
  * 没有主推荐时的追问。
  *
- * 分支优先级：strict 距离 > 已授权放宽但仍无结果 > 通用调整/放宽。
+ * 分支优先级：证据不足 > strict 距离 > 已授权放宽但仍无结果 > 通用调整/放宽。
  */
 export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
   // 验证不可用不再走追问：那是系统故障，应该报错而不是伪装成"没找到"。
   // 见 decideNextAction 的 evaluationFailed 分支。
 
-  if (getStrictDistanceMaxMeters(ctx.goal) !== undefined) {
+  const evidenceQuestion = buildEvidenceInsufficiencyQuestion(ctx);
+  if (evidenceQuestion) {
+    return evidenceQuestion;
+  }
+
+  if (
+    getStrictDistanceMaxMeters(ctx.goal) !== undefined
+    && !hasUnauthorizedBroadenedCandidates(ctx)
+  ) {
     return {
       reason: '当前严格距离范围内没有找到通过主推荐准入的餐厅。',
       question: '当前距离范围内没有找到合适餐厅，要扩大范围再搜吗？',
@@ -741,6 +831,29 @@ export function buildNoPrimaryQuestion(ctx: PolicyContext): PendingQuestion {
     optionEffects: {
       [CLARIFICATION_OPTION.AUTHORIZE_CATEGORY_BROADEN]: buildBroadenEffect(ctx.goal),
     },
+  };
+}
+
+function buildEvidenceInsufficiencyQuestion(ctx: PolicyContext): PendingQuestion | null {
+  const hasEvidenceGap = ctx.candidates.some((candidate) => {
+    const violation = getPrimaryRecommendationAdmissionViolation(candidate, ctx);
+    return violation?.code === 'UNVERIFIED_EVIDENCE'
+      || violation?.code === 'REQUIRED_ITEM_UNSUPPORTED';
+  });
+  if (!hasEvidenceGap) {
+    return null;
+  }
+
+  const target = primaryTargetLabel(ctx.goal);
+  return {
+    reason: '已找到可能相关的候选，但支持主推荐的证据不足。',
+    question: target
+      ? `找到的候选缺少足够证据确认符合「${target}」。可以换个目标，或补充更具体的菜品、菜系或餐厅类型。`
+      : '找到的候选缺少足够证据确认符合需求。可以换个目标，或补充更具体的菜品、菜系或餐厅类型。',
+    options: [
+      clarificationOption(CLARIFICATION_OPTION.CHANGE_TARGET),
+    ],
+    allowFreeText: true,
   };
 }
 
@@ -911,12 +1024,17 @@ export type TurnEntryDecision =
 
 export function decideTurnEntry(input: AgentInput): TurnEntryDecision {
   const optionId = input.optionId?.trim();
-  if (!optionId) {
-    return { kind: 'understand', message: input.query };
-  }
-
   const previousGoal = input.runtimeState?.goal;
   const pendingQuestion = input.runtimeState?.pendingQuestion;
+
+  if (!optionId) {
+    // 取消后的裸“继续”是执行控制指令，不是新的餐饮需求。交给模型重建目标
+    // 会把 cancelled observation 误判成 start_new_goal 并清空可恢复事实。
+    if (previousGoal && input.query.trim() === '继续' && hasRecoverableCancellation(input)) {
+      return { kind: 'rerun_current_goal', goal: previousGoal };
+    }
+    return { kind: 'understand', message: input.query };
+  }
 
   if (!previousGoal || !hasClarificationOption(pendingQuestion, optionId)) {
     return { kind: 'invalid_option', optionId, reason: 'unavailable' };
@@ -953,6 +1071,14 @@ export function decideTurnEntry(input: AgentInput): TurnEntryDecision {
   return label
     ? { kind: 'understand', message: label }
     : { kind: 'invalid_option', optionId, reason: 'no_label' };
+}
+
+function hasRecoverableCancellation(input: AgentInput): boolean {
+  return (input.runtimeState?.observations ?? []).some((observation) =>
+    observation.evaluationStopReason === 'cancelled'
+    && (observation.unevaluatedIds?.length ?? 0) > 0
+    && (observation.facts?.length ?? 0) > 0
+  );
 }
 
 // ---------------------------------------------------------------------------

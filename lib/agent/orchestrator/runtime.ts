@@ -29,7 +29,9 @@ import {
   decideNextAction,
   decideScouting,
   decideTurnEntry,
+  finishDecision,
   hasPrimaryCandidates,
+  hasPositiveFoodTarget,
   inferPoiTypesForGoalKeyword,
   isOpenExplorationContext,
   partitionPlansByValidity,
@@ -53,10 +55,12 @@ import { applyKeywordExpansion, runKeywordExpansionModel } from '../models/keywo
 import { runEvaluationModel, type EvaluationModelInput } from '../models/evaluationModel';
 import {
   deriveContextInvalidationPlan,
+  deriveLocationSignature,
   markStaleCandidatesForContext,
   withUpdatedGoalVersion,
 } from '../goalVersion';
 import { createVerdictCache, type VerdictCache } from '../evaluationCache';
+import { searchAttemptKey, searchPlanKey } from '../searchAttempts';
 import { AgentError, AgentRunError, isAgentError } from '../types';
 import type {
   AgentAction,
@@ -72,9 +76,11 @@ import type {
   ConversationMode,
   EmitAgentEvent,
   EvaluationModelOutput,
+  EvaluationStopReason,
   FinalGuardResult,
   FinishRecommendation,
   GoalPatch,
+  ObservationFact,
   PendingQuestion,
   RestaurantCandidate,
   SearchKeywordTarget,
@@ -101,7 +107,6 @@ interface AgentV3Context extends AgentContext {
 const DEFAULT_AGENT_MAX_SEARCH_CALLS = parsePositiveInt(process.env.AGENT_MAX_SEARCH_CALLS, 4);
 const DEFAULT_AGENT_EVALUATION_BUFFER = parsePositiveInt(process.env.AGENT_EVALUATION_BUFFER, 4);
 const DEFAULT_AGENT_EVALUATION_BATCH_SIZE = parsePositiveInt(process.env.AGENT_EVALUATION_BATCH_SIZE, 6);
-const DEFAULT_AGENT_EVALUATION_CONCURRENCY = parsePositiveInt(process.env.AGENT_EVALUATION_CONCURRENCY, 2);
 const CONFIGURED_AGENT_EVALUATION_LIMIT = parseOptionalPositiveInt(process.env.AGENT_EVALUATION_LIMIT);
 const MAX_HARD_REJECTED_REASON_DETAILS = 6;
 const MAX_HARD_REJECTED_OBSERVATIONS = 20;
@@ -118,40 +123,38 @@ export async function runSearchAgentV3(
   searchPlaces: (plan: SearchPlan) => Promise<Restaurant[]>
 ): Promise<AgentFinalResult> {
   const contextRef: { current?: AgentV3Context } = {};
-  // 目标理解完成前还没有可持久化的 RuntimeState；单独保留指标，确保
-  // 这条失败边界仍能在日志中看见真实模型调用，而不改变“不写半成品状态”的契约。
   const turnMetrics: MetricsSink = {};
 
   try {
-    return await runAgentTurn(input, emit, searchPlaces, contextRef, turnMetrics);
+    return await runAgentTurn(input, (event) => {
+      if (!input.signal?.aborted) emit(event);
+    }, searchPlaces, contextRef, turnMetrics);
   } catch (error) {
-    if (isAbortError(error)) {
-      throw error;
-    }
     if (error instanceof AgentRunError) {
       throw error;
     }
 
-    const code = toAgentErrorCode(error);
+    const code = isAbortError(error) || input.signal?.aborted ? 'CANCELLED' : toAgentErrorCode(error);
     const message = error instanceof Error ? error.message : String(error);
     const context = contextRef.current;
-
-    if (context) {
-      appendTrace(context, 'error', {
-        error: { code, message, retryable: isRetryableAgentError(error, code) },
-      });
-      throw new AgentRunError(message, code, snapshotRuntimeState(context), error);
-    }
-
-    const metrics = summarizeTurnMetrics(turnMetrics);
-    if (metrics.modelCalls > 0) {
-      createTurnLogger(input.sessionId).error('agent turn failed before runtime context', {
-        code,
-        ...metrics,
-      });
-    }
-
-    throw new AgentRunError(message, code, undefined, error);
+    const state = context ? snapshotRuntimeState(context) : {
+      ...input.runtimeState,
+      attempts: [...(input.runtimeState?.attempts ?? [])],
+      candidates: [...(input.runtimeState?.candidates ?? [])],
+      actions: [...(input.runtimeState?.actions ?? [])],
+      observations: [...(input.runtimeState?.observations ?? [])],
+      trace: [...(input.runtimeState?.trace ?? [])],
+    };
+    const failedTurn = {
+      ...state, actions: state.actions ?? [], trace: state.trace ?? [],
+      sessionId: input.sessionId, turnId: context?.turnId ?? createTraceId('turn'),
+      modelCallMetrics: context?.modelCallMetrics ?? turnMetrics.modelCallMetrics,
+    };
+    appendTrace(failedTurn, 'error', {
+      error: { code, message, retryable: code !== 'CANCELLED' && isRetryableAgentError(error, code) },
+    });
+    recordTurnMetrics(failedTurn, code === 'CANCELLED' ? 'cancelled' : 'failed');
+    throw new AgentRunError(message, code, { ...state, trace: failedTurn.trace }, error);
   }
 }
 
@@ -166,6 +169,7 @@ async function runAgentTurn(
   emit({ type: 'status', message: '正在分析您的需求...' });
 
   // context 要等目标解析完才能构造，先用独立容器收集这一阶段的模型指标。
+  throwIfCancelled(input.signal);
   const resolution = await resolveTurnGoal(input, turnMetrics);
   const supervisorOutput = resolution.supervisorOutput;
   const conversationMode = resolution.conversationMode;
@@ -184,6 +188,7 @@ async function runAgentTurn(
   const context = createInitialContext(input, baseGoal, resetPlan);
   context.modelCallMetrics = turnMetrics.modelCallMetrics ?? [];
   contextRef.current = context;
+  throwIfCancelled(input.signal);
   appendTrace(context, 'user_message', {
     input: {
       message: input.query,
@@ -226,9 +231,31 @@ async function runAgentTurn(
     return finish(context, action, emit);
   }
 
-  await expandKeywordsAlongsideFirstSearch(context, searchPlaces, emit);
+  const resumedCancelledObservation = await resumeCancelledObservations(context, emit);
+  throwIfCancelled(input.signal);
+
+  if (resumedCancelledObservation) {
+    const decision = await nextExecutableDecision(context, emit);
+    if (decision.kind === 'abort') {
+      throw context.evaluationError
+        ?? new AgentError('Candidate evaluation failed', decision.reason, true);
+    }
+    if (decision.kind === 'ask') {
+      return askOrConverge(context, decision.question, emit);
+    }
+    if (decision.kind === 'finish') {
+      const action = finishActionFromDecision(decision);
+      appendAction(context, action, emit);
+      return finish(context, action, emit);
+    }
+    await runSearchStep(context, decision.plans, searchPlaces, emit);
+  } else {
+    await expandKeywordsAlongsideFirstSearch(context, searchPlaces, emit);
+  }
+  throwIfCancelled(input.signal);
 
   while (context.actions.length < context.maxActions) {
+    throwIfCancelled(input.signal);
     const decision = await nextExecutableDecision(context, emit);
 
     if (decision.kind === 'abort') {
@@ -361,8 +388,28 @@ async function expandKeywordsAlongsideFirstSearch(
     ? runSearchStep(context, firstBatch, searchPlaces, emit)
     : Promise.resolve();
 
-  const [expanded] = await Promise.all([expansion, searching]);
-  context.goal = applyKeywordExpansion(context.goal, expanded);
+  // Drain both operations before returning or snapshotting: one rejection must
+  // not leave the other writing candidates after the turn has already ended.
+  const [expanded, searched] = await Promise.allSettled([expansion, searching]);
+  if (searched.status === 'rejected') throw searched.reason;
+  if (expanded.status === 'fulfilled') {
+    context.goal = applyKeywordExpansion(context.goal, expanded.value);
+    return;
+  }
+  if (isAbortError(expanded.reason) || context.signal?.aborted) throw expanded.reason;
+  if (!hasPositiveFoodTarget(context.goal) || !hasPrimaryCandidates(context)) {
+    throw expanded.reason;
+  }
+  context.keywordExpansionFailed = true;
+  context.unmetConstraints.push('相关搜索词扩展失败，本轮只返回按原需求验证的结果。');
+  appendTrace(context, 'error', {
+    input: { stage: 'keyword_expansion' },
+    error: {
+      code: toAgentErrorCode(expanded.reason),
+      message: 'Keyword expansion failed; verified explicit-target results retained.',
+      retryable: false,
+    },
+  });
 }
 
 function concurrentFirstSearchEnabled(): boolean {
@@ -386,7 +433,6 @@ async function runSearchStep(
   );
 
   for (const observation of observations) {
-    context.observations.push(observation);
     emit({
       type: 'observation',
       actionId: observation.actionId,
@@ -394,6 +440,9 @@ async function runSearchStep(
       found: observation.rawCount,
       accepted: observation.acceptedPrimaryIds.length,
       rejected: observation.hardRejected.length,
+      evaluated: observation.evaluatedIds?.length,
+      unevaluated: observation.unevaluatedIds?.length,
+      evaluationStopReason: observation.evaluationStopReason,
     });
   }
 }
@@ -460,13 +509,7 @@ async function nextExecutableDecision(
   }
 
   return hasPrimaryCandidates(context)
-    ? {
-        kind: 'finish',
-        reason: 'NO_MORE_STRATEGY',
-        selectedIds: primaryCandidates(context).map((candidate) => candidate.restaurant.id),
-        candidateIds: [],
-        confidence: 0.6,
-      }
+    ? finishDecision(context, 'NO_MORE_STRATEGY', 0.6)
     : { kind: 'ask', question: buildNoPrimaryQuestion(context) };
 }
 
@@ -574,8 +617,7 @@ function buildFinishAction(
     type: 'finish',
     reason,
     selectedIds: withSelectedIds
-      ? context.candidates
-          .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
+      ? primaryCandidates(context)
           .slice(0, context.targetCount)
           .map((candidate) => candidate.restaurant.id)
       : undefined,
@@ -709,6 +751,13 @@ function toAgentErrorCode(error: unknown): AgentErrorCode {
 
 function isAbortError(error: unknown): error is Error {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+function throwIfCancelled(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error('Agent run cancelled');
+  error.name = 'AbortError';
+  throw error;
 }
 
 function isRetryableAgentError(error: unknown, code: AgentErrorCode): boolean {
@@ -893,24 +942,27 @@ async function executeSearchBatch(
         result: await runSearchPlan(actionId, plan, baseRound + index, context, searchPlaces, emit),
       };
     } catch (error) {
-      if (isAbortError(error)) {
-        throw error;
-      }
       return { result: null, error };
     }
   });
 
   const observations: AgentObservation[] = [];
   const failures: unknown[] = [];
+  let cancellation: unknown;
   for (let index = 0; index < results.length; index += 1) {
     const outcome = results[index];
     const plan = plans[index];
     if (outcome.result) {
       observations.push(commitSearchPlanResult(outcome.result, context, emit));
+      cancellation ??= outcome.result.cancelled;
       continue;
     }
 
     const failure = outcome.error ?? new Error('Search plan failed without an error');
+    if (isAbortError(failure)) {
+      cancellation ??= failure;
+      continue;
+    }
     failures.push(failure);
     createTurnLogger(context.sessionId, context.turnId).warn('Parallel search plan failed', {
       keywords: plan.keywords,
@@ -928,6 +980,8 @@ async function executeSearchBatch(
     // 记为一次已尝试：否则这个关键词会被反复选中，直到预算耗尽。
     recordFailedAttempt(context, plan);
   }
+  if (cancellation) throw cancellation;
+  throwIfCancelled(context.signal);
 
   // A partial batch can still produce useful evidence. If every provider call
   // failed, treating the outage as "zero nearby restaurants" would mislead the
@@ -940,24 +994,34 @@ async function executeSearchBatch(
 }
 
 interface SearchPlanResult {
+  cancelled?: Error;
   actionId: string;
   plan: SearchPlan;
   restaurants: Restaurant[];
   provider: AgentObservation['provider'];
+  fetchedAt: number;
+  facts: NonNullable<AgentObservation['facts']>;
   hardGuard: ReturnType<typeof applyHardConstraintGuard>;
   hardRejectedReasons: string[];
   evaluationRestaurants: Restaurant[];
   agentEvaluation: EvaluationModelOutput;
+  evaluatedIds: string[];
+  unevaluatedIds: string[];
+  evaluationStopReason: EvaluationStopReason;
 }
 
 /** 一个搜索计划的候选验证结果，区分"这次真判了几家"与"复用了几家"。 */
 interface PlanEvaluation {
+  cancelled?: Error;
   /** 拿到裁决的餐厅，顺序与后续 verdicts 一一对应 */
   restaurants: Restaurant[];
   output: EvaluationModelOutput;
   error?: EvaluationModelOutput['error'];
   modelEvaluated: number;
   cacheHits: number;
+  evaluatedIds: string[];
+  unevaluatedIds: string[];
+  stopReason: EvaluationStopReason;
 }
 
 /**
@@ -1021,7 +1085,9 @@ async function runSearchPlan(
 
   const toolStartedAt = Date.now();
   const restaurants = await searchPlaces(plan);
-  const toolDurationMs = Date.now() - toolStartedAt;
+  const fetchedAt = Date.now();
+  const facts = restaurants.map(toObservationFact);
+  const toolDurationMs = fetchedAt - toolStartedAt;
   const provider = inferObservationProvider(restaurants);
   const toolResultTrace = appendTrace(context, 'tool_result', {
     actionId,
@@ -1058,7 +1124,18 @@ async function runSearchPlan(
   const hardGuard = applyHardConstraintGuard(restaurants, context.goal);
   const hardRejectedReasons = summarizeHardRejectedReasons(hardGuard.rejected);
 
-  const evaluation = await evaluatePlanCandidates(plan, context, hardGuard.passed, restaurants.length, emit);
+  const observation: AgentObservation = {
+    actionId, plan, provider, fetchedAt, facts,
+    goalId: context.goal.goalId,
+    goalVersion: context.goal.goalVersion,
+    goalSignature: context.goal.goalSignature,
+    rawCount: restaurants.length,
+    hardRejected: [], verdicts: [], acceptedPrimaryIds: [], candidateIds: [], unmetConstraints: [],
+  };
+  const evaluation = await evaluatePlanCandidates(
+    plan, context, hardGuard.passed, observation, emit
+  );
+  const agentEvaluation = bindEvaluationToObservation(evaluation.output, plan);
   appendTrace(context, 'evaluation', {
     actionId,
     input: {
@@ -1066,6 +1143,7 @@ async function runSearchPlan(
       restaurantIds: evaluation.restaurants.map((restaurant) => restaurant.id),
       modelEvaluated: evaluation.modelEvaluated,
       cacheHits: evaluation.cacheHits,
+      unevaluatedIds: evaluation.unevaluatedIds,
     },
     output: {
       verdictCount: evaluation.output.verdicts.length,
@@ -1073,19 +1151,26 @@ async function runSearchPlan(
       candidateIds: evaluation.output.candidateIds,
       unmetConstraints: evaluation.output.unmetConstraints,
       source: evaluation.output.source,
+      stopReason: evaluation.stopReason,
     },
     error: evaluation.error,
   });
 
   return {
+    cancelled: evaluation.cancelled,
     actionId,
     plan,
     restaurants,
     provider,
+    fetchedAt,
+    facts,
     hardGuard,
     hardRejectedReasons,
     evaluationRestaurants: evaluation.restaurants,
-    agentEvaluation: evaluation.output,
+    agentEvaluation,
+    evaluatedIds: evaluation.evaluatedIds,
+    unevaluatedIds: evaluation.unevaluatedIds,
+    evaluationStopReason: evaluation.stopReason,
   };
 }
 
@@ -1100,11 +1185,11 @@ async function evaluatePlanCandidates(
   plan: SearchPlan,
   context: AgentV3Context,
   hardPassed: Restaurant[],
-  rawCount: number,
+  observation: AgentObservation,
   emit: EmitAgentEvent
 ): Promise<PlanEvaluation> {
-  const shortlist = selectRestaurantsForEvaluation(hardPassed, context.targetCount);
-  if (shortlist.length === 0) {
+  const budgetedCandidates = selectRestaurantsForEvaluation(hardPassed, context.targetCount);
+  if (budgetedCandidates.length === 0) {
     return {
       restaurants: [],
       output: {
@@ -1117,13 +1202,18 @@ async function evaluatePlanCandidates(
       },
       modelEvaluated: 0,
       cacheHits: 0,
+      evaluatedIds: [],
+      unevaluatedIds: [],
+      stopReason: 'all_evaluated',
     };
   }
 
   const cache = context.verdictCache;
   let error: EvaluationModelOutput['error'];
+  let cancelled: Error | undefined;
   const outputs: EvaluationModelOutput[] = [];
-  let pending = shortlist;
+  let pending = budgetedCandidates;
+  let targetReached = false;
 
   // 两轮：第一轮把同批其他计划正在判的餐厅让出去等结果；等完之后若某些餐厅
   // 在当前镜头下仍然没有可复用裁决（例如它在别的关键词下判了失败），第二轮
@@ -1136,42 +1226,51 @@ async function evaluatePlanCandidates(
     if (toEvaluate.length > 0) {
       emit({
         type: 'status',
-        message: toEvaluate.length < rawCount
+        message: toEvaluate.length < observation.rawCount
           ? `正在验证前 ${toEvaluate.length} 家候选餐厅...`
           : '正在验证候选餐厅...',
       });
 
       try {
-        const output = await runBatchedEvaluationModel({
-          signal: context.signal,
-          metricsSink: context,
-          goal: context.goal,
-          plan,
-          restaurants: toEvaluate,
-          existingCandidates: context.candidates.map((candidate) => ({
-            restaurant: candidate.restaurant,
-            verdict: candidateToVerdict(candidate),
-            sourceAttempt: candidate.sourceAttempt,
-          })),
-          targetCount: context.targetCount,
-          preferenceSummary: context.preferenceSummary,
+        targetReached = await runProgressiveEvaluationModel({
+          input: {
+            signal: context.signal,
+            metricsSink: context,
+            goal: context.goal,
+            plan,
+            restaurants: toEvaluate,
+            existingCandidates: context.candidates.map((candidate) => ({
+              restaurant: candidate.restaurant,
+              verdict: candidateToVerdict(candidate),
+              sourceAttempt: candidate.sourceAttempt,
+            })),
+            targetCount: context.targetCount,
+            preferenceSummary: context.preferenceSummary,
+          },
+          targetReached: () => hasEnoughEvaluatedPrimaries(
+            context, plan, observation, budgetedCandidates,
+            mergeEvaluationOutputs(outputs)
+          ),
+          onBatch: (output) => {
+            cache.settle(output.verdicts, plan);
+            outputs.push(output);
+          },
         });
-        cache.settle(output.verdicts, plan);
-        outputs.push(output);
       } catch (evaluationError) {
         if (isAbortError(evaluationError)) {
-          throw evaluationError;
+          cancelled = evaluationError;
+        } else {
+          error = evaluationFailureFromError(evaluationError);
+          context.evaluationFailed = true;
+          context.evaluationError = isAgentError(evaluationError)
+            ? evaluationError
+            : new AgentError(
+                evaluationError instanceof Error ? evaluationError.message : String(evaluationError),
+                'EVALUATION_FAILED',
+                true,
+                { cause: evaluationError }
+              );
         }
-        error = evaluationFailureFromError(evaluationError);
-        context.evaluationFailed = true;
-        context.evaluationError = isAgentError(evaluationError)
-          ? evaluationError
-          : new AgentError(
-              evaluationError instanceof Error ? evaluationError.message : String(evaluationError),
-              'EVALUATION_FAILED',
-              true,
-              { cause: evaluationError }
-            );
         // 验证失败不再合成 unverified 候选：那是拿"没验证过"冒充验证结果。
         // 失败裁决同样不入缓存，别的计划不该继承一次抖动的结论。
       } finally {
@@ -1180,24 +1279,37 @@ async function evaluatePlanCandidates(
     } else {
       claim.done();
     }
+    targetReached = hasEnoughEvaluatedPrimaries(
+      context, plan, observation, budgetedCandidates, mergeEvaluationOutputs(outputs)
+    );
 
     if (claim.waits.length > 0) {
       await Promise.all(claim.waits);
     }
 
     const resolved = new Set(outputs.flatMap((output) => output.verdicts.map((v) => v.restaurantId)));
-    pending = shortlist.filter(
+    pending = budgetedCandidates.filter(
       (restaurant) => !resolved.has(restaurant.id) && !cache.lookup(restaurant.id, plan)
     );
+    if (targetReached || error || cancelled) {
+      break;
+    }
   }
 
-  return combinePlanVerdicts(
-    shortlist,
+  const combined = combinePlanVerdicts(
+    hardPassed,
+    budgetedCandidates,
     plan,
     cache,
     outputs.length > 0 ? mergeEvaluationOutputs(outputs, error) : undefined,
-    error
+    error,
+    targetReached
   );
+  return {
+    ...combined,
+    cancelled,
+    stopReason: cancelled ? 'cancelled' : combined.stopReason,
+  };
 }
 
 /**
@@ -1207,11 +1319,13 @@ async function evaluatePlanCandidates(
  * 与当前计划的 allowedForPrimary 相与，因此授权语义不会被缓存绕过。
  */
 function combinePlanVerdicts(
-  shortlist: Restaurant[],
+  hardPassed: Restaurant[],
+  budgetedCandidates: Restaurant[],
   plan: SearchPlan,
   cache: VerdictCache,
   modelOutput: EvaluationModelOutput | undefined,
-  error: EvaluationModelOutput['error']
+  error: EvaluationModelOutput['error'],
+  targetReached: boolean
 ): PlanEvaluation {
   const verdictById = new Map<string, CandidateVerdict>(
     (modelOutput?.verdicts ?? []).map((verdict) => [verdict.restaurantId, verdict])
@@ -1219,7 +1333,7 @@ function combinePlanVerdicts(
   const modelEvaluated = verdictById.size;
   let cacheHits = 0;
 
-  for (const restaurant of shortlist) {
+  for (const restaurant of budgetedCandidates) {
     if (verdictById.has(restaurant.id)) {
       continue;
     }
@@ -1231,7 +1345,19 @@ function combinePlanVerdicts(
     }
   }
 
-  const restaurants = shortlist.filter((restaurant) => verdictById.has(restaurant.id));
+  const restaurants = budgetedCandidates.filter((restaurant) => verdictById.has(restaurant.id));
+  const evaluatedIds = restaurants.map((restaurant) => restaurant.id);
+  const evaluatedIdSet = new Set(evaluatedIds);
+  const unevaluatedIds = hardPassed
+    .filter((restaurant) => !evaluatedIdSet.has(restaurant.id))
+    .map((restaurant) => restaurant.id);
+  const stopReason: EvaluationStopReason = error
+    ? 'evaluation_failed'
+    : unevaluatedIds.length === 0
+      ? 'all_evaluated'
+      : targetReached
+        ? 'target_reached'
+        : 'budget_exhausted';
 
   return {
     restaurants,
@@ -1248,6 +1374,9 @@ function combinePlanVerdicts(
     error,
     modelEvaluated,
     cacheHits,
+    evaluatedIds,
+    unevaluatedIds,
+    stopReason,
   };
 }
 
@@ -1308,13 +1437,7 @@ function commitSearchPlanResult(
     found: restaurants.length,
     accepted: evaluated.acceptedCandidates.length,
   });
-  mergeCandidates(context, evaluated.acceptedCandidates);
-
   const verdicts = verdictGuard.output.verdicts;
-  // 口径与 FinalGuard 严格准入一致：observation.accepted 是可进入主推荐的家数。
-  const acceptedPrimaryIds = evaluated.acceptedCandidates
-    .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
-    .map((candidate) => candidate.restaurant.id);
   const candidateIds = evaluated.acceptedCandidates
     .map((candidate) => candidate.restaurant.id);
   const unmetConstraints = Array.from(new Set([
@@ -1330,9 +1453,40 @@ function commitSearchPlanResult(
     ]),
   ]));
 
+  const observation: AgentObservation = {
+    actionId,
+    plan,
+    goalId: context.goal.goalId,
+    goalVersion: context.goal.goalVersion,
+    goalSignature: context.goal.goalSignature,
+    locationSignature: deriveLocationSignature(context.location),
+    provider,
+    fetchedAt: result.fetchedAt,
+    facts: result.facts,
+    rawCount: restaurants.length,
+    hardRejected: hardGuard.rejected.slice(0, MAX_HARD_REJECTED_OBSERVATIONS).map((item) => ({
+      restaurantId: item.restaurant.id,
+      reasons: item.reasons,
+    })),
+    verdicts,
+    evaluatedIds: result.evaluatedIds,
+    unevaluatedIds: result.unevaluatedIds,
+    evaluationStopReason: result.evaluationStopReason,
+    acceptedPrimaryIds: [],
+    candidateIds,
+    unmetConstraints,
+  };
+  // 合并及准入都反查 observation；先提交来源，再计算准入，不能等整批搜索结束。
+  context.observations.push(observation);
+  mergeCandidates(context, evaluated.acceptedCandidates);
+  const acceptedPrimaryIds = evaluated.acceptedCandidates
+    .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
+    .map((candidate) => candidate.restaurant.id);
+  observation.acceptedPrimaryIds = acceptedPrimaryIds;
+
   emit({
     type: 'partial_results',
-    restaurants: context.candidates
+    restaurants: primaryCandidates(context)
       .slice(0, context.targetCount)
       .map((candidate) => candidate.restaurant),
   });
@@ -1345,24 +1499,13 @@ function commitSearchPlanResult(
       hardRejectedCount: hardGuard.rejected.length,
       acceptedPrimaryIds,
       candidateIds,
+      evaluatedCount: result.evaluatedIds.length,
+      unevaluatedCount: result.unevaluatedIds.length,
+      evaluationStopReason: result.evaluationStopReason,
       unmetConstraints,
     },
   });
-  const observation: AgentObservation = {
-    actionId,
-    traceId: observationTrace.id,
-    plan,
-    provider,
-    rawCount: restaurants.length,
-    hardRejected: hardGuard.rejected.slice(0, MAX_HARD_REJECTED_OBSERVATIONS).map((item) => ({
-      restaurantId: item.restaurant.id,
-      reasons: item.reasons,
-    })),
-    verdicts,
-    acceptedPrimaryIds,
-    candidateIds,
-    unmetConstraints,
-  };
+  observation.traceId = observationTrace.id;
   appendTrace(context, 'state_update', {
     actionId,
     output: {
@@ -1370,10 +1513,198 @@ function commitSearchPlanResult(
       attempts: context.attempts.length,
       candidates: context.candidates.length,
       accepted: evaluated.acceptedCandidates.length,
+      evaluated: result.evaluatedIds.length,
+      unevaluated: result.unevaluatedIds.length,
+      evaluationStopReason: result.evaluationStopReason,
     },
   });
 
   return observation;
+}
+
+async function resumeCancelledObservations(
+  context: AgentV3Context,
+  emit: EmitAgentEvent
+): Promise<boolean> {
+  let resumed = false;
+  for (const observation of context.observations) {
+    if (!isResumableCancelledObservation(observation, context)) {
+      continue;
+    }
+
+    const pendingIds = new Set(observation.unevaluatedIds);
+    const restaurants = (observation.facts ?? [])
+      .filter((fact) => pendingIds.has(fact.id))
+      .map(observationFactToRestaurant);
+    if (restaurants.length === 0) {
+      continue;
+    }
+    resumed = true;
+
+    const evaluation = await evaluatePlanCandidates(
+      observation.plan,
+      context,
+      restaurants,
+      observation,
+      emit
+    );
+    const guarded = applyVerdictGuard(
+      bindEvaluationToObservation(evaluation.output, observation.plan),
+      restaurants,
+      context.goal,
+      observation.plan,
+      context.targetCount
+    );
+    const sourceAttempt = findSourceAttempt(context, observation.plan);
+    const evaluated = evaluateSearchResult(
+      restaurants,
+      context,
+      observation.plan,
+      sourceAttempt,
+      guarded.output
+    );
+    mergeCandidates(context, evaluated.acceptedCandidates);
+
+    const evaluatedIds = uniqueStrings([
+      ...(observation.evaluatedIds ?? []),
+      ...evaluation.evaluatedIds,
+    ]);
+    const candidateIds = uniqueStrings([
+      ...observation.candidateIds,
+      ...evaluated.acceptedCandidates.map((candidate) => candidate.restaurant.id),
+    ]);
+    observation.verdicts = uniqueByRestaurantId([
+      ...observation.verdicts,
+      ...guarded.output.verdicts,
+    ]);
+    observation.evaluatedIds = evaluatedIds;
+    observation.unevaluatedIds = evaluation.unevaluatedIds;
+    observation.evaluationStopReason = evaluation.stopReason;
+    observation.candidateIds = candidateIds;
+    observation.unmetConstraints = Array.from(new Set([
+      ...observation.unmetConstraints,
+      ...guarded.output.unmetConstraints,
+      ...guarded.rejectedVerdicts.flatMap((verdict) => [
+        ...verdict.conflicts,
+        ...verdict.warnings,
+      ]),
+      ...evaluated.acceptedCandidates.flatMap((candidate) => [
+        ...candidate.verification.hardFailures.map((failure) => failure.message),
+        ...candidate.verification.warnings,
+      ]),
+    ]));
+    observation.acceptedPrimaryIds = context.candidates
+      .filter((candidate) => candidateIds.includes(candidate.restaurant.id))
+      .filter((candidate) => isPrimaryRecommendationEligible(candidate, context))
+      .map((candidate) => candidate.restaurant.id);
+
+    appendTrace(context, 'evaluation', {
+      actionId: observation.actionId,
+      input: {
+        plan: observation.plan,
+        restaurantIds: restaurants.map((restaurant) => restaurant.id),
+        modelEvaluated: evaluation.modelEvaluated,
+        cacheHits: evaluation.cacheHits,
+        unevaluatedIds: evaluation.unevaluatedIds,
+      },
+      output: {
+        verdictCount: guarded.output.verdicts.length,
+        selectedIds: guarded.output.selectedIds,
+        candidateIds: guarded.output.candidateIds,
+        unmetConstraints: guarded.output.unmetConstraints,
+        source: guarded.output.source,
+        stopReason: evaluation.stopReason,
+      },
+      error: evaluation.error,
+    });
+    appendTrace(context, 'runtime_decision', {
+      output: {
+        kind: 'resume_cancelled_observation',
+        provider: observation.provider,
+        resumedCount: restaurants.length,
+        evaluatedCount: evaluatedIds.length,
+        unevaluatedCount: evaluation.unevaluatedIds.length,
+        stopReason: evaluation.stopReason,
+      },
+    });
+
+    emit({
+      type: 'partial_results',
+      restaurants: primaryCandidates(context)
+        .slice(0, context.targetCount)
+        .map((candidate) => candidate.restaurant),
+    });
+    emit({
+      type: 'observation',
+      actionId: observation.actionId,
+      traceId: observation.traceId,
+      found: observation.rawCount,
+      accepted: observation.acceptedPrimaryIds.length,
+      rejected: observation.hardRejected.length,
+      evaluated: observation.evaluatedIds?.length,
+      unevaluated: observation.unevaluatedIds?.length,
+      evaluationStopReason: observation.evaluationStopReason,
+    });
+    if (evaluation.cancelled) {
+      throw evaluation.cancelled;
+    }
+  }
+
+  return resumed;
+}
+
+function isResumableCancelledObservation(
+  observation: AgentObservation,
+  context: AgentV3Context
+): boolean {
+  const factIds = new Set((observation.facts ?? []).map((fact) => fact.id));
+  return observation.evaluationStopReason === 'cancelled'
+    && (observation.unevaluatedIds?.length ?? 0) > 0
+    && observation.unevaluatedIds?.every((id) => factIds.has(id)) === true
+    && observation.locationSignature === deriveLocationSignature(context.location)
+    && observation.goalId === context.goal.goalId
+    && observation.goalVersion === context.goal.goalVersion
+    && observation.goalSignature === context.goal.goalSignature
+    && findSourceAttempt(context, observation.plan) > 0;
+}
+
+function findSourceAttempt(
+  context: Pick<AgentV3Context, 'attempts'>,
+  plan: AgentObservation['plan']
+): number {
+  const key = searchPlanKey(plan);
+  const index = context.attempts.findIndex((attempt) =>
+    searchAttemptKey(attempt) === key
+  );
+  return index + 1;
+}
+
+function toObservationFact(restaurant: Restaurant): ObservationFact {
+  return {
+    id: restaurant.id,
+    source: restaurant.source,
+    name: restaurant.name,
+    cuisineType: restaurant.cuisineType,
+    rating: restaurant.rating,
+    distance: restaurant.distance,
+    address: restaurant.address,
+    businessStatus: restaurant.businessStatus,
+    averagePrice: restaurant.averagePrice,
+    poiTypeCode: restaurant.poiTypeCode,
+    location: { ...restaurant.location },
+  };
+}
+
+function observationFactToRestaurant(fact: ObservationFact): Restaurant {
+  return {
+    ...fact,
+    location: { ...fact.location },
+  };
+}
+
+function uniqueByRestaurantId<T extends { restaurantId: string }>(items: T[]): T[] {
+  const byId = new Map(items.map((item) => [item.restaurantId, item]));
+  return Array.from(byId.values());
 }
 
 function inferObservationProvider(restaurants: Restaurant[]): AgentObservation['provider'] {
@@ -1436,34 +1767,25 @@ function evaluationFailureFromError(error: unknown): NonNullable<EvaluationModel
   };
 }
 
-async function runBatchedEvaluationModel(input: EvaluationModelInput): Promise<EvaluationModelOutput> {
+async function runProgressiveEvaluationModel(options: {
+  input: EvaluationModelInput;
+  targetReached: () => boolean;
+  onBatch: (output: EvaluationModelOutput) => void;
+}): Promise<boolean> {
+  const { input } = options;
+  if (options.targetReached()) return true;
+
   const batchSize = Math.max(1, DEFAULT_AGENT_EVALUATION_BATCH_SIZE);
-  if (input.restaurants.length <= batchSize) {
-    return runEvaluationModel(input);
-  }
-
   const batches = chunkRestaurants(input.restaurants, batchSize);
-  const concurrency = Math.min(
-    Math.max(1, DEFAULT_AGENT_EVALUATION_CONCURRENCY),
-    batches.length
-  );
-
-  try {
-    const outputs = await mapWithConcurrency(batches, concurrency, (restaurants) =>
-      runEvaluationModel({ ...input, restaurants })
-    );
-    return mergeEvaluationOutputs(outputs);
-  } catch (error) {
-    if (concurrency <= 1 || !isLikelyEvaluationRateLimit(error)) {
-      throw error;
-    }
-
-    const outputs: EvaluationModelOutput[] = [];
-    for (const restaurants of batches) {
-      outputs.push(await runEvaluationModel({ ...input, restaurants }));
-    }
-    return mergeEvaluationOutputs(outputs);
+  for (const restaurants of batches) {
+    throwIfCancelled(input.signal);
+    const output = await runEvaluationModel({ ...input, restaurants });
+    options.onBatch(output);
+    throwIfCancelled(input.signal);
+    if (options.targetReached()) return true;
   }
+
+  return false;
 }
 
 function chunkRestaurants(restaurants: Restaurant[], size: number): Restaurant[][] {
@@ -1512,8 +1834,54 @@ function mergeEvaluationOutputs(
   };
 }
 
-function isLikelyEvaluationRateLimit(error: unknown): boolean {
-  return isAgentError(error) && error.code === 'RATE_LIMITED';
+function bindEvaluationToObservation(
+  output: EvaluationModelOutput, plan: SearchPlan
+): EvaluationModelOutput {
+  return {
+    ...output,
+    verdicts: output.verdicts.map((verdict) => ({
+      ...verdict,
+      targetEvidence: verdict.targetEvidence?.map((evidence) => ({
+        ...evidence, observationRef: plan.planId,
+      })),
+    })),
+  };
+}
+
+function hasEnoughEvaluatedPrimaries(
+  context: AgentV3Context,
+  plan: SearchPlan,
+  observation: AgentObservation,
+  restaurants: Restaurant[],
+  output: EvaluationModelOutput
+): boolean {
+  const byId = new Map(output.verdicts.map((verdict) => [verdict.restaurantId, verdict]));
+  for (const restaurant of restaurants) {
+    const cached = context.verdictCache.lookup(restaurant.id, plan);
+    if (!byId.has(restaurant.id) && cached) byId.set(restaurant.id, cached);
+  }
+  const guarded = applyVerdictGuard(
+    bindEvaluationToObservation({ ...output, verdicts: [...byId.values()] }, plan),
+    restaurants, context.goal, plan, context.targetCount
+  );
+  const sourceAttempt = context.attempts.length + 1;
+  const evaluated = evaluateSearchResult(
+    restaurants, context, plan, sourceAttempt, guarded.output
+  );
+  // Parallel plans have not committed yet. Project their real facts locally so
+  // early stopping uses the publication guard without mutating shared state.
+  const preview: AgentV3Context = {
+    ...context,
+    attempts: [...context.attempts, {
+      keywords: plan.keywords, radius: plan.radiusMeters, poiType: plan.poiType,
+      searchIntent: plan.searchIntent, allowedForPrimary: plan.allowedForPrimary,
+      reason: plan.reason, found: observation.rawCount, accepted: evaluated.acceptedCandidates.length,
+    }],
+    observations: [...context.observations, observation],
+    candidates: [...context.candidates],
+  };
+  mergeCandidates(preview, evaluated.acceptedCandidates);
+  return applyFinalGuard(preview).primaryCandidates.length >= context.targetCount;
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -1546,7 +1914,7 @@ function appendAction(
 }
 
 function appendTrace(
-  context: AgentV3Context,
+  context: Pick<AgentV3Context, 'trace' | 'sessionId' | 'turnId'>,
   type: AgentTraceItem['type'],
   item: Partial<Omit<AgentTraceItem, 'id' | 'sessionId' | 'turnId' | 'type' | 'createdAt'>> = {}
 ): AgentTraceItem {
@@ -1575,7 +1943,11 @@ function createTraceId(prefix: string): string {
  * 逐次调用的明细留在 metrics 数组里，trace 只保留一条汇总，
  * 避免高频节点把 session 行撑大。
  */
-function recordTurnMetrics(context: AgentV3Context, outcome: 'final' | 'paused'): void {
+function recordTurnMetrics(
+  context: Pick<AgentV3Context, 'trace' | 'sessionId' | 'turnId' | 'attempts' | 'actions' | 'candidates'>
+    & MetricsSink,
+  outcome: 'final' | 'paused' | 'failed' | 'cancelled'
+): void {
   const metrics = summarizeTurnMetrics(context);
   appendTrace(context, 'model_call', {
     output: { outcome, ...metrics },
@@ -1688,6 +2060,9 @@ function buildFinalWarnings(
     ...(context.evaluationFailed
       ? ['部分候选餐厅没能完成验证，已只保留通过验证的结果。']
       : []),
+    ...(context.keywordExpansionFailed
+      ? ['相关搜索暂时不可用，结果仅来自原需求的已验证搜索。']
+      : []),
     ...(guarded.verdict === 'accepted'
       ? []
       : ['部分提议候选未通过最终校验，已降为候补或移除。']),
@@ -1754,6 +2129,7 @@ function candidateToVerdict(candidate: RestaurantCandidate): CandidateVerdict {
     confidence: candidate.verification.confidence,
     matchedItems: candidate.verification.itemMatches.map((match) => match.requestedItem),
     matchedCategories: candidate.verification.categoryMatches,
+    targetEvidence: candidate.verification.targetEvidence,
     conflicts: candidate.verification.hardFailures.map((failure) => failure.message),
     evidence: candidate.matched,
     warnings: candidate.verification.warnings,
@@ -1786,7 +2162,7 @@ export function summarizeAction(action: AgentAction): string {
   }
 
   if (action.type === 'ask_user') {
-    return action.question.reason ?? action.question.question;
+    return action.question.question;
   }
 
   return action.explanation;

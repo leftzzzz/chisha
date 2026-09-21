@@ -1,6 +1,6 @@
 import { applyFinalGuard } from '@/lib/agent/finalGuard';
 import { assembleRecommendations } from '@/lib/agent/resultAssembler';
-import type { AgentContext, RestaurantCandidate, SearchAttempt, UserGoal } from '@/lib/agent/types';
+import type { AgentContext, AgentObservation, RestaurantCandidate, SearchAttempt, UserGoal } from '@/lib/agent/types';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
 import type { Location, Restaurant } from '@/types';
 
@@ -76,7 +76,29 @@ function fallbackAttempt(overrides: Partial<SearchAttempt> = {}): SearchAttempt 
   };
 }
 
+function observation(planId: string, provider: AgentObservation['provider'] = 'amap'): AgentObservation {
+  return {
+    actionId: 'action-1',
+    plan: {
+      keywords: ['目标'], radiusMeters: 1000, searchIntent: 'exact',
+      allowedForPrimary: true, reason: 'test', planId: `${planId}-${provider}`,
+    },
+    provider,
+    fetchedAt: 1_800_000_000_000,
+    rawCount: 1,
+    hardRejected: [],
+    verdicts: [],
+    acceptedPrimaryIds: [],
+    candidateIds: [],
+    unmetConstraints: [],
+  };
+}
+
 function context(overrides: Partial<AgentContext> = {}): AgentContext {
+  const source = observation('exact');
+  source.facts = overrides.candidates?.map(({ restaurant: { id, source, name, cuisineType } }) => ({
+    id, source, name, cuisineType,
+  }));
   return {
     query: '没有具体想吃的，你来选',
     location,
@@ -93,6 +115,7 @@ function context(overrides: Partial<AgentContext> = {}): AgentContext {
     maxSteps: 8,
     maxSearchCalls: 4,
     targetCount: 4,
+    observations: [source],
     ...overrides,
   };
 }
@@ -235,6 +258,51 @@ describe('FinalGuard publication boundary', () => {
     expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['fresh']);
   });
 
+  it.each(['missing', 'wrong-id', 'wrong-version', 'wrong-signature', 'valid'])(
+    'binds target evidence observation to the current goal: %s', (variant) => {
+      const versionedGoal = withUpdatedGoalVersion(goal({
+        requestedItems: [{ name: '目标甲', required: true, aliases: [] }],
+        primaryKeywords: ['目标甲'],
+      }));
+      const selected: RestaurantCandidate = {
+        ...candidate('r1', '目标甲专门店', 100),
+        goalId: versionedGoal.goalId,
+        verifiedAgainstGoalVersion: versionedGoal.goalVersion,
+        verifiedAgainstGoalSignature: versionedGoal.goalSignature,
+        locationSignature: deriveLocationSignature(location),
+      };
+      selected.verification.itemMatches = [{
+        requestedItem: '目标甲', matchedBy: 'name', confidence: 1,
+      }];
+      selected.verification.targetEvidence = [{
+        target: '目标甲', kind: 'item', verdict: 'supported',
+        observationRef: 'exact-amap',
+        references: [{ restaurantId: 'r1', field: 'name', value: '目标甲专门店' }],
+      }];
+      const source = observation('exact');
+      source.facts = [{ ...selected.restaurant }];
+      if (variant !== 'missing') {
+        source.goalId = variant === 'wrong-id' ? 'other-goal' : versionedGoal.goalId;
+        source.goalVersion = variant === 'wrong-version'
+          ? (versionedGoal.goalVersion ?? 1) - 1
+          : versionedGoal.goalVersion;
+        source.goalSignature = variant === 'wrong-signature'
+          ? 'goal_old'
+          : versionedGoal.goalSignature;
+      }
+
+      const guarded = applyFinalGuard(context({
+        goal: versionedGoal,
+        attempts: [fallbackAttempt({ searchIntent: 'exact', keywords: ['目标甲'] })],
+        candidates: [selected],
+        observations: [source],
+      }));
+
+      expect(guarded.primaryCandidates).toHaveLength(variant === 'valid' ? 1 : 0);
+      expect(guarded.backupCandidates).toHaveLength(variant === 'valid' ? 0 : 1);
+    }
+  );
+
   it('does not treat distance-only authorization as category or fallback primary authorization', () => {
     const guarded = applyFinalGuard(context({
       goal: goal({
@@ -348,6 +416,441 @@ describe('FinalGuard evidence monotonicity', () => {
     allowedForPrimary: true,
   });
 
+  it('rejects unrelated matches for an ungrouped required item', () => {
+    const selected = candidate('ungrouped', '测试店', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '奶茶', matchedBy: 'llm_semantic', confidence: 1,
+    }];
+    const before = JSON.stringify(selected);
+    const guarded = applyFinalGuard(context({
+      goal: lemonTeaGoal,
+      attempts: [exactAttempt],
+      candidates: [selected],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toEqual([selected]);
+    expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+    expect(JSON.stringify(selected)).toBe(before);
+  });
+
+  it('rejects a stale observation reference even when the fact snapshot matches', () => {
+    const selected = candidate('ungrouped', '测试店', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '柠檬茶', matchedBy: 'name', confidence: 1,
+    }];
+    selected.verification.targetEvidence = [{
+      target: '柠檬茶', kind: 'item',
+      verdict: 'supported', observationRef: 'missing-plan-id',
+      references: [{ restaurantId: 'ungrouped', field: 'name', value: '测试店' }],
+    }];
+    const guarded = applyFinalGuard(context({
+      goal: lemonTeaGoal,
+      attempts: [exactAttempt], candidates: [selected],
+    }));
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toEqual([selected]);
+    expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+  });
+
+  it.each(['grouped', 'ungrouped'])('rejects %s legacy evidence that has no observation reference', (mode) => {
+    const selected = candidate('legacy', '目标甲专门店', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '目标甲', matchedBy: 'llm_semantic', confidence: 1,
+    }];
+    selected.verification.targetEvidence = [{
+      target: '目标甲', kind: 'item',
+      verdict: 'supported',
+      references: [{ restaurantId: 'legacy', field: 'name', value: selected.restaurant.name }],
+    }];
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        requestedItems: [{ name: '目标甲', required: true, aliases: [] }],
+        alternativeGroups: mode === 'grouped' ? [{ mode: 'all_of', items: ['目标甲'] }] : [],
+      }),
+      attempts: [exactAttempt], candidates: [selected],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toEqual([selected]);
+    expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+  });
+
+  it.each(['missing', 'empty', 'foreign', 'changed', 'category', 'valid'])('checks %s ungrouped fact references', (variant) => {
+    const selected = candidate('ungrouped', '测试火锅', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '火锅', matchedBy: 'llm_semantic', confidence: 1,
+    }];
+    if (variant !== 'missing') selected.verification.targetEvidence = [{
+      target: '火锅', kind: variant === 'category' ? 'category' : 'item',
+      verdict: 'supported',
+      observationRef: 'valid-amap',
+      references: variant === 'empty' ? [] : [{
+        restaurantId: variant === 'foreign' ? 'other' : selected.restaurant.id,
+        field: 'name', value: variant === 'changed' ? '旧店名' : selected.restaurant.name,
+      }],
+    }];
+    const before = JSON.stringify(selected);
+
+    const guarded = applyFinalGuard(context({
+      goal: goal({ requestedItems: [{ name: '火锅', required: true, aliases: [] }] }),
+      attempts: [fallbackAttempt({ searchIntent: 'exact', keywords: ['火锅'] })],
+      observations: [{ ...observation('valid'), facts: [{ ...selected.restaurant }] }],
+      candidates: [selected],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual(variant === 'valid' ? [selected] : []);
+    expect(guarded.backupCandidates).toEqual(variant === 'valid' ? [] : [selected]);
+    if (variant !== 'valid') {
+      expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+    }
+    expect(JSON.stringify(selected)).toBe(before);
+  });
+
+  it.each([
+    'missing-reference', 'missing-observation', 'wrong-provider', 'missing-time', 'valid',
+  ])('checks observation provenance: %s', (variant) => {
+    const selected = candidate('r1', '测试店', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '目标甲', matchedBy: 'llm_semantic', confidence: 1,
+    }];
+    selected.verification.targetEvidence = [{
+      target: '目标甲', kind: 'item',
+      verdict: 'supported',
+      observationRef: variant === 'missing-reference' ? undefined : 'exact-amap',
+      references: [{ restaurantId: 'r1', field: 'name', value: '测试店' }],
+    }];
+    const source = observation('exact');
+    source.facts = [{ ...selected.restaurant }];
+    if (variant === 'wrong-provider') source.provider = 'osm';
+    if (variant === 'missing-time') Object.assign(source, { fetchedAt: undefined });
+    const ctx = context({
+      goal: goal({ requestedItems: [{ name: '目标甲', required: true, aliases: [] }] }),
+      attempts: [exactAttempt], candidates: [selected],
+      observations: variant === 'missing-observation' ? [] : [source],
+    });
+    const restored = JSON.parse(JSON.stringify(ctx));
+    const before = JSON.stringify(restored);
+    const guarded = applyFinalGuard(restored);
+    expect(guarded.primaryCandidates).toHaveLength(variant === 'valid' ? 1 : 0);
+    expect(guarded.backupCandidates).toHaveLength(variant === 'valid' ? 0 : 1);
+    expect(JSON.stringify(restored)).toBe(before);
+  });
+
+  it.each(['missing', 'foreign-store', 'changed-fact', 'wrong-source', 'valid'])(
+    'requires observation-owned facts: %s', (variant) => {
+      const selected = candidate('r1', '测试店', 100);
+      selected.verification.itemMatches = [{
+        requestedItem: '目标甲', matchedBy: 'llm_semantic', confidence: 1,
+      }];
+      selected.verification.targetEvidence = [{
+        target: '目标甲', kind: 'item', verdict: 'supported', observationRef: 'exact-amap',
+        references: [{ restaurantId: 'r1', field: 'name', value: '测试店' }],
+      }];
+      const source = observation('exact');
+      if (variant !== 'missing') Object.assign(source, { facts: [{
+        id: variant === 'foreign-store' ? 'other' : 'r1',
+        name: variant === 'changed-fact' ? '另一店名' : '测试店',
+        cuisineType: '餐饮', source: variant === 'wrong-source' ? 'osm' : 'amap',
+      }] });
+      const restored = JSON.parse(JSON.stringify(context({
+        goal: goal({ requestedItems: [{ name: '目标甲', required: true, aliases: [] }] }),
+        attempts: [exactAttempt], candidates: [selected], observations: [source],
+      })));
+      const before = JSON.stringify(restored);
+      const guarded = applyFinalGuard(restored);
+      expect(guarded.primaryCandidates).toHaveLength(variant === 'valid' ? 1 : 0);
+      expect(guarded.backupCandidates).toHaveLength(variant === 'valid' ? 0 : 1);
+      expect(JSON.stringify(restored)).toBe(before);
+    }
+  );
+
+  it.each(['unknown', 'contradicted', 'missing', 'invalid'])(
+    'does not admit %s per-condition evidence', (verdict) => {
+      const selected = candidate('r1', '测试店', 100);
+      selected.verification.itemMatches = [{
+        requestedItem: '目标甲', matchedBy: 'llm_semantic', confidence: 1,
+      }];
+      selected.verification.targetEvidence = [{
+        target: '目标甲', kind: 'item',
+        verdict: 'supported', observationRef: 'exact-amap',
+        references: [{ restaurantId: 'r1', field: 'name', value: '测试店' }],
+      }];
+      if (verdict === 'missing') delete selected.verification.targetEvidence[0].verdict;
+      else Object.assign(selected.verification.targetEvidence[0], { verdict });
+
+      const restored = JSON.parse(JSON.stringify(context({
+        goal: goal({ requestedItems: [{ name: '目标甲', required: true, aliases: [] }] }),
+        attempts: [exactAttempt], candidates: [selected],
+      })));
+      const before = JSON.stringify(restored);
+      const guarded = applyFinalGuard(restored);
+
+      expect(guarded.primaryCandidates).toEqual([]);
+      expect(guarded.backupCandidates).toEqual([selected]);
+      expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+      expect(JSON.stringify(restored)).toBe(before);
+    }
+  );
+
+  it.each(['item', 'category'] as const)('counts only supported %s evidence in groups', (kind) => {
+    const selected = candidate('group', '测试店', 100);
+    selected.verification.itemMatches = kind === 'item'
+      ? ['目标甲', '目标乙'].map((requestedItem) => ({
+        requestedItem, matchedBy: 'llm_semantic', confidence: 1,
+      })) : [];
+    selected.verification.categoryMatches = kind === 'category' ? ['目标甲', '目标乙'] : [];
+    selected.verification.targetEvidence = ['目标甲', '目标乙'].map((target) => ({
+      target, kind, verdict: 'unknown', observationRef: 'exact-amap',
+      references: [{
+        restaurantId: 'group',
+        field: kind === 'item' ? 'name' : 'cuisineType',
+        value: kind === 'item' ? '测试店' : '餐饮',
+      }],
+    }));
+    const ctx = context({
+      goal: goal({ alternativeGroups: [{ mode: 'any_of', items: ['目标甲', '目标乙'] }] }),
+      attempts: [exactAttempt], candidates: [selected],
+    });
+    expect(applyFinalGuard(ctx).primaryCandidates).toEqual([]);
+    selected.verification.targetEvidence[0].verdict = 'supported';
+    expect(applyFinalGuard(ctx).primaryCandidates).toEqual([selected]);
+    ctx.goal.alternativeGroups[0].mode = 'all_of';
+    expect(applyFinalGuard(ctx).primaryCandidates).toEqual([]);
+    selected.verification.targetEvidence[1].verdict = 'supported';
+    expect(applyFinalGuard(ctx).primaryCandidates).toEqual([selected]);
+  });
+
+  it.each([
+    { matches: ['柠檬茶'], admitted: false },
+    { matches: ['柠檬茶', '柠檬茶'], admitted: false },
+    { matches: ['柠檬茶', '蛋糕'], admitted: true },
+  ])('checks every ungrouped requirement for $matches', ({ matches, admitted }) => {
+    const selected = candidate('ungrouped', '测试店', 100);
+    selected.verification.itemMatches = matches.map((requestedItem) => ({
+      requestedItem, matchedBy: 'llm_semantic', confidence: 1,
+    }));
+    selected.verification.targetEvidence = matches.map((target) => ({
+      target, kind: 'item',
+      verdict: 'supported',
+      observationRef: 'exact-amap',
+      references: [{ restaurantId: selected.restaurant.id, field: 'name', value: selected.restaurant.name }],
+    }));
+    const currentObservation = observation('exact');
+    currentObservation.facts = [{ ...selected.restaurant }];
+    currentObservation.plan.keywords = ['柠檬茶'];
+    const guarded = applyFinalGuard(context({
+      goal: goal({ requestedItems: [
+        { name: '柠檬茶', required: true, aliases: [] },
+        { name: '蛋糕', required: true, aliases: [] },
+        { name: '咖啡', required: false, aliases: [] },
+      ] }),
+      attempts: [exactAttempt], observations: [currentObservation], candidates: [selected],
+    }));
+    expect(guarded.primaryCandidates).toEqual(admitted ? [selected] : []);
+    expect(guarded.backupCandidates).toEqual(admitted ? [] : [selected]);
+  });
+
+  it('does not turn grouped any-of items into ungrouped all-of requirements', () => {
+    const selected = candidate('grouped', '测试店', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '柠檬茶', matchedBy: 'llm_semantic', confidence: 1,
+    }];
+    selected.verification.targetEvidence = [{
+      target: '柠檬茶', kind: 'item',
+      verdict: 'supported',
+      observationRef: 'exact-amap',
+      references: [{ restaurantId: 'grouped', field: 'name', value: '测试店' }],
+    }];
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        requestedItems: ['柠檬茶', '奶茶'].map((name) => ({ name, required: true, aliases: [] })),
+        alternativeGroups: [{ mode: 'any_of', items: ['柠檬茶', '奶茶'] }],
+      }),
+      attempts: [exactAttempt], candidates: [selected],
+    }));
+    expect(guarded.primaryCandidates).toEqual([selected]);
+  });
+
+  it.each([
+    { mode: 'all_of' as const, matches: ['目标甲'], admitted: false },
+    { mode: 'all_of' as const, matches: ['目标甲', '目标甲'], admitted: false },
+    { mode: 'all_of' as const, matches: ['目标甲', '无关目标'], admitted: false },
+    { mode: 'all_of' as const, matches: ['目标乙', '目标甲'], admitted: true },
+    { mode: 'any_of' as const, matches: [], admitted: false },
+    { mode: 'any_of' as const, matches: ['无关目标'], admitted: false },
+    { mode: 'any_of' as const, matches: ['目标乙'], admitted: true },
+  ])('checks $mode coverage for $matches (admitted=$admitted)', ({ mode, matches, admitted }) => {
+    const selected = candidate('group', '测试店', 100);
+    selected.verification.itemMatches = matches.map((requestedItem) => ({
+      requestedItem, matchedBy: 'llm_semantic', confidence: 0.9,
+    }));
+    selected.verification.targetEvidence = matches.map((target) => ({
+      target, kind: 'item',
+      verdict: 'supported',
+      observationRef: 'exact-amap',
+      references: [{ restaurantId: 'group', field: 'name', value: selected.restaurant.name }],
+    }));
+    const guarded = applyFinalGuard(context({
+      goal: goal({ alternativeGroups: [{ mode, items: ['目标甲', '目标乙'] }] }),
+      attempts: [exactAttempt],
+      candidates: [selected],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual(admitted ? [selected] : []);
+    expect(guarded.backupCandidates).toEqual(admitted ? [] : [selected]);
+    expect(guarded.violations).toEqual(admitted ? [] : [expect.objectContaining({
+      code: 'REQUIRED_ITEM_UNSUPPORTED', disposition: 'backup',
+    })]);
+    expect(selected.verification.status).toBe('passed');
+  });
+
+  it('checks category groups without treating category support as item support', () => {
+    const selected = candidate('group', '测试店', 100);
+    selected.verification.categoryMatches = ['品类甲'];
+    selected.verification.targetEvidence = [{
+      target: '品类甲', kind: 'category',
+      verdict: 'supported',
+      observationRef: 'exact-amap',
+      references: [{ restaurantId: 'group', field: 'cuisineType', value: '餐饮' }],
+    }];
+    const groupedContext = context({
+      goal: goal({ alternativeGroups: [{ mode: 'any_of', items: ['品类甲', '品类乙'] }] }),
+      attempts: [exactAttempt],
+      candidates: [selected],
+    });
+    expect(applyFinalGuard(groupedContext).primaryCandidates).toEqual([selected]);
+
+    groupedContext.goal.alternativeGroups = [{ mode: 'all_of', items: ['品类甲', '菜品甲'] }];
+    expect(applyFinalGuard(groupedContext).primaryCandidates).toEqual([]);
+
+  });
+
+  it('rejects category-only support for an explicitly requested dish despite unrelated item matches', () => {
+    const selected = candidate('dish', '测试店', 100);
+    selected.verification.categoryMatches = ['菜品甲'];
+    selected.verification.itemMatches = [{
+      requestedItem: '无关菜品', matchedBy: 'llm_semantic', confidence: 0.9,
+    }];
+    const guarded = applyFinalGuard(context({
+      goal: goal({
+        requestedItems: [{ name: '菜品甲', required: true, aliases: [] }],
+        alternativeGroups: [{ mode: 'all_of', items: ['菜品甲'] }],
+      }),
+      attempts: [exactAttempt],
+      candidates: [selected],
+    }));
+
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toEqual([selected]);
+    expect(guarded.violations).toEqual([expect.objectContaining({
+      code: 'REQUIRED_ITEM_UNSUPPORTED', disposition: 'backup',
+    })]);
+  });
+
+  it.each(['all_of', 'any_of'] as const)('rejects an empty %s group', (mode) => {
+    const guarded = applyFinalGuard(context({
+      goal: goal({ alternativeGroups: [{ mode, items: [] }] }),
+      attempts: [exactAttempt],
+    }));
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.violations.every((violation) =>
+      violation.code === 'REQUIRED_ITEM_UNSUPPORTED'
+    )).toBe(true);
+  });
+
+  it.each(['name', 'llm_semantic'] as const)(
+    'does not trust a %s match without a fact reference', (matchedBy) => {
+      const selected = candidate('group', '目标甲专门店', 100);
+      selected.verification.itemMatches = [{
+        requestedItem: '目标甲', matchedBy, confidence: 1,
+      }];
+      const guarded = applyFinalGuard(context({
+        goal: goal({ alternativeGroups: [{ mode: 'all_of', items: ['目标甲'] }] }),
+        attempts: [exactAttempt],
+        candidates: [selected],
+      }));
+      expect(guarded.primaryCandidates).toEqual([]);
+      expect(guarded.backupCandidates).toEqual([selected]);
+      expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+    }
+  );
+
+  it('does not let broaden authorization bypass an uncovered group', () => {
+    const guarded = applyFinalGuard(context({
+      goal: goal({ alternativeGroups: [{ mode: 'all_of', items: ['目标甲', '目标乙'] }] }),
+    }));
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toHaveLength(4);
+    expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+  });
+
+  it('requires every group and loses admission when matching evidence is deleted', () => {
+    const selected = candidate('group', '测试店', 100);
+    selected.verification.itemMatches = ['目标甲', '目标乙'].map((requestedItem) => ({
+      requestedItem, matchedBy: 'llm_semantic', confidence: 0.9,
+    }));
+    selected.verification.targetEvidence = ['目标甲', '目标乙'].map((target) => ({
+      target, kind: 'item',
+      verdict: 'supported',
+      observationRef: 'exact-amap',
+      references: [{ restaurantId: 'group', field: 'name', value: selected.restaurant.name }],
+    }));
+    const groupedContext = context({
+      goal: goal({ alternativeGroups: [
+        { mode: 'all_of', items: ['目标甲'] },
+        { mode: 'any_of', items: ['目标乙', '目标丙'] },
+      ] }),
+      attempts: [exactAttempt],
+      candidates: [selected],
+    });
+    expect(applyFinalGuard(groupedContext).primaryCandidates).toEqual([selected]);
+    selected.verification.itemMatches.pop();
+    expect(applyFinalGuard(groupedContext).primaryCandidates).toEqual([]);
+  });
+
+  it.each([
+    'missing', 'empty', 'foreign', 'changed', 'invalid-field', 'invalid-value', 'wrong-target', 'undeclared', 'category-as-dish',
+  ])('rejects %s evidence while preserving the model verdict', (mutation) => {
+    const selected = candidate('group', '目标甲专门店', 100);
+    selected.verification.itemMatches = [{
+      requestedItem: '目标甲', matchedBy: 'llm_semantic', confidence: 0.9,
+    }];
+    selected.verification.targetEvidence = [{
+      target: '目标甲', kind: 'item',
+      verdict: 'supported',
+      observationRef: 'exact-amap',
+      references: [{ restaurantId: 'group', field: 'name', value: selected.restaurant.name }],
+    }];
+    const groupedContext = context({
+      goal: goal({
+        requestedItems: [{ name: '目标甲', required: true, aliases: [] }],
+        alternativeGroups: [{ mode: 'all_of', items: ['目标甲'] }],
+      }),
+      attempts: [exactAttempt], candidates: [selected],
+    });
+    expect(applyFinalGuard(groupedContext).primaryCandidates).toEqual([selected]);
+    const evidence = selected.verification.targetEvidence[0];
+    if (mutation === 'missing') delete selected.verification.targetEvidence;
+    if (mutation === 'empty') evidence.references = [];
+    if (mutation === 'foreign') evidence.references[0].restaurantId = 'other';
+    if (mutation === 'changed') selected.restaurant.name = '新店名';
+    if (mutation === 'invalid-field') Object.assign(evidence.references[0], { field: 'address' });
+    if (mutation === 'invalid-value') Object.assign(evidence.references[0], { value: null });
+    if (mutation === 'wrong-target') evidence.target = '目标乙';
+    if (mutation === 'undeclared') selected.verification.itemMatches = [];
+    if (mutation === 'category-as-dish') {
+      evidence.kind = 'category';
+      selected.verification.categoryMatches = ['目标甲'];
+    }
+    const before = JSON.stringify(selected);
+    const guarded = applyFinalGuard(groupedContext);
+    expect(guarded.primaryCandidates).toEqual([]);
+    expect(guarded.backupCandidates).toEqual([selected]);
+    expect(guarded.violations[0].code).toBe('REQUIRED_ITEM_UNSUPPORTED');
+    expect(JSON.stringify(selected)).toBe(before);
+  });
+
   it('keeps category-compatible unverified candidates in backup', () => {
     const guarded = applyFinalGuard(context({
       goal: lemonTeaGoal,
@@ -402,6 +905,12 @@ describe('FinalGuard evidence monotonicity', () => {
       matchedBy: 'name',
       confidence: 0.95,
     }];
+    verified.verification.targetEvidence = [{
+      target: '柠檬茶', kind: 'item',
+      verdict: 'supported',
+      observationRef: 'exact-amap',
+      references: [{ restaurantId: verified.restaurant.id, field: 'name', value: verified.restaurant.name }],
+    }];
     const guarded = applyFinalGuard(context({
       goal: lemonTeaGoal,
       attempts: [exactAttempt],
@@ -418,7 +927,7 @@ describe('FinalGuard evidence monotonicity', () => {
     expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['c1', 'v1']);
   });
 
-  it('preserves the relative order of selected candidates that survive filtering', () => {
+  it.each([true, false])('preserves selected order with fact references=%s', (hasReferences) => {
     const rejected = unverifiedCandidate('c1', '喜茶', 100);
     const first = candidate('v2', '第二个被提议但先展示', 20);
     const second = candidate('v1', '第一个高分候选但后展示', 200);
@@ -428,6 +937,14 @@ describe('FinalGuard evidence monotonicity', () => {
     second.verification.itemMatches = [{
       requestedItem: '柠檬茶', matchedBy: 'name', confidence: 0.9,
     }];
+    for (const selected of hasReferences ? [first, second] : []) {
+      selected.verification.targetEvidence = [{
+        target: '柠檬茶', kind: 'item',
+        verdict: 'supported',
+        observationRef: 'exact-amap',
+        references: [{ restaurantId: selected.restaurant.id, field: 'name', value: selected.restaurant.name }],
+      }];
+    }
     const guarded = applyFinalGuard(context({
       goal: lemonTeaGoal,
       attempts: [exactAttempt],
@@ -440,8 +957,10 @@ describe('FinalGuard evidence monotonicity', () => {
       confidence: 0.7,
     });
 
-    expect(guarded.primaryCandidates.map((item) => item.restaurant.id)).toEqual(['v2', 'v1']);
-    expect(guarded.backupCandidates.map((item) => item.restaurant.id)).toEqual(['c1']);
+    expect(guarded.primaryCandidates.map((item) => item.restaurant.id))
+      .toEqual(hasReferences ? ['v2', 'v1'] : []);
+    expect(guarded.backupCandidates.map((item) => item.restaurant.id))
+      .toEqual(hasReferences ? ['c1'] : ['v2', 'c1', 'v1']);
   });
 
   it('removes candidates carrying hard-constraint failures from both partitions', () => {

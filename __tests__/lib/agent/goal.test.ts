@@ -6,6 +6,7 @@
 
 import {
   applyGoalPatch,
+  applyClarificationOptionToGoal,
   applyClarificationOptionToSession,
 } from '@/lib/agent/goal';
 import type { AgentSession, UserGoal } from '@/lib/agent/types';
@@ -47,6 +48,7 @@ describe('goal algebra', () => {
     expect(patched.hardConstraints).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: 'distance', maxMeters: 500 })])
     );
+    expect(patched.ambiguity).toEqual([]);
   });
 
   it('replaces stale primary targets when a clarification answer names a new target', () => {
@@ -68,6 +70,125 @@ describe('goal algebra', () => {
     expect(patched.requestedItems.map((item) => item.name)).toEqual(['火锅']);
     expect(patched.relatedKeywords).toEqual([]);
     expect(patched.clarificationNeeded).toEqual([]);
+  });
+
+  it('atomically replaces every primary target dimension when one replace field is present', () => {
+    const patched = applyGoalPatch(
+      goal({
+        requestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        acceptableCategories: [
+          { name: '火锅', confidence: 0.9 },
+          { name: '日料', confidence: 0.8 },
+        ],
+        alternativeGroups: [{
+          mode: 'any_of',
+          items: ['火锅', '日料'],
+        }],
+        primaryKeywords: ['火锅', '日料'],
+        authorizations: [
+          {
+            id: 'auth_category',
+            kind: 'category_broaden',
+            createdAt: 1,
+            reason: '用户允许火锅放宽到相邻品类。',
+          },
+          {
+            id: 'auth_fallback',
+            kind: 'fallback_primary',
+            createdAt: 2,
+            reason: '用户允许旧目标开放推荐。',
+          },
+          {
+            id: 'auth_distance',
+            kind: 'distance_expansion',
+            createdAt: 3,
+            reason: '用户允许扩大搜索距离。',
+            constraints: { maxMeters: 5000 },
+          },
+        ],
+        allowBroaden: true,
+      }),
+      {
+        replaceRequestedItems: [{ name: '日料', required: true, aliases: [] }],
+        reason: '用户说换成日料。',
+      },
+      '换成日料'
+    );
+
+    expect(patched.requestedItems.map((item) => item.name)).toEqual(['日料']);
+    expect(patched.acceptableCategories).toEqual([]);
+    expect(patched.alternativeGroups).toEqual([]);
+    expect(patched.primaryKeywords).toEqual(['日料']);
+    expect(patched.authorizations).toEqual([
+      expect.objectContaining({ id: 'auth_distance', kind: 'distance_expansion' }),
+    ]);
+    expect(patched.allowBroaden).toBe(false);
+  });
+
+  it('preserves existing primary targets when a category is explicitly added', () => {
+    const patched = applyGoalPatch(
+      goal({
+        requestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        acceptableCategories: [{ name: '火锅', confidence: 0.9 }],
+        primaryKeywords: ['火锅'],
+      }),
+      {
+        addCategories: [{ name: '日料', confidence: 0.8 }],
+        reason: '用户说再加上日料。',
+      },
+      '再加上日料'
+    );
+
+    expect(patched.requestedItems.map((item) => item.name)).toEqual(['火锅']);
+    expect(patched.acceptableCategories.map((category) => category.name)).toEqual(['火锅', '日料']);
+    expect(patched.primaryKeywords).toEqual(['火锅', '日料']);
+  });
+
+  it('preserves existing targets when a clarification effect explicitly adds another target', () => {
+    const patched = applyClarificationOptionToGoal(
+      goal({
+        rawQuery: '想吃火锅',
+        requestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        primaryKeywords: ['火锅'],
+      }),
+      {
+        question: '还想补充什么？',
+        options: [{ id: 'add_sushi', label: '再加寿司' }],
+        optionEffects: {
+          add_sushi: {
+            addRequestedItems: ['寿司'],
+          },
+        },
+      },
+      'add_sushi'
+    );
+
+    expect(patched?.requestedItems.map((item) => item.name)).toEqual(['火锅', '寿司']);
+    expect(patched?.primaryKeywords).toEqual(['火锅', '寿司']);
+  });
+
+  it('replaces existing targets only when a clarification effect explicitly requests replacement', () => {
+    const patched = applyClarificationOptionToGoal(
+      goal({
+        rawQuery: '想吃火锅',
+        requestedItems: [{ name: '火锅', required: true, aliases: [] }],
+        primaryKeywords: ['火锅'],
+      }),
+      {
+        question: '想换成什么？',
+        options: [{ id: 'replace_with_sushi', label: '换成寿司' }],
+        optionEffects: {
+          replace_with_sushi: {
+            replaceRequestedItems: ['寿司'],
+            replacePrimaryKeywords: ['寿司'],
+          },
+        },
+      },
+      'replace_with_sushi'
+    );
+
+    expect(patched?.requestedItems.map((item) => item.name)).toEqual(['寿司']);
+    expect(patched?.primaryKeywords).toEqual(['寿司']);
   });
 
   it('applies soft preference patches without turning them into requested items', () => {

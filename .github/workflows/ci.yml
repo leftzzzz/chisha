@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 # 同一分支上只保留最新一次运行，旧的直接取消
 concurrency:
@@ -11,19 +15,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: type-check / lint / test
+  quality:
+    name: docs / type-check / lint / coverage / eval
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version-file: .node-version
           cache: npm
 
       - run: npm ci
+
+      - name: Documentation structure and links
+        run: npm run docs:check
+
+      - name: Documentation checker tests
+        run: npm run test:docs
 
       - name: Type check
         run: npm run type-check
@@ -31,10 +42,33 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Unit tests
-        run: npm test
+      - name: Unit tests and coverage
+        run: npm run test:ci
 
       # eval 用桩模型 + fixture 高德驱动真实 loop，不需要任何 API Key。
       # 它锁的是"这一轮总共搜了几步、评了几次"，单测锁不住这层。
       - name: Agent eval (behaviour regression)
         run: npm run eval
+
+  cloudflare-validation:
+    name: OpenNext build / Workers dry-run
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build Cloudflare Worker
+        run: npm run build:cloudflare
+
+      # deploy wrapper 会识别 --dry-run 并跳过远程 D1 migration。
+      - name: Validate Worker bindings and deployment bundle
+        run: npm run deploy -- --dry-run

@@ -50,7 +50,7 @@ describe('amapPoiSearch', () => {
     }
   });
 
-  it('searches each keyword separately with keyword-specific POI types', async () => {
+  it('searches each keyword separately within the fixed restaurant scope', async () => {
     process.env.AMAP_API_KEY = 'test-key';
     process.env.AMAP_MAX_QPS = '1000';
     const requestUrls: string[] = [];
@@ -89,12 +89,49 @@ describe('amapPoiSearch', () => {
     const requests = requestUrls.map((url) => new URL(url).searchParams);
     expect(requests).toHaveLength(2);
     expect(requests.map((params) => params.get('keywords'))).toEqual(['川菜', '咖啡']);
-    expect(requests.map((params) => params.get('types'))).toEqual(['050102', '050500']);
+    expect(requests.map((params) => params.get('types'))).toEqual(['050000', '050000']);
     expect(requests.some((params) => params.get('keywords')?.includes('|'))).toBe(false);
     expect(restaurants.map((restaurant) => restaurant.name)).toEqual(['咖啡店', '川菜馆']);
   });
 
-  it('keeps the caller-provided POI type for a single unknown keyword', async () => {
+  it('keeps different locations from the same brand', async () => {
+    process.env.AMAP_API_KEY = 'test-key';
+    process.env.AMAP_MAX_QPS = '1000';
+
+    jest.doMock('@/lib/withTimeout', () => ({
+      fetchWithTimeout: jest.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          status: '1',
+          count: '2',
+          info: 'OK',
+          infocode: '10000',
+          pois: [
+            amapPoi({
+              id: 'branch-1',
+              name: '同品牌（人民广场店）',
+              location: '121.4737,31.2304',
+              distance: '300',
+            }),
+            amapPoi({
+              id: 'branch-2',
+              name: '同品牌（陆家嘴店）',
+              location: '121.5000,31.2400',
+              distance: '800',
+            }),
+          ],
+        }),
+      })),
+    }));
+
+    const { amapPoiSearch } = await import('@/lib/amap');
+    const restaurants = await amapPoiSearch(['火锅'], location, 1800, undefined, 1);
+
+    expect(restaurants.map((restaurant) => restaurant.id))
+      .toEqual(['amap_branch-1', 'amap_branch-2']);
+  });
+
+  it('ignores caller-provided POI types for a single unknown keyword', async () => {
     process.env.AMAP_API_KEY = 'test-key';
     process.env.AMAP_MAX_QPS = '1000';
     const requestUrls: string[] = [];
@@ -121,10 +158,11 @@ describe('amapPoiSearch', () => {
 
     const params = new URL(requestUrls[0]).searchParams;
     expect(params.get('keywords')).toBe('私房菜');
-    expect(params.get('types')).toBe('050100');
+    expect(params.get('types')).toBe('050000');
   });
 
-  it('normalizes sentence-like keywords before calling Amap', async () => {
+  it.each(['想吃牛排', '羊肉火锅', '无糖柠檬茶', '不辣的川菜', '酸汤牛肉米线'])(
+    'preserves query %s and strict radius in the Amap request', async (query) => {
     process.env.AMAP_API_KEY = 'test-key';
     process.env.AMAP_MAX_QPS = '1000';
     const requestUrls: string[] = [];
@@ -152,11 +190,12 @@ describe('amapPoiSearch', () => {
     }));
 
     const { amapPoiSearch } = await import('@/lib/amap');
-    await amapPoiSearch(['想吃牛排'], location, 1800, undefined, 1);
+    await amapPoiSearch([query], location, 500, '050201', 1);
 
     const params = new URL(requestUrls[0]).searchParams;
-    expect(params.get('keywords')).toBe('牛排');
-    expect(params.get('types')).toBe('050201|050211');
+    expect(params.get('keywords')).toBe(query);
+    expect(params.get('types')).toBe('050000');
+    expect(params.get('radius')).toBe('500');
   });
 
   it('caches successful Amap POI pages to avoid duplicate quota usage', async () => {

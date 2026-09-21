@@ -17,6 +17,8 @@ export interface ModelCallMetrics {
   durationMs: number;
   promptTokens?: number;
   completionTokens?: number;
+  /** False when any attempt lacks usage, including failed transport attempts. */
+  usageComplete?: boolean;
   /** 含截断重试与 schema 修复重试的总请求次数 */
   attempts: number;
   /** 是否降级到 legacy function_call 协议 */
@@ -37,15 +39,18 @@ export interface TurnMetrics {
   /** Sum of merged model-call intervals, excluding gaps and concurrent double counting. */
   modelWallMs: number;
   modelMs: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  knownPromptTokens: number;
+  knownCompletionTokens: number;
+  missingUsageCalls: number;
   retries: number;
   failedModelCalls: number;
   legacyModeCalls: number;
   truncatedCalls: number;
-  byModelRole: Record<string, { calls: number; ms: number; tokens: number }>;
   byModel: Record<string, { calls: number; ms: number; tokens: number; failures: number }>;
+  byModelRole: Record<string, { calls: number; ms: number; tokens: number | null; knownTokens: number }>;
 }
 
 /** 指标容器；AgentContext 结构性满足。 */
@@ -71,10 +76,13 @@ export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics
   const byModel: TurnMetrics['byModel'] = {};
 
   for (const call of calls) {
-    const bucket = byModelRole[call.modelRole] ?? { calls: 0, ms: 0, tokens: 0 };
+    const bucket = byModelRole[call.modelRole] ?? { calls: 0, ms: 0, tokens: 0, knownTokens: 0 };
     bucket.calls += 1;
     bucket.ms += call.durationMs;
-    bucket.tokens += (call.promptTokens ?? 0) + (call.completionTokens ?? 0);
+    const knownTokens = (call.promptTokens ?? 0) + (call.completionTokens ?? 0);
+    bucket.knownTokens += knownTokens;
+    bucket.tokens = bucket.tokens === null || !hasCompleteUsage(call)
+      ? null : bucket.tokens + knownTokens;
     byModelRole[call.modelRole] = bucket;
 
     const model = call.responseModel ?? call.model;
@@ -86,8 +94,11 @@ export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics
     byModel[model] = modelBucket;
   }
 
-  const promptTokens = sum(calls.map((call) => call.promptTokens ?? 0));
-  const completionTokens = sum(calls.map((call) => call.completionTokens ?? 0));
+  const knownPromptTokens = sum(calls.map((call) => call.promptTokens ?? 0));
+  const knownCompletionTokens = sum(calls.map((call) => call.completionTokens ?? 0));
+  const missingUsageCalls = calls.filter((call) => !hasCompleteUsage(call)).length;
+  const promptTokens = missingUsageCalls > 0 ? null : knownPromptTokens;
+  const completionTokens = missingUsageCalls > 0 ? null : knownCompletionTokens;
   const intervalSummary = summarizeCallIntervals(calls);
 
   return {
@@ -97,7 +108,10 @@ export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics
     modelMs: sum(calls.map((call) => call.durationMs)),
     promptTokens,
     completionTokens,
-    totalTokens: promptTokens + completionTokens,
+    totalTokens: missingUsageCalls > 0 ? null : knownPromptTokens + knownCompletionTokens,
+    knownPromptTokens,
+    knownCompletionTokens,
+    missingUsageCalls,
     retries: sum(calls.map((call) => Math.max(0, call.attempts - 1))),
     failedModelCalls: calls.filter((call) => !call.ok).length,
     legacyModeCalls: calls.filter((call) => call.mode === 'functions').length,
@@ -105,6 +119,11 @@ export function summarizeTurnMetrics(sink: MetricsSink | undefined): TurnMetrics
     byModelRole,
     byModel,
   };
+}
+
+function hasCompleteUsage(call: ModelCallMetrics): boolean {
+  return call.usageComplete !== false
+    && call.promptTokens !== undefined && call.completionTokens !== undefined;
 }
 
 function sum(values: number[]): number {

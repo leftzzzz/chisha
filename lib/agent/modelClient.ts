@@ -198,6 +198,7 @@ interface MetricsTracker {
 
 function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTracker {
   const startedAt = Date.now();
+  let responsesWithUsage = 0;
   const state: Omit<ModelCallMetrics, 'durationMs' | 'ok'> = {
     modelRole: options.modelRole,
     model: options.model,
@@ -218,6 +219,9 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
     track(outcome) {
       const responseModel = normalizeResponseModel(outcome.data.model);
       state.responseModel = responseModel ?? state.responseModel;
+      state.mode = outcome.mode;
+      if (validTokenCount(outcome.data.usage?.prompt_tokens)
+        && validTokenCount(outcome.data.usage?.completion_tokens)) responsesWithUsage += 1;
       state.promptTokens = addTokens(state.promptTokens, outcome.data.usage?.prompt_tokens);
       state.completionTokens = addTokens(state.completionTokens, outcome.data.usage?.completion_tokens);
       if (outcome.data.choices?.[0]?.finish_reason === 'length') {
@@ -228,6 +232,7 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
     finish(ok) {
       recordModelCall(options.metricsSink, {
         ...state,
+        usageComplete: responsesWithUsage === state.attempts,
         durationMs: Date.now() - startedAt,
         ok,
       });
@@ -245,11 +250,15 @@ function normalizeResponseModel(value: unknown): string | undefined {
 }
 
 function addTokens(current: number | undefined, next: number | undefined): number | undefined {
-  if (next === undefined) {
+  if (!validTokenCount(next)) {
     return current;
   }
 
   return (current ?? 0) + next;
+}
+
+function validTokenCount(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
 export function parseStructuredModelResponse<T>(
@@ -302,6 +311,7 @@ export function parseStructuredModelResponse<T>(
 
 interface RequestOutcome {
   data: ChatCompletionFunctionResponse;
+  mode: ChatToolCallMode;
 }
 
 async function requestStructuredModel<T>(
@@ -321,7 +331,7 @@ async function requestStructuredModel<T>(
     );
 
     if (response.ok) {
-      return { data: await response.json() };
+      return { data: await response.json(), mode };
     }
 
     const error = await buildChatCompletionError(options.modelRole, options.model, mode, response);

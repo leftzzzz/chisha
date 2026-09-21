@@ -446,6 +446,7 @@ export const HomePage: React.FC = () => {
             onRemove={handleRemove}
             onRetry={handleRetry}
             onShare={() => handleShare()}
+            disabled={turntableOptionCount < MIN_TURNTABLE_OPTIONS}
           />
         </div>
         {(state.agentExplanation || state.agentUnmetConstraints.length > 0) && (

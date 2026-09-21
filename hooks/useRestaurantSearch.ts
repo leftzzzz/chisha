@@ -378,6 +378,11 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
             setAgentSessionId(sessionId);
           },
 
+          onSessionCreated: (sessionId) => {
+            activeSessionIdRef.current = sessionId;
+            setAgentSessionId(sessionId);
+          },
+
           onSessionResumed: (sessionId) => {
             activeSessionIdRef.current = sessionId;
             setAgentSessionId(sessionId);
@@ -433,6 +438,23 @@ export function useRestaurantSearch(): UseRestaurantSearchReturn {
         setStep('READY');
 
       } catch (error) {
+        if (
+          error instanceof APIError
+          && error.code === 'SEARCH_TIMEOUT'
+          && error.sessionId
+          && abortControllerRef.current === abortController
+        ) {
+          activeSessionIdRef.current = error.sessionId;
+          setAgentSessionId(error.sessionId);
+          setProgress({
+            status: 'error',
+            message: '搜索已中断，可以继续当前目标',
+          });
+          setError('搜索已中断，可以继续当前目标');
+          onError?.('SEARCH_TIMEOUT');
+          return;
+        }
+
         // 如果是请求被取消，不显示错误
         if (error instanceof Error && error.name === 'AbortError') {
           console.log('Search request was cancelled');

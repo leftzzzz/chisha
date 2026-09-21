@@ -6,6 +6,7 @@ import {
   nextSearchRadius,
   nextUntriedTarget,
   planSearchBatch,
+  primaryCandidates,
   primaryTargetLabel,
   resolvePlanPoiType,
   untriedTargets,
@@ -17,6 +18,7 @@ import type {
   SearchAttempt,
   UserGoal,
 } from '@/lib/agent/types';
+import { validateSearchPlan } from '@/lib/agent/guards';
 
 const location = { lat: 31.2304, lng: 121.4737, address: '上海市黄浦区' };
 
@@ -101,17 +103,9 @@ describe('policy 搜索半径', () => {
 });
 
 describe('policy poiType 选择', () => {
-  it('prefers the target-provided food poi types', () => {
-    expect(resolvePlanPoiType(goal(), '牛排', ['050118'])).toBe('050118');
-  });
-
-  it('falls back to keyword taxonomy when the target has no usable codes', () => {
-    // 050000 是广义餐饮类，不应作为窄类型使用。
-    expect(resolvePlanPoiType(goal(), '火锅', ['050000'])).toBe('050117');
-  });
-
-  it('ignores a broad food code in favour of the goal poi type', () => {
-    expect(resolvePlanPoiType(goal({ poiType: '050117' }), '未知词', ['050000'])).toBe('050117');
+  it('keeps provider category codes out of search plans', () => {
+    expect(resolvePlanPoiType(goal(), '牛排', ['050118'])).toBeUndefined();
+    expect(resolvePlanPoiType(goal({ poiType: '050117' }), '未知词')).toBeUndefined();
   });
 });
 
@@ -171,6 +165,32 @@ describe('policy 追问', () => {
     // effect 按 id 挂载，不按文案——文案匹配正是追问死循环的成因。
     expect(question.options?.map((option) => option.id)).toContain('expand_distance');
     expect(question.optionEffects?.expand_distance?.setDistanceMaxMeters).toBe(5000);
+  });
+
+  it('explains insufficient evidence instead of blaming a strict distance limit', () => {
+    const strictDistance: Constraint = {
+      kind: 'distance',
+      label: '步行500米内',
+      value: 500,
+      maxMeters: 500,
+      strict: true,
+    };
+    const uncertain = candidate('r1', '名称疑似寿司店');
+    uncertain.verification.status = 'unverified';
+    uncertain.verification.primaryEligible = false;
+    uncertain.verification.itemMatches = [];
+    uncertain.verification.categoryMatches = [];
+    uncertain.verification.warnings = ['没有可追溯菜单证据证明供应寿司。'];
+
+    const question = buildNoPrimaryQuestion(context({
+      goal: goal({ hardConstraints: [strictDistance] }),
+      attempts: [attempt({ found: 1, accepted: 1 })],
+      candidates: [uncertain],
+    }));
+
+    expect(question.reason).toContain('证据不足');
+    expect(question.question).toContain('证据');
+    expect(question.options?.map((option) => option.id)).not.toContain('expand_distance');
   });
 
   it('offers a broaden authorization when nothing passed admission', () => {
@@ -237,6 +257,19 @@ function candidate(id: string, brand: string, sourceAttempt = 1): RestaurantCand
 }
 
 describe('policy 计划批次', () => {
+  it.each(['餐厅', '羊肉火锅', '未知餐饮目标'])(
+    'does not attach provider category codes to the query %s', (keyword) => {
+      const plan = buildSearchPlan(context({ goal: goal({
+        goalId: 'goal_1',
+        poiType: '050117',
+        acceptableCategories: [{ name: '火锅', confidence: 0.9 }],
+      }) }), { keyword, poiTypes: ['050102'] }, 'exact', true, '测试');
+      expect(plan.keywords).toEqual([keyword]);
+      expect(plan.searchAction?.query).toBe(keyword);
+      expect(plan.poiType).toBeUndefined();
+    }
+  );
+
   it('searches every explicit target in one batch', () => {
     const plans = planSearchBatch(context({
       goal: goal({ primaryKeywords: ['牛排', '意面'] }),
@@ -244,6 +277,36 @@ describe('policy 计划批次', () => {
 
     expect(plans.map((plan) => plan.keywords[0])).toEqual(['牛排', '意面']);
     expect(plans.every((plan) => plan.searchIntent === 'exact')).toBe(true);
+  });
+
+  it.each([
+    ['羊肉火锅', '广式羊肉火锅'],
+    ['无糖柠檬茶', '鲜榨柠檬茶'],
+  ])('keeps both modifier targets %s and %s', (first, second) => {
+    const plans = planSearchBatch(context({
+      goal: goal({ primaryKeywords: [first, second] }),
+    }));
+
+    expect(plans.map((plan) => plan.keywords[0])).toEqual([first, second]);
+  });
+
+  it('keeps explicit provider codes out of planning for a malformed target', () => {
+    const malformedTarget = '羊肉火锅';
+    const plan = buildSearchPlan(
+      context({ goal: goal({ primaryKeywords: [malformedTarget], goalId: 'goal_1' }) }),
+      malformedTarget,
+      'exact',
+      true,
+      '测试'
+    );
+    const violations = validateSearchPlan(plan, context({ goal: goal({ primaryKeywords: [malformedTarget], goalId: 'goal_1' }) }));
+
+    expect(malformedTarget).toBe('羊肉火锅');
+    expect(plan.keywords).toEqual(['羊肉火锅']);
+    expect(plan.searchIntent).toBe('exact');
+    expect(plan.searchAction?.query).toBe('羊肉火锅');
+    expect(plan.searchAction?.relation).toBe('exact');
+    expect(violations).toEqual([]);
   });
 
   it('never exceeds the remaining search budget', () => {
@@ -440,6 +503,65 @@ describe('policy 决策', () => {
       expect(decision.plans.map((plan) => plan.keywords[0])).toEqual(['餐厅']);
       expect(decision.plans[0].allowedForPrimary).toBe(true);
     }
+  });
+});
+
+describe('policy 合格候选排序', () => {
+  it('按确定性推荐效用排序，不使用模型置信度作为质量分', () => {
+    const far = candidate('far', '远店');
+    far.score = 8;
+    far.verification.confidence = 1;
+    const near = candidate('near', '近店');
+    near.score = 30;
+    near.verification.confidence = 0.5;
+
+    const ranked = primaryCandidates(context({
+      attempts: [attempt()],
+      candidates: [far, near],
+    }));
+
+    expect(ranked.map((item) => item.restaurant.id)).toEqual(['near', 'far']);
+  });
+
+  it('只在同一 Provider 的候选内归一化评分', () => {
+    const lowerRated = candidate('low-rating', '低评分店');
+    lowerRated.score = 20;
+    lowerRated.restaurant.rating = 3.8;
+    const higherRated = candidate('high-rating', '高评分店');
+    higherRated.score = 20;
+    higherRated.restaurant.rating = 4.8;
+
+    const sameProvider = primaryCandidates(context({
+      attempts: [attempt()],
+      candidates: [lowerRated, higherRated],
+    }));
+    expect(sameProvider.map((item) => item.restaurant.id))
+      .toEqual(['high-rating', 'low-rating']);
+
+    higherRated.restaurant.source = 'osm';
+    const differentProviders = primaryCandidates(context({
+      attempts: [attempt()],
+      candidates: [lowerRated, higherRated],
+    }));
+    expect(differentProviders.map((item) => item.restaurant.id))
+      .toEqual(['low-rating', 'high-rating']);
+  });
+
+  it('保留同品牌不同门店，并把品牌多样性放在重复品牌之前', () => {
+    const firstBranch = candidate('brand-1', '同品牌（人民广场店）');
+    firstBranch.score = 30;
+    const secondBranch = candidate('brand-2', '同品牌（陆家嘴店）');
+    secondBranch.score = 28;
+    const otherBrand = candidate('other', '另一品牌');
+    otherBrand.score = 10;
+
+    const ranked = primaryCandidates(context({
+      attempts: [attempt()],
+      candidates: [firstBranch, secondBranch, otherBrand],
+    }));
+
+    expect(ranked.map((item) => item.restaurant.id))
+      .toEqual(['brand-1', 'other', 'brand-2']);
   });
 });
 

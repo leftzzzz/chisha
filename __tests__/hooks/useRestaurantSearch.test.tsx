@@ -128,6 +128,46 @@ describe('useRestaurantSearch', () => {
     expect(setAgentSessionId).toHaveBeenCalledWith('session_1');
   });
 
+  it('keeps an interrupted session resumable after a stream timeout', async () => {
+    (agentChat as jest.Mock)
+      .mockImplementationOnce(async (_message, _location, callbacks) => {
+        callbacks.onSessionCreated?.('session_interrupted');
+        throw new APIError(
+          '搜索超时，请重试',
+          'SEARCH_TIMEOUT',
+          undefined,
+          'session_interrupted'
+        );
+      })
+      .mockImplementationOnce(async () => ({
+        restaurants: [{
+          id: 'r1',
+          name: '寿司店',
+          cuisineType: '日本料理',
+          address: '测试地址',
+          location,
+          source: 'amap',
+        }],
+        candidates: [],
+        sessionId: 'session_interrupted',
+        explanation: '继续完成搜索。',
+        unmetConstraints: [],
+      }));
+
+    const { result } = renderHook(() => useRestaurantSearch());
+
+    await act(async () => {
+      await result.current.search('想吃日料', location);
+    });
+    await act(async () => {
+      await result.current.search('继续', location);
+    });
+
+    expect(result.current.progress.status).toBe('done');
+    expect((agentChat as jest.Mock).mock.calls[1][4]).toBe('session_interrupted');
+    expect(setAgentSessionId).toHaveBeenCalledWith('session_interrupted');
+  });
+
   it('stores Agent questions in app state', async () => {
     (agentChat as jest.Mock).mockImplementationOnce(async (_message, _location, callbacks) => {
       callbacks.onQuestion?.({

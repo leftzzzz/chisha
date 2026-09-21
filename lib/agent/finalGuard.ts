@@ -1,4 +1,5 @@
 import type {
+  AgentObservation,
   AgentContext,
   FinalGuardResult,
   FinalGuardVerdict,
@@ -13,6 +14,7 @@ import {
   isSearchIntentAuthorizedForPrimary,
 } from './authorization';
 import { getRestaurantIdentityKeys } from '@/lib/restaurantIdentity';
+import { TargetEvidenceSchema } from './schemas/verdict';
 
 export function applyFinalGuard(
   context: AgentContext,
@@ -37,7 +39,7 @@ export function applyFinalGuard(
   ];
 
   for (const candidate of dedupedPrimary.candidates) {
-    const violation = primaryAdmissionViolation(candidate, context);
+    const violation = getPrimaryRecommendationAdmissionViolation(candidate, context);
     if (!violation && primaryCandidates.length < context.targetCount) {
       primaryCandidates.push(candidate);
       continue;
@@ -128,7 +130,12 @@ export function applyFinalGuard(
  * 主推荐准入所需的最小上下文。
  * AgentContext / PolicyContext 均结构性满足，便于策略层复用。
  */
-export type CandidateAdmissionContext = Pick<AgentContext, 'goal' | 'attempts' | 'location'>;
+export type CandidateAdmissionContext = Pick<
+  AgentContext,
+  'goal' | 'attempts' | 'location'
+> & {
+  observations?: AgentObservation[];
+};
 
 type PrimaryAdmissionViolation = Pick<FinalGuardViolation, 'code' | 'message'>;
 
@@ -136,7 +143,7 @@ export function isPrimaryRecommendationAllowed(
   candidate: RestaurantCandidate,
   context: CandidateAdmissionContext
 ): boolean {
-  return primaryAdmissionViolation(candidate, context) === undefined;
+  return getPrimaryRecommendationAdmissionViolation(candidate, context) === undefined;
 }
 
 /**
@@ -150,7 +157,7 @@ export function isPrimaryRecommendationEligible(
   return isPrimaryRecommendationAllowed(candidate, context);
 }
 
-function primaryAdmissionViolation(
+export function getPrimaryRecommendationAdmissionViolation(
   candidate: RestaurantCandidate,
   context: CandidateAdmissionContext
 ): PrimaryAdmissionViolation | undefined {
@@ -238,9 +245,59 @@ function primaryAdmissionViolation(
     };
   }
 
+  // 旧会话的匹配标签不算引用；核验来源只能收紧准入，不能生成语义结论。
+  const supportedTargets = new Set(
+    (candidate.verification.targetEvidence ?? []).flatMap((evidence) => {
+      const parsed = TargetEvidenceSchema.safeParse(evidence);
+      if (!parsed.success) return [];
+      const { target, kind, references, observationRef, verdict } = parsed.data;
+      const observation = observationRef
+        ? context.observations?.find((item) => item.plan.planId === observationRef)
+        : undefined;
+      const observationValid = Boolean(
+        observation
+        && observation.plan.planId === observationRef
+        && observation.provider === candidate.restaurant.source
+        && typeof observation.fetchedAt === 'number'
+        && observationMatchesCurrentGoal(observation, candidate, context.goal)
+      );
+      const declaredMatch = kind === 'item'
+        ? verdict === 'supported'
+          && candidate.verification.itemMatches.some((match) => match.requestedItem === target)
+        : verdict === 'supported'
+          && candidate.verification.categoryMatches.includes(target)
+          && !context.goal.requestedItems.some((item) => item.name === target);
+      const referencesValid = references.every((reference) =>
+        reference.restaurantId === candidate.restaurant.id
+        && reference.value.trim().length > 0
+        && candidate.restaurant[reference.field] === reference.value
+        && observation?.facts?.some((fact) =>
+          fact.id === reference.restaurantId
+          && fact.source === candidate.restaurant.source
+          && fact[reference.field] === reference.value
+        )
+      );
+      return declaredMatch && referencesValid && observationValid ? [target] : [];
+    })
+  );
+  const unsupportedGroup = context.goal.alternativeGroups.some((group) =>
+    group.items.length === 0 || (group.mode === 'all_of'
+      ? !group.items.every((item) => supportedTargets.has(item))
+      : !group.items.some((item) => supportedTargets.has(item)))
+  );
+  if (unsupportedGroup) {
+    return {
+      code: 'REQUIRED_ITEM_UNSUPPORTED',
+      message: `候选「${candidate.restaurant.name}」缺少必选目标组的完整证据，只能作为候补。`,
+    };
+  }
+
   if (
-    hasRequiredItems(context)
-    && candidate.verification.itemMatches.length === 0
+    context.goal.requestedItems.some((item) =>
+      item.required
+      && !context.goal.alternativeGroups.some((group) => group.items.includes(item.name))
+      && !supportedTargets.has(item.name)
+    )
     && !(
       isBroadSearchIntent(sourceAttempt.searchIntent)
       && isSearchIntentAuthorizedForPrimary(
@@ -257,6 +314,28 @@ function primaryAdmissionViolation(
   }
 
   return undefined;
+}
+
+function observationMatchesCurrentGoal(
+  observation: AgentObservation,
+  candidate: RestaurantCandidate,
+  goal: CandidateAdmissionContext['goal']
+): boolean {
+  // Runtime 会为当前目标补齐版本；未版本化只保留给不经过 Runtime 的旧调用兼容。
+  if (!goal.goalSignature) {
+    return true;
+  }
+
+  return Boolean(
+    goal.goalId
+    && goal.goalVersion !== undefined
+    && observation.goalId === goal.goalId
+    && observation.goalVersion === goal.goalVersion
+    && observation.goalSignature === goal.goalSignature
+    && candidate.goalId === observation.goalId
+    && candidate.verifiedAgainstGoalVersion === observation.goalVersion
+    && candidate.verifiedAgainstGoalSignature === observation.goalSignature
+  );
 }
 
 function isBackupRecommendationAllowed(
@@ -426,10 +505,6 @@ function buildUnmetConstraints(
   }
 
   return Array.from(new Set(unmet.filter(Boolean)));
-}
-
-function hasRequiredItems(context: CandidateAdmissionContext): boolean {
-  return context.goal.requestedItems.some((item) => item.required);
 }
 
 function deterministicHardConstraintMessage(

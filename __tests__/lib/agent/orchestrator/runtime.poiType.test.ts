@@ -66,7 +66,7 @@ describe('runSearchAgentV3 POI type selection', () => {
     jest.resetModules();
   });
 
-  it('uses selected Amap POI type and rejects unrelated exact-keyword retrievals', async () => {
+  it('evaluates candidate evidence without narrowing retrieval by Amap POI type', async () => {
     jest.doMock('@/lib/agent/models/goalUnderstandingModel', () => {
       const actual = jest.requireActual('@/lib/agent/models/goalUnderstandingModel');
       return {
@@ -92,9 +92,9 @@ describe('runSearchAgentV3 POI type selection', () => {
         restaurants: Restaurant[];
         targetCount: number;
       }) => {
-        const allowedPoiTypes = evaluationInput.plan.poiType?.split('|') ?? [];
+        const acceptableNames = new Set(['港式奶茶铺']);
         const verdicts = evaluationInput.restaurants.map((item) => {
-          const accepted = allowedPoiTypes.includes(item.poiTypeCode ?? '');
+          const accepted = acceptableNames.has(item.name);
 
           return {
             restaurantId: item.id,
@@ -102,6 +102,11 @@ describe('runSearchAgentV3 POI type selection', () => {
             primaryEligible: accepted && evaluationInput.plan.allowedForPrimary,
             confidence: accepted ? 0.9 : 0.2,
             matchedItems: accepted ? ['港式奶茶'] : [],
+            targetEvidence: accepted ? [{
+              target: '港式奶茶', kind: 'item',
+              verdict: 'supported',
+              references: [{ restaurantId: item.id, field: 'name', value: item.name }],
+            }] : [],
             matchedCategories: accepted ? ['奶茶'] : [],
             conflicts: accepted ? [] : ['Agent 语义验证未通过。'],
             evidence: accepted ? ['Agent 验证为港式奶茶相关候选。'] : [],
@@ -140,7 +145,7 @@ describe('runSearchAgentV3 POI type selection', () => {
 
     expect(searchedPlans[0]).toEqual(expect.objectContaining({
       keywords: ['港奶'],
-      poiType: '050700',
+      poiType: undefined,
     }));
     expect(result.restaurants.map((item) => item.name)).toEqual(['港式奶茶铺']);
     expect(result.candidates.map((item) => item.name)).not.toContain('椰子鸡');

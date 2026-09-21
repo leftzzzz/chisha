@@ -63,6 +63,29 @@ describe('summarizeTurnMetrics 串行步数', () => {
       modelWallMs: 0,
       byModel: {},
     }));
+    expect(summarizeTurnMetrics(undefined).serialModelSteps).toBe(0);
+    expect(summarizeTurnMetrics(undefined).totalTokens).toBe(0);
+  });
+
+  it('keeps missing usage unknown while reporting known subtotals', () => {
+    const metrics = summarizeTurnMetrics({ modelCallMetrics: [
+      call({ promptTokens: 10, completionTokens: 5 }),
+      call({ ok: false }),
+    ] });
+    expect(metrics).toMatchObject({
+      promptTokens: null, completionTokens: null, totalTokens: null,
+      knownPromptTokens: 10, knownCompletionTokens: 5, missingUsageCalls: 1,
+    });
+    expect(metrics.byModelRole.TestAgent).toMatchObject({ tokens: null, knownTokens: 15 });
+  });
+
+  it('does not turn incomplete retry usage into a complete total', () => {
+    expect(summarizeTurnMetrics({ modelCallMetrics: [
+      call({ promptTokens: 10, completionTokens: 5, attempts: 2, usageComplete: false }),
+    ] }).totalTokens).toBeNull();
+    expect(summarizeTurnMetrics({ modelCallMetrics: [
+      call({ promptTokens: 0, completionTokens: 0, usageComplete: true }),
+    ] }).totalTokens).toBe(0);
   });
 
   it('groups by the provider response model and reports failures', () => {

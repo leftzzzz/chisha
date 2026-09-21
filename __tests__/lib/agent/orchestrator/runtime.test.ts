@@ -105,6 +105,11 @@ jest.mock('@/lib/agent/models/evaluationModel', () => ({
         primaryEligible: accepted && input.plan.allowedForPrimary,
         confidence: accepted ? 0.9 : 0.2,
         matchedItems: matchesSearchKeyword ? input.plan.keywords : [],
+        targetEvidence: matchesSearchKeyword ? input.plan.keywords.map((target) => ({
+          target, kind: 'item',
+          verdict: 'supported',
+          references: [{ restaurantId: item.id, field: 'name', value: item.name }],
+        })) : [],
         matchedCategories: matchesSearchKeyword ? [item.cuisineType] : [],
         conflicts: accepted ? [] : ['Agent 语义验证未通过。'],
         evidence: accepted ? [`Agent 验证「${item.name}」符合搜索意图。`] : [],
@@ -130,7 +135,7 @@ jest.mock('@/lib/agent/models/evaluationModel', () => ({
   }),
 }));
 
-import { runSearchAgentV3 } from '@/lib/agent/orchestrator/runtime';
+import { runSearchAgentV3, summarizeAction } from '@/lib/agent/orchestrator/runtime';
 import { runGoalUnderstandingModel } from '@/lib/agent/models/goalUnderstandingModel';
 import { runEvaluationModel } from '@/lib/agent/models/evaluationModel';
 import { deriveLocationSignature, withUpdatedGoalVersion } from '@/lib/agent/goalVersion';
@@ -193,6 +198,17 @@ function input(searchGoal: UserGoal, query = searchGoal.rawQuery): AgentInput {
 describe('runSearchAgentV3', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  it('summarizes a clarification action with the user-facing question', () => {
+    expect(summarizeAction({
+      type: 'ask_user',
+      question: {
+        reason: '内部诊断信息不应直接展示给用户，且可能很长。',
+        question: '你更想吃哪一类？',
+        allowFreeText: true,
+      },
+    })).toBe('你更想吃哪一类？');
   });
 
   it('uses Supervisor actions and FinalGuard for primary recommendations', async () => {
@@ -875,18 +891,10 @@ describe('runSearchAgentV3', () => {
     expect(error).toBeInstanceOf(AgentRunError);
     expect(error.code).toBe('MODEL_QUOTA_EXHAUSTED');
     expect(searchedPlans).toEqual([]);
-    // 目标还没解析出来，本轮不写任何会话状态，已有结果不会被抹掉。
-    expect(error.runtimeState).toBeUndefined();
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('agent turn failed before runtime context'));
-    const metricLog = JSON.parse(errorSpy.mock.calls.at(-1)?.[0] as string);
-    expect(metricLog.data).toEqual(expect.objectContaining({
-      modelCalls: 1,
-      failedModelCalls: 1,
-      byModel: expect.objectContaining({
-        'qwen3.7-flash': expect.objectContaining({ failures: 1 }),
-      }),
-    }));
-    errorSpy.mockRestore();
+    // 理解失败只增加失败轨迹，不伪造目标或清除已有结果。
+    expect(error.runtimeState).toMatchObject({ attempts: [], candidates: [] });
+    expect(error.runtimeState.goal).toBeUndefined();
+    expect(error.runtimeState.trace.at(-1).output).toMatchObject({ outcome: 'failed' });
   });
 
   it('does not fall back to raw-query search when the Supervisor fails', async () => {
@@ -1055,9 +1063,10 @@ describe('runSearchAgentV3', () => {
     }));
     expect(second.restaurants.map((item) => item.name)).toEqual(['重庆火锅']);
     expect(second.runtimeState?.goal.primaryKeywords).toEqual(['火锅']);
+    expect(second.unmetConstraints).not.toContain('用户补充了新的主目标。');
   });
 
-  it('normalizes sentence keywords before executing search tools', async () => {
+  it('preserves sentence keywords before executing search tools', async () => {
     const plans: SearchPlan[] = [];
     await runSearchAgentV3(
       input(goal({
@@ -1072,7 +1081,7 @@ describe('runSearchAgentV3', () => {
       }
     );
 
-    expect(plans[0].keywords).toEqual(['牛排']);
+    expect(plans[0].keywords).toEqual(['想吃牛排']);
   });
 
   it('continues with related keywords when exact cuisine search returns too few results', async () => {
@@ -1106,7 +1115,7 @@ describe('runSearchAgentV3', () => {
     expect(result.restaurants.length).toBeGreaterThan(3);
   });
 
-  it('fans out broadened keyword targets with their own POI types', async () => {
+  it('fans out broadened keyword targets without provider category plans', async () => {
     const plans: SearchPlan[] = [];
     const events: AgentEvent[] = [];
     const result = await runSearchAgentV3(
@@ -1143,13 +1152,11 @@ describe('runSearchAgentV3', () => {
     expect(result.paused).not.toBe(true);
     expect(plans.map((plan) => [plan.keywords, plan.poiType])).toEqual([
       [['火星菜'], undefined],
-      [['日料'], '050202'],
-      [['韩餐'], '050203'],
-      [['东南亚菜'], '050206|050217'],
+      [['日料'], undefined],
+      [['韩餐'], undefined],
+      [['东南亚菜'], undefined],
     ]);
-    expect(plans.some((plan) =>
-      plan.keywords.length > 1 && plan.poiType === '050103|050104|050108'
-    )).toBe(false);
+    expect(plans.every((plan) => plan.poiType === undefined)).toBe(true);
     expect(events.some((event) =>
       event.type === 'tool_start'
       && (event.args as SearchPlan).keywords.join('|') === '日料|韩餐|东南亚菜'

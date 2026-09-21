@@ -113,6 +113,10 @@ and-swap。
 或 Provider lease 续期失败都会中止对应工作，避免失去容量所有权后继续调用上游。无法取消
 的已发请求仍受全局 lease 与上游超时约束。
 
+Cloudflare Workers 的 OpenNext 包装层负责把返回流的 `cancel()` 传回 route 请求信号。
+生产配置必须启用 `enable_request_signal`；该 flag 才会让传入 `Request.signal` 在客户端
+取消时触发 abort 监听。没有这个运行时事件，仅存在包装代码不能证明线上取消链路生效。
+
 ### 错误与降级
 
 高德错误分为：
@@ -135,6 +139,12 @@ and-swap。
 OpenNext 生成 `.open-next/worker.js`。仓库提供薄 Worker 入口，转发 OpenNext 默认 handler
 并导出 Durable Object 类；`wrangler.jsonc` 将 `main` 指向该入口，声明 binding 与 SQLite
 migration。构建后用 Wrangler 校验真实 bundle，不能只靠 Next.js 类型检查。
+
+生产 owner Cookie 带 `Secure`，因此 Worker 入口先处理协议不变量：公网 `http:` 请求以
+`308 Permanent Redirect` 升级到保持 host、path 和 query 不变的 `https:` URL，再进入
+OpenNext。`308` 用于确保旧手机页面发出的 `/api/agent/chat` POST 在跳转后仍保留方法和
+请求体；本地回环 host 不重定向。Cloudflare Zone 同时开启 Always Use HTTPS 可作为边缘层
+纵深保护，但代码入口不能依赖该控制台开关才能维持会话正确性。
 
 生产缺少 `PROVIDER_SCHEDULER` 或 `SESSION_OWNER_SECRET` 时失败关闭。测试和明确的本地开发
 模式可以使用进程内调度器，但日志必须标明非全局语义。

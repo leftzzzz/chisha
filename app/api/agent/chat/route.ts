@@ -325,9 +325,16 @@ export async function POST(request: Request) {
       }
 
       const activeSession: AgentSession = session;
+      let terminalEvent: AgentEvent | undefined;
 
       try {
         const shouldResumeSession = Boolean(requestData.sessionId);
+        if (!shouldResumeSession) {
+          sendEvent(controller, {
+            type: 'session_created',
+            sessionId: activeSession.id,
+          });
+        }
 
         // 会话消息记录用选项的展示文案，保证 messages 对人可读；
         // 但传给 Agent 的是 optionId，语义判断绝不依赖这段文案。
@@ -380,7 +387,14 @@ export async function POST(request: Request) {
 
         const result = await runSearchAgentV3(
           input,
-          (event) => sendEvent(controller, event),
+          (event) => {
+            if (streamCancelled || signal.aborted) return;
+            if (event.type === 'final' || event.type === 'done') {
+              if (event.type === 'final' || !terminalEvent) terminalEvent = event;
+              return;
+            }
+            sendEvent(controller, event);
+          },
           async (plan: SearchPlan) => {
             try {
               const restaurants = await amapPoiSearch(
@@ -448,6 +462,9 @@ export async function POST(request: Request) {
           }
         );
 
+        if (signal.aborted) {
+          throw new AgentRunError('Agent run cancelled', 'CANCELLED', result.runtimeState);
+        }
         if (result.runtimeState) {
           await applyRuntimeStateToSessionAsync(session, result.runtimeState);
         }
@@ -467,43 +484,52 @@ export async function POST(request: Request) {
         session.pendingQuestion = undefined;
         await appendAssistantMessageAsync(session, result.explanation);
         await saveAgentSessionAsync(session);
+        if (streamCancelled || signal.aborted) return;
+        if (terminalEvent) sendEvent(controller, terminalEvent);
         sendSessionUpdated(controller, session);
         stopHeartbeat();
       } catch (error) {
+        let persistenceFailed = false;
+        // Keep the lease until the recoverable snapshot has been saved. A lost
+        // lease cannot write: another request may already own this session.
+        if (!admissionLeaseLost && error instanceof AgentRunError && error.runtimeState) {
+          try {
+            await applyRuntimeStateToSessionAsync(activeSession, error.runtimeState);
+          } catch {
+            persistenceFailed = true;
+            logger.warn('Failed to persist runtime state', {
+              sessionId: activeSession.id, code: 'SESSION_PERSIST_FAILED',
+              originalCode: error.code,
+            });
+          }
+        }
         if (streamCancelled || requestSignal.aborted) {
-          logger.info('Agent chat stream cancelled', { sessionId: activeSession.id });
+          logger.info('Agent chat stream cancelled', {
+            sessionId: activeSession.id, persistenceFailed,
+          });
           return;
         }
         // 失败的 turn 也要留痕：AgentRunError 携带失败前的运行状态，
         // 先落库再报错，否则最需要 trace 的这一轮什么都查不到。
         const code: AgentErrorCode = admissionLeaseLost
           ? 'RATE_LIMITED'
+          : persistenceFailed ? 'SESSION_PERSIST_FAILED'
           : error instanceof AgentRunError
             ? error.code
             : error instanceof AgentError ? error.code : 'UNKNOWN';
         const message = admissionLeaseLost
           ? '请求运行租约已失效，请重试'
+          : persistenceFailed ? '本次运行未完成，且会话状态保存失败，请稍后重试。'
           : error instanceof Error ? error.message : 'Agent 对话搜索失败';
         // 可恢复性由抛出点决定：配额耗尽这类错误重试 100% 失败，
         // 前端据此不展示重试入口。
-        const recoverable = admissionLeaseLost || resolveRecoverable(error, code);
+        const recoverable = admissionLeaseLost || persistenceFailed || resolveRecoverable(error, code);
 
         logger.error('Agent chat stream error', {
           sessionId: activeSession?.id,
           code,
           error: message,
         });
-
-        if (error instanceof AgentRunError && error.runtimeState && activeSession) {
-          try {
-            await applyRuntimeStateToSessionAsync(activeSession, error.runtimeState);
-          } catch (persistError) {
-            logger.warn('Failed to persist runtime state for a failed turn', {
-              sessionId: activeSession.id,
-              error: persistError instanceof Error ? persistError.message : String(persistError),
-            });
-          }
-        }
 
         sendEvent(controller, {
           type: 'error',

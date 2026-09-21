@@ -1,6 +1,6 @@
 import { AgentActionSchema } from '@/lib/agent/schemas/action';
 import { GoalUnderstandingOutputSchema } from '@/lib/agent/schemas/clarification';
-import { UserGoalSchema } from '@/lib/agent/schemas/goal';
+import { GoalPatchSchema, UserGoalSchema } from '@/lib/agent/schemas/goal';
 import { KeywordExpansionOutputSchema } from '@/lib/agent/schemas/keywordExpansion';
 import { SearchPlanSchema } from '@/lib/agent/schemas/plan';
 import { EvaluationModelOutputSchema } from '@/lib/agent/schemas/verdict';
@@ -65,6 +65,124 @@ describe('Agent schema defaults', () => {
     }));
     expect(parsed.softPreferences).toEqual([{ name: '清淡', weight: 1, verifiable: false }]);
     expect(parsed.allowBroaden).toBe(false);
+  });
+
+  it('fails closed when any hard constraint is malformed', () => {
+    const invalidConstraint = { kind: 'menu_contains_unsupported_field' };
+    const strictDistance = {
+      kind: 'distance',
+      label: '500米内',
+      maxMeters: 500,
+      strict: true,
+    };
+
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '500米内的羊肉火锅，不要辣',
+      hardConstraints: [strictDistance, invalidConstraint],
+    })).toThrow(/Invalid enum value.*menu_contains_unsupported_field/);
+  });
+
+  it('rejects a patch with mixed valid and invalid added constraints', () => {
+    expect(() => GoalPatchSchema.parse({
+      addConstraints: [
+        { kind: 'distance', maxMeters: 500, strict: true },
+        { kind: 'invalid_constraint_kind' },
+      ],
+      reason: '增加距离与其他限制',
+    })).toThrow();
+  });
+
+  it('preserves optional and scalar constraint patch inputs', () => {
+    expect(GoalPatchSchema.parse({}).addConstraints).toBeUndefined();
+    expect(GoalPatchSchema.parse({ addConstraints: null }).addConstraints).toBeUndefined();
+    expect(GoalPatchSchema.parse({ addConstraints: [] }).addConstraints).toEqual([]);
+    const constraint = { kind: 'distance', label: '500米内', maxMeters: 500, strict: true };
+    expect(GoalPatchSchema.parse({ addConstraints: constraint }).addConstraints)
+      .toEqual([constraint]);
+    expect(GoalPatchSchema.parse({ addConstraints: [constraint] }).addConstraints)
+      .toEqual([constraint]);
+    expect(() => GoalPatchSchema.parse({ addConstraints: 'invalid' })).toThrow();
+  });
+
+  it('rejects mixed valid and invalid goal targets instead of erasing the valid entries', () => {
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '想吃牛排，不要川菜',
+      requestedItems: [
+        { name: '牛排' },
+        { required: true },
+      ],
+      exclusions: ['川菜'],
+    })).toThrow();
+
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '想吃牛排，不要川菜',
+      requestedItems: [{ name: '牛排' }],
+      exclusions: ['川菜', 42],
+    })).toThrow();
+  });
+
+  it('rejects malformed target patch fields instead of applying a partial update', () => {
+    expect(() => GoalPatchSchema.parse({
+      addRequestedItems: [
+        { name: '牛排' },
+        { required: true },
+      ],
+      reason: '追加菜品',
+    })).toThrow();
+
+    expect(() => GoalPatchSchema.parse({
+      replacePrimaryKeywords: ['牛排', 42],
+      addConstraints: {
+        kind: 'distance',
+        maxMeters: 500,
+        strict: true,
+      },
+      reason: '替换目标并增加距离限制',
+    })).toThrow();
+  });
+
+  it('rejects malformed executable clarification effects instead of keeping inert options', () => {
+    expect(() => GoalUnderstandingOutputSchema.parse({
+      question: {
+        question: '你想吃牛排还是日料？',
+        options: ['牛排', '日料'],
+        optionEffects: {
+          牛排: {
+            addRequestedItems: [
+              { name: '牛排' },
+              { required: true },
+            ],
+          },
+        },
+      },
+    })).toThrow();
+  });
+
+  it('rejects malformed hard-constraint fields instead of silently dropping them', () => {
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '500米内，不要川菜',
+      hardConstraints: [{
+        kind: 'distance',
+        label: '500米内',
+        maxMeters: 'not-a-number',
+        strict: true,
+      }],
+    })).toThrow();
+
+    expect(() => UserGoalSchema.parse({
+      intent: 'find_restaurants',
+      rawQuery: '不要川菜',
+      hardConstraints: [{
+        kind: 'exclude_category',
+        label: '排除川菜',
+        values: ['川菜', 42],
+        strict: true,
+      }],
+    })).toThrow();
   });
 
   it('defaults optional explanation fields in action and plan outputs', () => {
