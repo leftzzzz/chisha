@@ -189,6 +189,7 @@ async function runStructuredModelCall<T>(
 }
 
 interface MetricsTracker {
+  /** Record one request only after the provider lease has been acquired. */
   startAttempt(mode: ChatToolCallMode): void;
   /** 记录一次 HTTP 往返，并原样返回响应体供后续解析。 */
   track(outcome: RequestOutcome): ChatCompletionFunctionResponse;
@@ -201,6 +202,7 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
   const state: Omit<ModelCallMetrics, 'durationMs' | 'ok'> = {
     modelRole: options.modelRole,
     model: options.model,
+    responseModel: undefined,
     startedAt,
     promptTokens: undefined,
     completionTokens: undefined,
@@ -215,6 +217,8 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
       state.mode = mode;
     },
     track(outcome) {
+      const responseModel = normalizeResponseModel(outcome.data.model);
+      state.responseModel = responseModel ?? state.responseModel;
       state.mode = outcome.mode;
       if (validTokenCount(outcome.data.usage?.prompt_tokens)
         && validTokenCount(outcome.data.usage?.completion_tokens)) responsesWithUsage += 1;
@@ -234,6 +238,15 @@ function createMetricsTracker<T>(options: StructuredModelOptions<T>): MetricsTra
       });
     },
   };
+}
+
+function normalizeResponseModel(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  return normalized || undefined;
 }
 
 function addTokens(current: number | undefined, next: number | undefined): number | undefined {
@@ -310,8 +323,12 @@ async function requestStructuredModel<T>(
   let lastError: Error | undefined;
 
   for (const mode of modes) {
-    tracker.startAttempt(mode);
-    const response = await requestChatCompletion(options, maxTokens, mode);
+    const response = await requestChatCompletion(
+      options,
+      maxTokens,
+      mode,
+      () => tracker.startAttempt(mode)
+    );
 
     if (response.ok) {
       return { data: await response.json(), mode };
@@ -342,7 +359,8 @@ async function requestStructuredModel<T>(
 async function requestChatCompletion<T>(
   options: StructuredModelOptions<T>,
   maxTokens: number,
-  mode: ChatToolCallMode
+  mode: ChatToolCallMode,
+  onRequestStart: () => void
 ): Promise<Response> {
   try {
     const body = buildChatCompletionRequestBody(options, maxTokens, mode);
@@ -350,6 +368,7 @@ async function requestChatCompletion<T>(
       providerSchedulerName('model', `${options.baseUrl}|${options.model}`),
       getProviderSchedulerConfig('model'),
       async (_lease, leaseSignal) => {
+        onRequestStart();
         const response = await fetchWithTimeout(
           `${options.baseUrl}/chat/completions`,
           {
@@ -452,7 +471,7 @@ function buildChatCompletionRequestBody<T>(
     body.temperature = options.temperature;
   }
 
-  if (shouldDisableQwenThinkingForForcedTool(options)) {
+  if (shouldDisableBailianThinkingForForcedTool(options)) {
     body.enable_thinking = false;
   }
 
@@ -474,24 +493,16 @@ function isReasoningChatModel(model: string): boolean {
   return /^o\d/.test(normalized) || normalized.startsWith('gpt-5');
 }
 
-function shouldDisableQwenThinkingForForcedTool<T>(options: StructuredModelOptions<T>): boolean {
-  const override = process.env.QWEN_ENABLE_THINKING?.toLowerCase();
-  if (override === 'true') {
-    return false;
-  }
-
-  if (override === 'false') {
-    return true;
-  }
-
-  return isQwenCompatibleRequest(options.model, options.baseUrl);
+function shouldDisableBailianThinkingForForcedTool<T>(options: StructuredModelOptions<T>): boolean {
+  return isBailianOrQwenRequest(options.model, options.baseUrl);
 }
 
-function isQwenCompatibleRequest(model: string, baseUrl: string): boolean {
+function isBailianOrQwenRequest(model: string, baseUrl: string): boolean {
   const normalizedModel = model.toLowerCase();
   const normalizedBaseUrl = baseUrl.toLowerCase();
   return normalizedModel.startsWith('qwen')
     || normalizedBaseUrl.includes('dashscope')
+    || normalizedBaseUrl.includes('.maas.aliyuncs.com')
     || normalizedBaseUrl.includes('qwen');
 }
 

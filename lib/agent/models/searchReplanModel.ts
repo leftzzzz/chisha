@@ -23,12 +23,8 @@ import type {
   UserGoal,
   UserPreferenceSummary,
 } from '../types';
+import { resolveStructuredModelConfig } from '../modelConfig';
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const OPENAI_MODEL = process.env.OPENAI_MODEL_PLANNER
-  || process.env.OPENAI_MODEL
-  || 'deepseek-v4-flash-0731';
 const REPLAN_TIMEOUT = 60000;
 
 /** 已经试过什么、结果如何——由编排层汇总后传入，不给全量运行时状态。 */
@@ -143,7 +139,8 @@ const REPLAN_FUNCTION = {
 export async function runSearchReplan(
   input: SearchReplanInput
 ): Promise<SearchReplanOutput | null> {
-  if (!OPENAI_API_KEY || isDeterministicMode()) {
+  const modelConfig = resolveStructuredModelConfig('planner');
+  if (!modelConfig.apiKey || isDeterministicMode()) {
     return null;
   }
 
@@ -151,9 +148,9 @@ export async function runSearchReplan(
     const output = await callStructuredModel({
       modelRole: 'SearchReplanModel',
       metricsSink: input.metricsSink,
-      apiKey: OPENAI_API_KEY,
-      baseUrl: OPENAI_BASE_URL,
-      model: OPENAI_MODEL,
+      apiKey: modelConfig.apiKey,
+      baseUrl: modelConfig.baseUrl,
+      model: modelConfig.model,
       systemPrompt: REPLAN_SYSTEM_PROMPT,
       input: buildReplanModelInput(input),
       functionDefinition: REPLAN_FUNCTION,

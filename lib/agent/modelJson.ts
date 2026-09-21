@@ -5,6 +5,7 @@ export interface ChatCompletionUsage {
 }
 
 export interface ChatCompletionFunctionResponse {
+  model?: string;
   usage?: ChatCompletionUsage;
   choices?: Array<{
     finish_reason?: string;

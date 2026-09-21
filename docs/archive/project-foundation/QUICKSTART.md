@@ -33,13 +33,12 @@ Copy-Item .env.example .env.local
 
 ### 3.2 获取 API Keys
 
-#### OpenAI API Key
+#### 百炼 API Key
 
-1. 访问 https://platform.openai.com/
-2. 注册/登录账号
-3. 进入 "API keys" 页面
-4. 点击 "Create new secret key"
-5. 复制生成的密钥
+1. 进入阿里云百炼控制台
+2. 选择华北 2（北京）业务空间
+3. 创建 API Key
+4. 复制业务空间 ID 和 API Key
 
 #### 高德地图 API Key
 
@@ -54,9 +53,10 @@ Copy-Item .env.example .env.local
 打开 `.env.local` 文件，填写你的 API keys：
 
 ```bash
-# OpenAI API Configuration
-OPENAI_API_KEY=sk-proj-...  # 填写你的 OpenAI API Key
-OPENAI_BASE_URL=https://api.openai.com/v1
+# 百炼 OpenAI-compatible API Configuration
+OPENAI_API_KEY=sk-...  # 填写百炼 API Key
+OPENAI_BASE_URL=https://YOUR_WORKSPACE_ID.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+# 不设置 OPENAI_MODEL 时自动使用角色默认分流
 
 # Amap (高德地图) API Configuration
 AMAP_API_KEY=...  # 填写你的高德地图 API Key

@@ -26,6 +26,8 @@ rg -n "关键词|组件名|文件路径" docs/specs
   事件、会话接口和兼容入口契约。
 - [Public Runtime Protection](./public-runtime-protection.md) - 公网入口、匿名会话、跨实例
   Provider 调度、短等待、错误分类和部署验证强制边界。
+- [Model Provider Routing](./model-provider-routing.md) - 结构化模型配置、角色分流、百炼工具
+  调用兼容、模型指标和发布强制边界。
 - [CI/CD Quality Gates](./ci-cd-quality-gates.md) - GitHub CI、覆盖率、Cloudflare 可部署性校验、
   Workers Builds 分支触发和生产发布责任边界。
 - [Documentation and Repository Hygiene](./documentation-and-repository-hygiene.md) - 文档权威、

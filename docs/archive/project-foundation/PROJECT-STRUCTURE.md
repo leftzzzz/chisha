@@ -232,11 +232,12 @@ npm run check        # 项目完整性检查
 ## 环境变量
 
 必需：
-- `OPENAI_API_KEY` - OpenAI API 密钥
+- `OPENAI_API_KEY` - 百炼或其他 OpenAI-compatible 服务 API 密钥
 - `AMAP_API_KEY` - 高德地图 API 密钥
 
 可选：
-- `OPENAI_BASE_URL` - OpenAI API 基础 URL
+- `OPENAI_BASE_URL` - OpenAI-compatible API 基础 URL
+- `OPENAI_MODEL` - 可选的全角色模型覆盖；未设置时使用角色默认分流
 - `AMAP_SECURITY_CODE` - 高德地图安全码
 - `NEXT_PUBLIC_APP_URL` - 应用 URL
 - `LOG_LEVEL` - 日志级别 (debug/info/warn/error)

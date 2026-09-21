@@ -20,6 +20,7 @@ import { UserGoalSchema } from '../schemas/goal';
 import { GoalUnderstandingOutputSchema } from '../schemas/clarification';
 import { deriveGoalSignature } from '../goalVersion';
 import { AgentError } from '../types';
+import { resolveStructuredModelConfig, type StructuredModelConfig } from '../modelConfig';
 import type {
   AgentMessage,
   ConversationMode,
@@ -29,12 +30,6 @@ import type {
   UserPreferenceSummary,
 } from '../types';
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-// 环境变量名保持 OPENAI_MODEL_SUPERVISOR 不变：改名会让已部署的 secret 失效。
-const OPENAI_MODEL = process.env.OPENAI_MODEL_SUPERVISOR
-  || process.env.OPENAI_MODEL
-  || 'deepseek-v4-flash-0731';
 const GOAL_UNDERSTANDING_TIMEOUT = 60000;
 const GOAL_UNDERSTANDING_MAX_TOKENS = STRUCTURED_MODEL_MAX_TOKENS;
 const GOAL_UNDERSTANDING_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
@@ -110,14 +105,18 @@ const GOAL_UNDERSTANDING_FUNCTION = {
 export async function runGoalUnderstandingModel(
   input: GoalUnderstandingInput
 ): Promise<GoalUnderstandingOutput> {
+  const modelConfig = resolveStructuredModelConfig('supervisor');
   // 追问选项的确定性处理由编排层完成（按 optionId 查 effect，不调模型）。
   // 这里只处理自由文本——用户说了什么，只有模型能判断。
-  if (!OPENAI_API_KEY) {
+  if (!modelConfig.apiKey) {
     throw new AgentError('OPENAI_API_KEY is required for GoalUnderstandingModel', 'CONFIG_MISSING', false);
   }
 
   try {
-    return normalizeGoalUnderstandingOutput(input, await callGoalUnderstandingModel(input));
+    return normalizeGoalUnderstandingOutput(
+      input,
+      await callGoalUnderstandingModel(input, modelConfig)
+    );
   } catch (error) {
     logger.warn('GoalUnderstandingModel unavailable', {
       error: error instanceof Error ? error.message : String(error),
@@ -213,14 +212,15 @@ function inferConversationMode(
 
 async function callGoalUnderstandingModel(
   input: GoalUnderstandingInput,
+  modelConfig: StructuredModelConfig,
   maxTokens = GOAL_UNDERSTANDING_MAX_TOKENS
 ): Promise<GoalUnderstandingOutput> {
   return callStructuredModel({
     modelRole: 'GoalUnderstandingModel',
     metricsSink: input.metricsSink,
-    apiKey: OPENAI_API_KEY!,
-    baseUrl: OPENAI_BASE_URL,
-    model: OPENAI_MODEL,
+    apiKey: modelConfig.apiKey!,
+    baseUrl: modelConfig.baseUrl,
+    model: modelConfig.model,
     systemPrompt: SYSTEM_PROMPT,
     input: {
       userMessage: input.message,

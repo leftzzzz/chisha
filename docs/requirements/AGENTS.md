@@ -20,6 +20,8 @@ rg -n "用户场景|能力|验收条件" docs/requirements --glob '*.md'
   顺序保真和禁止下游自动补位的产品要求。
 - [公网运行保护与供应商容量管理](./public-runtime-protection.md) - 公开使用时的并发、短等待、
   上游额度、匿名会话和线上验收要求。
+- [百炼模型成本与延迟优化](./aliyun-model-cost-latency.md) - 百炼模型迁移、角色分流、成本、
+  延迟、可观测性和正式切流验收要求。
 - [CI/CD 质量门禁与发布隔离](./ci-cd-quality-gates.md) - PR 无副作用验证、覆盖率防回退、
   Cloudflare 分支触发和生产发布责任边界。
 

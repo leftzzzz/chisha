@@ -42,9 +42,12 @@ cp .env.example .env.local
 编辑 `.env.local`，至少配置：
 
 ```env
-OPENAI_API_KEY=your-model-api-key
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=your-model-name
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# 不设置 OPENAI_MODEL 时：目标理解/重规划使用 qwen3.7-flash，关键词/候选验证使用 qwen-flash
+# OPENAI_MODEL=qwen3.7-flash
+# 兼容旧 OpenAI-compatible 端点时可选
+# OPENAI_TOOL_CALL_MODE=functions
 
 AMAP_API_KEY=your-amap-web-service-key
 NEXT_PUBLIC_AMAP_KEY=your-amap-js-api-key

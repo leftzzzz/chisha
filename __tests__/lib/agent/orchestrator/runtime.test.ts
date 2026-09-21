@@ -849,9 +849,24 @@ describe('runSearchAgentV3', () => {
 
   it('fails the turn instead of guessing when the Supervisor is unavailable', async () => {
     const supervisorMock = runGoalUnderstandingModel as jest.Mock;
-    supervisorMock.mockRejectedValueOnce(
-      new AgentError('Free quota exhausted', 'MODEL_QUOTA_EXHAUSTED', false)
-    );
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    supervisorMock.mockImplementationOnce(async (modelInput: {
+      metricsSink?: { modelCallMetrics?: unknown[] };
+    }) => {
+      if (modelInput.metricsSink) {
+        modelInput.metricsSink.modelCallMetrics = [{
+          modelRole: 'GoalUnderstandingModel',
+          model: 'qwen3.7-flash',
+          startedAt: Date.now(),
+          durationMs: 12,
+          attempts: 2,
+          mode: 'tools',
+          truncated: false,
+          ok: false,
+        }];
+      }
+      throw new AgentError('Free quota exhausted', 'MODEL_QUOTA_EXHAUSTED', false);
+    });
     const searchedPlans: SearchPlan[] = [];
 
     const error = await runSearchAgentV3(

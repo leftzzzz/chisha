@@ -13,12 +13,8 @@ import { AMAP_FOOD_POI_TYPES, getAmapFoodPoiType } from '../amapPoiTypeCatalog';
 import { KeywordExpansionOutputSchema } from '../schemas/keywordExpansion';
 import type { MetricsSink } from '../metrics';
 import type { SearchAttempt, SearchKeywordTarget, UserGoal, UserPreferenceSummary } from '../types';
+import { resolveStructuredModelConfig, type StructuredModelConfig } from '../modelConfig';
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const OPENAI_MODEL = process.env.OPENAI_MODEL_KEYWORD
-  || process.env.OPENAI_MODEL
-  || 'deepseek-v4-flash-0731';
 const KEYWORD_EXPANSION_TIMEOUT = 60000;
 const KEYWORD_EXPANSION_MAX_TOKENS = STRUCTURED_MODEL_MAX_TOKENS;
 const KEYWORD_EXPANSION_RETRY_MAX_TOKENS = STRUCTURED_MODEL_RETRY_MAX_TOKENS;
@@ -106,6 +102,7 @@ function keywordTargetJsonSchema() {
 export async function runKeywordExpansionModel(
   input: KeywordExpansionModelInput
 ): Promise<KeywordExpansionOutput> {
+  const modelConfig = resolveStructuredModelConfig('keyword');
   if (goalKeywords(input.goal).length === 0 && !isOpenExplorationGoal(input.goal)) {
     return {
       relatedKeywords: [],
@@ -117,13 +114,17 @@ export async function runKeywordExpansionModel(
   }
 
   // 显式的确定性路径：测试开关或压根没配 key。这不是"降级"，是另一条明路。
-  if (!OPENAI_API_KEY || process.env.AGENT_DETERMINISTIC === '1') {
+  if (!modelConfig.apiKey || process.env.AGENT_DETERMINISTIC === '1') {
     return deterministicKeywordExpansion(input.goal, input.attempts);
   }
 
   // 模型挂了就报错，不静默换本地词表。静默降级会让"模型不可用"这个事实对
   // 运维完全不可见——上一次线上事故正是这样被掩盖了两天。
-  return sanitizeExpansion(await callKeywordExpansionModel(input), input.goal, input.attempts);
+  return sanitizeExpansion(
+    await callKeywordExpansionModel(input, modelConfig),
+    input.goal,
+    input.attempts
+  );
 }
 
 export function deterministicKeywordExpansion(
@@ -162,14 +163,15 @@ export function applyKeywordExpansion(goal: UserGoal, expansion: KeywordExpansio
 }
 
 async function callKeywordExpansionModel(
-  input: KeywordExpansionModelInput
+  input: KeywordExpansionModelInput,
+  modelConfig: StructuredModelConfig
 ): Promise<KeywordExpansionOutput> {
   return callStructuredModel({
     modelRole: 'KeywordExpansionModel',
     metricsSink: input.metricsSink,
-    apiKey: OPENAI_API_KEY!,
-    baseUrl: OPENAI_BASE_URL,
-    model: OPENAI_MODEL,
+    apiKey: modelConfig.apiKey!,
+    baseUrl: modelConfig.baseUrl,
+    model: modelConfig.model,
     systemPrompt: SYSTEM_PROMPT,
     input: buildModelInput(input),
     functionDefinition: KEYWORD_EXPANSION_FUNCTION,
